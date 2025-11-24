@@ -195,9 +195,18 @@ membership:
       DA: 4320  # DataAvailability - 4320 blocks per session
     session_zero_providers: { }
 sdp:
+  declaration: null
+  wallet_config:
+    max_tx_fee: 18446744073709551615  # u64::MAX
+    # SDP funding public key - matches the genesis note pk used for SDP transaction fees
+    funding_pk: "89b7314f5184bae9eb7fa511098eb321b97b8fbbdec611dda591e0c01e18331d"
 wallet:
   known_keys:
     - "0000000000000000000000000000000000000000000000000000000000000000"
+    # SDP funding public key - wallet must track this to use the SDP funding note
+    - "89b7314f5184bae9eb7fa511098eb321b97b8fbbdec611dda591e0c01e18331d"
 key_management:
   keys:
     leader_key: !Zk 3cf3335017304dcfce45124a0633829f00000000000000000000000000000000
+    # SDP funding secret key - KMS provides this to the wallet for signing SDP transactions
+    "89b7314f5184bae9eb7fa511098eb321b97b8fbbdec611dda591e0c01e18331d": !Zk '3930000000000000000000000000000000000000000000000000000000000000'

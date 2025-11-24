@@ -11,7 +11,6 @@ use nomos_node::{
         network::ServiceConfig as NetworkConfig, time::ServiceConfig as TimeConfig,
     },
 };
-use nomos_sdp::SdpSettings;
 use overwatch::overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner};
 
 #[derive(Parser, Debug)]
@@ -121,7 +120,7 @@ async fn main() -> Result<()> {
             time: time_service_config,
             storage: config.storage,
             system_sig: (),
-            sdp: SdpSettings { declaration: None },
+            sdp: config.sdp,
             wallet: config.wallet,
             key_management: config.key_management,
             #[cfg(feature = "testing")]

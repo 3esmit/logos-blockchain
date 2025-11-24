@@ -14,7 +14,7 @@ use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use nomos_core::{
     block::Block,
     da::BlobId,
-    mantle::{SignedMantleTx, Transaction as _, TxHash},
+    mantle::{SignedMantleTx, Transaction as _, TxHash, Value},
     sdp::{Declaration, SessionNumber},
 };
 use nomos_da_network_core::{
@@ -439,7 +439,7 @@ impl Validator {
 
 #[must_use]
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-pub fn create_validator_config(config: GeneralConfig) -> Config {
+pub fn create_validator_config(validator_idx: usize, config: GeneralConfig) -> Config {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
@@ -533,14 +533,18 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
             read_only: false,
             column_family: Some("blocks".into()),
         },
-        sdp: SdpSettings { declaration: None },
+        sdp: SdpSettings {
+            declaration: None,
+            wallet_config: nomos_sdp::adapters::wallet::SdpWalletConfig {
+                max_tx_fee: Value::MAX,
+                funding_pk: config.consensus_config.sdp_notes[validator_idx].pk,
+            },
+        },
         wallet: WalletServiceSettings {
-            known_keys: HashSet::from_iter([config
-                .consensus_config
-                .user_config()
-                .leader
-                .leader
-                .pk]),
+            known_keys: HashSet::from_iter([
+                config.consensus_config.user_config().leader.leader.pk,
+                config.consensus_config.sdp_notes[validator_idx].pk,
+            ]),
         },
         key_management: config.kms_config,
         testing_http: nomos_api::ApiServiceSettings {

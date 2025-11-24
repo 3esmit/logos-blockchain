@@ -12,7 +12,11 @@ use common_http_client::CommonHttpClient;
 use futures::Stream;
 use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use nomos_core::{
-    block::Block, da::BlobId, header::HeaderId, mantle::SignedMantleTx, sdp::SessionNumber,
+    block::Block,
+    da::BlobId,
+    header::HeaderId,
+    mantle::{SignedMantleTx, Value},
+    sdp::SessionNumber,
 };
 use nomos_da_dispersal::{
     DispersalServiceSettings,
@@ -356,7 +360,7 @@ impl Executor {
 
 #[must_use]
 #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-pub fn create_executor_config(config: GeneralConfig) -> Config {
+pub fn create_executor_config(executor_idx: usize, config: GeneralConfig) -> Config {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
@@ -457,14 +461,18 @@ pub fn create_executor_config(config: GeneralConfig) -> Config {
                 retry_limit: 2,
             },
         },
-        sdp: SdpSettings { declaration: None },
+        sdp: SdpSettings {
+            declaration: None,
+            wallet_config: nomos_sdp::adapters::wallet::SdpWalletConfig {
+                max_tx_fee: Value::MAX,
+                funding_pk: config.consensus_config.sdp_notes[executor_idx].pk,
+            },
+        },
         wallet: nomos_wallet::WalletServiceSettings {
-            known_keys: HashSet::from_iter([config
-                .consensus_config
-                .user_config()
-                .leader
-                .leader
-                .pk]),
+            known_keys: HashSet::from_iter([
+                config.consensus_config.user_config().leader.leader.pk,
+                config.consensus_config.sdp_notes[executor_idx].pk,
+            ]),
         },
         key_management: config.kms_config,
 

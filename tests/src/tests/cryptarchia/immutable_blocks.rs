@@ -16,8 +16,9 @@ const TEST_DURATION_SECS: u64 = 120;
 async fn immutable_blocks_two_nodes() {
     let configs = create_general_configs(2)
         .into_iter()
-        .map(|c| {
-            let mut config = create_validator_config(c);
+        .enumerate()
+        .map(|(i, c)| {
+            let mut config = create_validator_config(i, c);
             config.deployment.time.slot_duration = Duration::from_secs(3);
             config
                 .cryptarchia

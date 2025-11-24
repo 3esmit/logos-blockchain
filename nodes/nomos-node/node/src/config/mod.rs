@@ -218,7 +218,7 @@ pub struct Config {
     pub tracing: <Tracing<RuntimeServiceId> as ServiceData>::Settings,
     pub da_network: <DaNetworkService as ServiceData>::Settings,
     pub da_verifier: <DaVerifierService as ServiceData>::Settings,
-    pub sdp: <SdpService<RuntimeServiceId> as ServiceData>::Settings,
+    pub sdp: <SdpService as ServiceData>::Settings,
     pub da_sampling: <DaSamplingService as ServiceData>::Settings,
     pub http: <ApiService as ServiceData>::Settings,
     pub storage: <StorageService as ServiceData>::Settings,

@@ -882,21 +882,23 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_declaration<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_declaration<MempoolAdapter, Wallet, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration): Json<nomos_core::sdp::DeclarationMessage>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    Wallet: WalletServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<nomos_sdp::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<nomos_sdp::SdpService<MempoolAdapter, Wallet, RuntimeServiceId>>,
 {
     make_request_and_return_response!(nomos_api::http::sdp::post_declaration_handler::<
         MempoolAdapter,
+        Wallet,
         RuntimeServiceId,
     >(handle, declaration))
 }
@@ -909,21 +911,23 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_activity<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_activity<MempoolAdapter, Wallet, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(metadata): Json<nomos_core::sdp::ActivityMetadata>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    Wallet: WalletServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<nomos_sdp::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<nomos_sdp::SdpService<MempoolAdapter, Wallet, RuntimeServiceId>>,
 {
     make_request_and_return_response!(nomos_api::http::sdp::post_activity_handler::<
         MempoolAdapter,
+        Wallet,
         RuntimeServiceId,
     >(handle, metadata))
 }
@@ -936,21 +940,23 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_withdrawal<MempoolAdapter, RuntimeServiceId>(
+pub async fn post_withdrawal<MempoolAdapter, Wallet, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration_id): Json<nomos_core::sdp::DeclarationId>,
 ) -> Response
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    Wallet: WalletServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
         + 'static
-        + AsServiceId<nomos_sdp::SdpService<MempoolAdapter, RuntimeServiceId>>,
+        + AsServiceId<nomos_sdp::SdpService<MempoolAdapter, Wallet, RuntimeServiceId>>,
 {
     make_request_and_return_response!(nomos_api::http::sdp::post_withdrawal_handler::<
         MempoolAdapter,
+        Wallet,
         RuntimeServiceId,
     >(handle, declaration_id))
 }

@@ -3,7 +3,9 @@ pub mod config;
 pub mod generic_services;
 
 use color_eyre::eyre::{Result, eyre};
-use generic_services::{SamplingMempoolAdapter, VerifierMempoolAdapter};
+use generic_services::{
+    SamplingMempoolAdapter, SdpService, SdpServiceAdapterGeneric, VerifierMempoolAdapter,
+};
 use kzgrs_backend::common::share::DaShare;
 pub use kzgrs_backend::dispersal::BlobInfo;
 pub use nomos_blend_service::{
@@ -90,7 +92,7 @@ pub(crate) type DaSamplingAdapter = SamplingLibp2pAdapter<
     DaMembershipAdapter<RuntimeServiceId>,
     DaMembershipStorage,
     DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric,
+    SdpServiceAdapterGeneric<RuntimeServiceId>,
     RuntimeServiceId,
 >;
 
@@ -108,7 +110,7 @@ pub(crate) type DaVerifierService = generic_services::DaVerifierService<
         DaMembershipAdapter<RuntimeServiceId>,
         DaMembershipStorage,
         DaNetworkApiAdapter,
-        SdpServiceAdapterGeneric,
+        SdpServiceAdapterGeneric<RuntimeServiceId>,
         RuntimeServiceId,
     >,
     VerifierMempoolAdapter<RuntimeServiceId>,
@@ -124,7 +126,7 @@ pub(crate) type DaNetworkService = nomos_da_network_service::NetworkService<
     DaMembershipAdapter<RuntimeServiceId>,
     DaMembershipStorage,
     DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric,
+    SdpServiceAdapterGeneric<RuntimeServiceId>,
     RuntimeServiceId,
 >;
 
@@ -135,7 +137,7 @@ pub(crate) type DaNetworkAdapter = nomos_da_sampling::network::adapters::validat
     DaMembershipAdapter<RuntimeServiceId>,
     DaMembershipStorage,
     DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric,
+    SdpServiceAdapterGeneric<RuntimeServiceId>,
     RuntimeServiceId,
 >;
 
@@ -145,11 +147,6 @@ pub(crate) type WalletService =
     generic_services::WalletService<CryptarchiaService, RuntimeServiceId>;
 
 pub(crate) type CryptarchiaService = generic_services::CryptarchiaService<RuntimeServiceId>;
-
-pub(crate) type SdpService = generic_services::SdpService<RuntimeServiceId>;
-
-pub(crate) type SdpServiceAdapterGeneric =
-    generic_services::SdpServiceAdapterGeneric<RuntimeServiceId>;
 
 pub(crate) type ChainNetworkService =
     generic_services::ChainNetworkService<DaNetworkAdapter, RuntimeServiceId>;
@@ -178,7 +175,7 @@ pub(crate) type ApiService = nomos_api::ApiService<
             DaMembershipAdapter<RuntimeServiceId>,
             DaMembershipStorage,
             DaNetworkApiAdapter,
-            SdpServiceAdapterGeneric,
+            SdpServiceAdapterGeneric<RuntimeServiceId>,
             RuntimeServiceId,
         >,
         VerifierStorageAdapter<DaShare, DaStorageConverter>,
@@ -189,7 +186,7 @@ pub(crate) type ApiService = nomos_api::ApiService<
             DaMembershipAdapter<RuntimeServiceId>,
             DaMembershipStorage,
             DaNetworkApiAdapter,
-            SdpServiceAdapterGeneric,
+            SdpServiceAdapterGeneric<RuntimeServiceId>,
             RuntimeServiceId,
         >,
         SamplingMempoolAdapter<RuntimeServiceId>,
@@ -197,7 +194,7 @@ pub(crate) type ApiService = nomos_api::ApiService<
         VerifierMempoolAdapter<RuntimeServiceId>,
         NtpTimeBackend,
         DaNetworkApiAdapter,
-        SdpServiceAdapterGeneric,
+        SdpServiceAdapterGeneric<RuntimeServiceId>,
         ApiStorageAdapter<RuntimeServiceId>,
         RocksStorageAdapter<SignedMantleTx, TxHash>,
         SdpMempoolAdapterGeneric<RuntimeServiceId>,
@@ -230,7 +227,7 @@ pub struct Nomos {
     chain_network: ChainNetworkService,
     cryptarchia_leader: CryptarchiaLeaderService,
     block_broadcast: BlockBroadcastService,
-    sdp: SdpService,
+    sdp: SdpService<RuntimeServiceId>,
     time: TimeService,
     http: ApiService,
     storage: StorageService,

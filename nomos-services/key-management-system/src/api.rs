@@ -145,8 +145,8 @@ where
 
         Ok(rx
             .await
-            .map_err(|_| "Failed to receive sign_multiple response")?
-            .map_err(|_| "Failed to get multiple signature.")?)
+            .map_err(|e| format!("Failed to receive sign_multiple response: {e:?}"))?
+            .map_err(|e| format!("Failed to get multiple signature: {e:?}"))?)
     }
 
     pub async fn execute(

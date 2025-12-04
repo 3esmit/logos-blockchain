@@ -464,16 +464,32 @@ where
                     OpProof::Ed25519Sig(ed25519_sig)
                 }
                 Op::SDPDeclare(declare_op) => {
-                    let locked_note = ledger
-                        .mantle_ledger()
-                        .locked_notes()
+                    // For a new declaration, the note is still in the UTXOs (not yet locked).
+                    // We look it up from the UTXO set to get the public key for signing.
+                    let utxo_tree = ledger.latest_utxos();
+                    info!(
+                        "SDPDeclare: Looking for note_id={}, utxo_tree has {} UTXOs",
+                        hex::encode(declare_op.locked_note_id.as_bytes()),
+                        utxo_tree.size()
+                    );
+                    for (id, (utxo, _)) in utxo_tree.utxos().iter() {
+                        info!(
+                            "  UTXO: id={} value={}, pk={}",
+                            hex::encode(id.as_bytes()),
+                            utxo.note.value,
+                            hex::encode(groth16::fr_to_bytes(utxo.note.pk.as_fr())),
+                        );
+                    }
+                    let note = utxo_tree
+                        .utxos()
                         .get(&declare_op.locked_note_id)
+                        .map(|(utxo, _)| utxo.note)
                         .ok_or(WalletServiceError::MissingLockedNote(
                             declare_op.locked_note_id,
                         ))?;
 
                     let zk_sig =
-                        Self::sign_zksig(tx_hash, [locked_note.pk, declare_op.zk_id], kms).await?;
+                        Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], kms).await?;
                     let ed25519_sig =
                         Self::sign_ed25519(tx_hash, declare_op.provider_id.0, kms).await?;
 

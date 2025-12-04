@@ -2,7 +2,8 @@ use std::sync::LazyLock;
 
 use bytes::Bytes;
 use groth16::{
-    Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, serde::serde_fr,
+    Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes,
+    serde::serde_fr,
 };
 use num_bigint::BigUint;
 use poseidon2::Digest;
@@ -30,7 +31,8 @@ impl NoteId {
 
     #[must_use]
     pub fn as_bytes(&self) -> Bytes {
-        self.0.0.0.iter().flat_map(|b| b.to_le_bytes()).collect()
+        // Use fr_to_bytes to ensure consistency with serde (de)serialization
+        Bytes::copy_from_slice(&fr_to_bytes(&self.0))
     }
 }
 

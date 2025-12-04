@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use key_management_system_keys::keys::secured_key::{SecureKeyOperator, SecuredKey};
 
 pub mod preload;
@@ -8,7 +10,7 @@ pub trait KMSBackend {
     type Key: SecuredKey;
     type KeyOperations: SecureKeyOperator<Key = Self::Key, Error = <Self::Key as SecuredKey>::Error>;
     type Settings;
-    type Error;
+    type Error: std::error::Error + Debug;
 
     fn new(settings: Self::Settings) -> Self;
 

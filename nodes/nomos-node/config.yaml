@@ -148,6 +148,8 @@ cryptarchia:
             outputs:
               - value: 1
                 pk: d204000000000000000000000000000000000000000000000000000000000000
+              - value: 100000
+                pk: 89b7314f5184bae9eb7fa511098eb321b97b8fbbdec611dda591e0c01e18331d
           execution_gas_price: 0
           storage_gas_price: 0
         ops_proofs: [NoProof]

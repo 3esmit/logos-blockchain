@@ -24,7 +24,8 @@ where
 
         let funded = self
             .fund_tx(None, tx_builder, config.funding_pk, vec![config.funding_pk])
-            .await?;
+            .await?
+            .response;
 
         let tx_fee = funded.gas_cost::<MainnetGasConstants>();
         if tx_fee > config.max_tx_fee {
@@ -34,7 +35,7 @@ where
             });
         }
 
-        let signed_tx = self.sign_tx(None, funded).await?;
+        let signed_tx = self.sign_tx(None, funded).await?.response;
 
         Ok(signed_tx)
     }
@@ -49,7 +50,8 @@ where
 
         let funded = self
             .fund_tx(None, tx_builder, config.funding_pk, vec![config.funding_pk])
-            .await?;
+            .await?
+            .response;
 
         let tx_fee = funded.gas_cost::<MainnetGasConstants>();
         if tx_fee > config.max_tx_fee {
@@ -59,7 +61,7 @@ where
             });
         }
 
-        let signed_tx = self.sign_tx(None, funded).await?;
+        let signed_tx = self.sign_tx(None, funded).await?.response;
 
         Ok(signed_tx)
     }
@@ -74,7 +76,8 @@ where
 
         let funded = self
             .fund_tx(None, tx_builder, config.funding_pk, vec![config.funding_pk])
-            .await?;
+            .await?
+            .response;
 
         let tx_fee = funded.gas_cost::<MainnetGasConstants>();
         if tx_fee > config.max_tx_fee {
@@ -84,7 +87,7 @@ where
             });
         }
 
-        let signed_tx = self.sign_tx(None, funded).await?;
+        let signed_tx = self.sign_tx(None, funded).await?.response;
 
         Ok(signed_tx)
     }

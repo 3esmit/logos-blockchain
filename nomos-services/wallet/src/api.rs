@@ -1,6 +1,6 @@
 use nomos_core::{
     header::HeaderId,
-    mantle::{Note, Utxo, Value, tx_builder::MantleTxBuilder},
+    mantle::{Note, SignedMantleTx, Utxo, Value, tx_builder::MantleTxBuilder},
 };
 use overwatch::services::{
     AsServiceId, ServiceData,
@@ -9,7 +9,7 @@ use overwatch::services::{
 use tokio::sync::oneshot::{self, error::RecvError};
 use zksign::PublicKey;
 
-use crate::{WalletMsg, WalletServiceError, WalletServiceSettings};
+use crate::{TipResponse, WalletMsg, WalletServiceError, WalletServiceSettings};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletApiError {
@@ -73,7 +73,7 @@ where
         &self,
         tip: Option<HeaderId>,
         pk: PublicKey,
-    ) -> Result<Option<Value>, WalletApiError> {
+    ) -> Result<TipResponse<Option<Value>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -89,7 +89,7 @@ where
         tx_builder: MantleTxBuilder,
         change_pk: PublicKey,
         funding_pks: Vec<PublicKey>,
-    ) -> Result<MantleTxBuilder, WalletApiError> {
+    ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -112,20 +112,20 @@ where
         funding_pks: Vec<PublicKey>,
         recipient_pk: PublicKey,
         amount: Value,
-    ) -> Result<nomos_core::mantle::SignedMantleTx, WalletApiError> {
+    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
         let mantle_tx_builder =
             MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk));
         let funded_tx_builder = self
             .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks)
             .await?;
-        self.sign_tx(tip, funded_tx_builder).await
+        self.sign_tx(tip, funded_tx_builder.response).await
     }
 
     pub async fn sign_tx(
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-    ) -> Result<nomos_core::mantle::SignedMantleTx, WalletApiError> {
+    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -142,7 +142,7 @@ where
     pub async fn get_leader_aged_notes(
         &self,
         tip: Option<HeaderId>,
-    ) -> Result<Vec<Utxo>, WalletApiError> {
+    ) -> Result<TipResponse<Vec<Utxo>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay

@@ -69,10 +69,7 @@ use super::handlers::{
     da_get_shares, da_get_storage_commitments, libp2p_info, mantle_metrics, mantle_status,
     monitor_stats, unblock_peer, wallet,
 };
-use crate::{
-    WalletService,
-    api::handlers::{post_activity, post_declaration, post_withdrawal},
-};
+use crate::api::handlers::{post_activity, post_declaration, post_withdrawal};
 
 pub(crate) type DaStorageBackend = RocksBackend;
 type DaStorageService<RuntimeServiceId> = StorageService<DaStorageBackend, RuntimeServiceId>;
@@ -91,7 +88,6 @@ pub struct AxumBackend<
     SamplingMempoolAdapter,
     SamplingStorage,
     VerifierMempoolAdapter,
-    TimeBackend,
     ApiAdapter,
     SdpAdapter,
     HttpStorageAdapter,
@@ -109,7 +105,6 @@ pub struct AxumBackend<
     _sampling_backend: core::marker::PhantomData<SamplingBackend>,
     _sampling_network_adapter: core::marker::PhantomData<SamplingNetworkAdapter>,
     _sampling_storage: core::marker::PhantomData<SamplingStorage>,
-    _time_backend: core::marker::PhantomData<TimeBackend>,
     _api_adapter: core::marker::PhantomData<ApiAdapter>,
     _storage_adapter: core::marker::PhantomData<HttpStorageAdapter>,
     _sdp_adapter: core::marker::PhantomData<SdpAdapter>,
@@ -149,7 +144,6 @@ impl<
     SamplingMempoolAdapter,
     SamplingStorage,
     VerifierMempoolAdapter,
-    TimeBackend,
     ApiAdapter,
     SdpAdapter,
     StorageAdapter,
@@ -172,7 +166,6 @@ impl<
         SamplingMempoolAdapter,
         SamplingStorage,
         VerifierMempoolAdapter,
-        TimeBackend,
         ApiAdapter,
         SdpAdapter,
         StorageAdapter,
@@ -222,8 +215,6 @@ where
         nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     DaVerifierNetwork::Settings: Clone,
     VerifierMempoolAdapter: DaMempoolAdapter + Send + Sync + 'static,
-    TimeBackend: nomos_time::backends::TimeBackend + Send + 'static,
-    TimeBackend::Settings: Clone + Send + Sync,
     ApiAdapter: nomos_da_network_service::api::ApiAdapter + Send + Sync + 'static,
     DaStorageConverter:
         DaConverter<DaStorageBackend, Share = DaShare, Tx = SignedMantleTx> + Send + Sync + 'static,
@@ -241,6 +232,7 @@ where
     MempoolStorageAdapter::Error: Debug,
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
     SamplingMempoolAdapter: nomos_da_sampling::mempool::DaMempoolAdapter + Send + Sync + 'static,
+    Wallet: nomos_wallet::api::WalletServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -306,7 +298,6 @@ where
         >
         + AsServiceId<nomos_sdp::SdpService<SdpMempool, Wallet, RuntimeServiceId>>
         + AsServiceId<Wallet>,
-    Wallet: nomos_wallet::api::WalletServiceData + Send + Sync + 'static,
 {
     type Error = std::io::Error;
     type Settings = AxumBackendSettings;
@@ -326,7 +317,6 @@ where
             _sampling_backend: core::marker::PhantomData,
             _sampling_network_adapter: core::marker::PhantomData,
             _sampling_storage: core::marker::PhantomData,
-            _time_backend: core::marker::PhantomData,
             _api_adapter: core::marker::PhantomData,
             _storage_adapter: core::marker::PhantomData,
             _sdp_adapter: core::marker::PhantomData,
@@ -545,32 +535,11 @@ where
             )
             .route(
                 paths::wallet::BALANCE,
-                routing::get(
-                    wallet::get_balance::<
-                        WalletService,
-                        SamplingBackend,
-                        SamplingNetworkAdapter,
-                        SamplingStorage,
-                        MempoolStorageAdapter,
-                        TimeBackend,
-                        _,
-                    >,
-                ),
+                routing::get(wallet::get_balance::<Wallet, _>),
             )
             .route(
                 paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
-                routing::post(
-                    wallet::post_transactions_transfer_funds::<
-                        WalletService,
-                        DaStorageBackend,
-                        SamplingBackend,
-                        SamplingNetworkAdapter,
-                        SamplingStorage,
-                        MempoolStorageAdapter,
-                        TimeBackend,
-                        _,
-                    >,
-                ),
+                routing::post(wallet::post_transactions_transfer_funds::<Wallet, _>),
             );
 
         #[cfg(feature = "block-explorer")]

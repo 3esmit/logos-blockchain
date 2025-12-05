@@ -9,7 +9,6 @@ use chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
     storage::{StorageAdapter as _, adapters::storage::StorageAdapter},
 };
-use groth16::fr_to_bytes;
 use key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::preload::PreloadKMSBackend,
@@ -79,24 +78,30 @@ pub enum WalletMsg {
     GetBalance {
         tip: Option<HeaderId>,
         pk: PublicKey,
-        resp_tx: oneshot::Sender<Result<Option<Value>, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Option<Value>>, WalletServiceError>>,
     },
     FundTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         change_pk: PublicKey,
         funding_pks: Vec<PublicKey>,
-        resp_tx: oneshot::Sender<Result<MantleTxBuilder, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     SignTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        resp_tx: oneshot::Sender<Result<SignedMantleTx, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<SignedMantleTx>, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
         tip: Option<HeaderId>,
-        resp_tx: oneshot::Sender<Result<Vec<Utxo>, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
     },
+}
+
+#[derive(Debug)]
+pub struct TipResponse<R> {
+    pub tip: HeaderId,
+    pub response: R,
 }
 
 impl WalletMsg {
@@ -351,7 +356,13 @@ where
                     }
                 };
 
-                if resp_tx.send(Ok(funded)).is_err() {
+                if resp_tx
+                    .send(Ok(TipResponse {
+                        tip,
+                        response: funded,
+                    }))
+                    .is_err()
+                {
                     error!("Failed to respond to FundTx");
                 }
             }
@@ -380,7 +391,16 @@ where
                     }
                 };
 
-                Self::handle_sign_tx(tx_builder, ledger, resp_tx, kms).await;
+                let resp = Self::sign_tx(tx_builder, ledger, kms)
+                    .await
+                    .map(|signed_tx| TipResponse {
+                        tip,
+                        response: signed_tx,
+                    });
+
+                if resp_tx.send(resp).is_err() {
+                    error!("Failed to respond to SignTx");
+                }
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, wallet, cryptarchia).await;
@@ -391,7 +411,7 @@ where
     async fn handle_get_balance(
         tip: Option<HeaderId>,
         pk: PublicKey,
-        resp_tx: oneshot::Sender<Result<Option<u64>, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Option<u64>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -403,25 +423,16 @@ where
             }
         };
 
-        let balance = wallet
+        let resp = wallet
             .balance(tip, pk)
-            .map_err(WalletServiceError::WalletError);
+            .map_err(WalletServiceError::WalletError)
+            .map(|balance| TipResponse {
+                tip,
+                response: balance,
+            });
 
-        if resp_tx.send(balance).is_err() {
+        if resp_tx.send(resp).is_err() {
             error!("Failed to respond to GetBalance");
-        }
-    }
-
-    async fn handle_sign_tx(
-        tx_builder: MantleTxBuilder,
-        ledger: LedgerState,
-        resp_tx: oneshot::Sender<Result<SignedMantleTx, WalletServiceError>>,
-        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) {
-        let signed_tx_res = Self::sign_tx(tx_builder, ledger, kms).await;
-
-        if resp_tx.send(signed_tx_res).is_err() {
-            error!("Failed to respond to SignTx");
         }
     }
 
@@ -579,7 +590,7 @@ where
         // Use hex-encoded public key as key_id for now
         let key_ids: Vec<_> = pks
             .into_iter()
-            .map(|pk| hex::encode(fr_to_bytes(&pk.into_inner())))
+            .map(|pk| hex::encode(groth16::fr_to_bytes(&pk.into_inner())))
             .collect();
 
         let payload = PayloadEncoding::Ed25519(tx_hash.as_signing_bytes());
@@ -599,21 +610,21 @@ where
 
     async fn get_leader_aged_notes(
         tip: Option<HeaderId>,
-        tx: oneshot::Sender<Result<Vec<Utxo>, WalletServiceError>>,
+        resp_tx: oneshot::Sender<Result<TipResponse<Vec<Utxo>>, WalletServiceError>>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
             Ok(tip) => tip,
             Err(err) => {
-                Self::send_err(tx, err);
+                Self::send_err(resp_tx, err);
                 return;
             }
         };
 
         // Get the ledger state at the specified tip
         let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
-            Self::send_err(tx, WalletServiceError::LedgerStateNotFound(tip));
+            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
             return;
         };
 
@@ -622,7 +633,7 @@ where
             Err(err) => {
                 error!(err = ?err, "Failed to fetch wallet state");
                 Self::send_err(
-                    tx,
+                    resp_tx,
                     WalletServiceError::FailedToFetchWalletStateForBlock(tip),
                 );
                 return;
@@ -637,7 +648,13 @@ where
             .map(|(_, utxo)| *utxo)
             .collect();
 
-        if tx.send(Ok(eligible_utxos)).is_err() {
+        if resp_tx
+            .send(Ok(TipResponse {
+                tip,
+                response: eligible_utxos,
+            }))
+            .is_err()
+        {
             error!("Failed to respond to GetLeaderAgedNotes");
         }
     }

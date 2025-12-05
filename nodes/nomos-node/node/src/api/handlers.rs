@@ -19,7 +19,7 @@ use nomos_api::http::{
     storage::StorageAdapter,
 };
 use nomos_core::{
-    da::{BlobId, DaVerifier as CoreDaVerifier, blob::Share},
+    da::{DaVerifier as CoreDaVerifier, blob::Share},
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction},
     sdp::SessionNumber,
@@ -48,7 +48,6 @@ use nomos_wallet::api::{WalletApi, WalletServiceData};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use subnetworks_assignations::MembershipHandler;
-use tracing::error;
 use tx_service::{
     TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -1045,43 +1044,14 @@ pub mod wallet {
         (status = 500, description = "Internal server error", body = String),
     )
     )]
-    pub async fn get_balance<
-        WalletService,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
-        MempoolStorageAdapter,
-        TimeBackend,
-        RuntimeServiceId,
-    >(
+    pub async fn get_balance<WalletService, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Path(address): Path<PublicKey>,
         Query(query): Query<TipQuery>,
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send,
-        SamplingBackend::Settings: Clone,
-        SamplingBackend::Share: Debug + 'static,
-        SamplingBackend::BlobId: Debug + 'static,
-        SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-        SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-        MempoolStorageAdapter: tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Key = <SignedMantleTx as Transaction>::Hash,
-                Item = SignedMantleTx,
-            > + Clone
-            + 'static,
-        MempoolStorageAdapter::Error: Debug,
-        TimeBackend: nomos_time::backends::TimeBackend,
-        TimeBackend::Settings: Clone + Send + Sync,
-        RuntimeServiceId: Debug
-            + Send
-            + Sync
-            + Display
-            + 'static
-            + AsServiceId<WalletService>
-            + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
     {
         let wallet_api = {
             let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
@@ -1090,34 +1060,21 @@ pub mod wallet {
             };
             WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
         };
-        let tip = {
-            if let Some(tip) = query.tip {
-                tip
-            } else if let Ok(info) = consensus::cryptarchia_info(&handle).await {
-                info.tip
-            } else {
-                error!(
-                    "Failed to get cryptarchia info: It wasn't provided in the query and couldn't be retrieved from the consensus service."
-                );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    String::from("Couldn't retrieve a valid tip"),
-                )
-                    .into_response();
-            }
-        };
 
-        let balance = wallet_api.get_balance(tip, address).await;
-        match balance {
-            Ok(Some(balance)) => WalletBalanceResponseBody {
+        let balance_resp = wallet_api.get_balance(query.tip, address).await;
+        match balance_resp {
+            Ok(nomos_wallet::TipResponse {
+                tip,
+                response: Some(balance),
+            }) => WalletBalanceResponseBody {
                 tip,
                 balance,
                 address,
             }
             .into_response(),
-            Ok(None) => (
+            Ok(nomos_wallet::TipResponse { response: None, .. }) => (
                 StatusCode::NOT_FOUND,
-                "The requested address could not be found in the wallet.",
+                "The requested address could not be found in the wallet",
             )
                 .into_response(),
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
@@ -1132,45 +1089,13 @@ pub mod wallet {
         (status = 500, description = "Internal server error", body = String),
     )
     )]
-    pub async fn post_transactions_transfer_funds<
-        WalletService,
-        StorageBackend,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
-        MempoolStorageAdapter,
-        TimeBackend,
-        RuntimeServiceId,
-    >(
+    pub async fn post_transactions_transfer_funds<WalletService, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Json(body): Json<WalletTransferFundsRequestBody>,
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        StorageBackend: nomos_storage::backends::StorageBackend + Send + Sync + 'static,
-        SamplingBackend: DaSamplingServiceBackend<BlobId = BlobId> + Send,
-        SamplingBackend::Settings: Clone,
-        SamplingBackend::Share: Debug + 'static,
-        SamplingBackend::BlobId: Debug + 'static,
-        SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-        SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
-        MempoolStorageAdapter: tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Key = <SignedMantleTx as Transaction>::Hash,
-                Item = SignedMantleTx,
-            > + Clone
-            + 'static,
-        MempoolStorageAdapter::Error: Debug,
-        TimeBackend: nomos_time::backends::TimeBackend,
-        TimeBackend::Settings: Clone + Send + Sync,
-        RuntimeServiceId: Debug
-            + Send
-            + Sync
-            + Display
-            + 'static
-            + AsServiceId<WalletService>
-            + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
-            + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
     {
         let wallet_api = {
             let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
@@ -1180,26 +1105,9 @@ pub mod wallet {
             WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
         };
 
-        let tip = {
-            if let Some(tip) = body.tip {
-                tip
-            } else if let Ok(info) = consensus::cryptarchia_info(&handle).await {
-                info.tip
-            } else {
-                error!(
-                    "Failed to get cryptarchia info: It wasn't provided in the query and couldn't be retrieved from the consensus service."
-                );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    String::from("Couldn't retrieve a valid tip"),
-                )
-                    .into_response();
-            }
-        };
-
         let transfer_funds = wallet_api
             .transfer_funds(
-                tip,
+                body.tip,
                 body.change_public_key,
                 body.funding_public_keys,
                 body.recipient_public_key,
@@ -1208,7 +1116,10 @@ pub mod wallet {
             .await;
 
         match transfer_funds {
-            Ok(transaction) => WalletTransferFundsResponseBody::from(transaction).into_response(),
+            Ok(nomos_wallet::TipResponse {
+                response: transaction,
+                ..
+            }) => WalletTransferFundsResponseBody::from(transaction).into_response(),
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
         }
     }

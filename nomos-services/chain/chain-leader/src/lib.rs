@@ -424,7 +424,7 @@ where
                         };
 
                         let eligible_utxos = match wallet_api.get_leader_aged_notes(Some(parent)).await {
-                            Ok(utxos) => utxos,
+                            Ok(utxos_resp) => utxos_resp.response,
                             Err(e) => {
                                 error!("Failed to fetch leader aged notes from wallet: {:?}", e);
                                 continue;

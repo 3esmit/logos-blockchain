@@ -43,7 +43,6 @@ pub use nomos_storage::backends::{
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
 pub use nomos_system_sig::SystemSig;
-use nomos_time::backends::NtpTimeBackend;
 #[cfg(feature = "tracing")]
 pub use nomos_tracing_service::Tracing;
 use overwatch::{
@@ -68,10 +67,7 @@ use crate::{
         mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
         time::ServiceConfig as TimeConfig,
     },
-    generic_services::{
-        DaMembershipAdapter, DaMembershipStorageGeneric, SdpMempoolAdapterGeneric, SdpService,
-        SdpServiceAdapterGeneric,
-    },
+    generic_services::{DaMembershipAdapter, DaMembershipStorageGeneric, SdpMempoolAdapterGeneric},
 };
 
 pub const DA_TOPIC: &str = "da";
@@ -192,7 +188,6 @@ pub(crate) type ApiService = nomos_api::ApiService<
         SamplingMempoolAdapter<RuntimeServiceId>,
         SamplingStorageAdapter<DaShare, DaStorageConverter>,
         VerifierMempoolAdapter<RuntimeServiceId>,
-        NtpTimeBackend,
         DaNetworkApiAdapter,
         SdpServiceAdapterGeneric<RuntimeServiceId>,
         ApiStorageAdapter<RuntimeServiceId>,

@@ -1800,18 +1800,25 @@ name = "chain-leader"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "blake2",
  "chain-common 0.1.0",
  "chain-service 0.1.0",
  "cryptarchia-engine 0.1.0",
+ "divan",
+ "ed25519-dalek",
  "futures",
+ "groth16 0.1.0",
  "key-management-system-keys 0.1.0",
  "nomos-blend-service 0.1.0",
  "nomos-core 0.1.0",
  "nomos-da-sampling 0.1.0",
  "nomos-ledger 0.1.0",
  "nomos-time 0.1.0",
+ "nomos-utils 0.1.0",
  "nomos-wallet 0.1.0",
  "overwatch",
+ "rand 0.8.5",
+ "rayon",
  "serde",
  "services-utils 0.1.0",
  "thiserror 1.0.69",
@@ -1819,6 +1826,8 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tx-service 0.1.0",
+ "zeroize",
+ "zksign 0.1.0",
 ]
 
 [[package]]

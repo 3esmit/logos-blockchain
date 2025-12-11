@@ -93,6 +93,7 @@ impl Leader {
 
                 let private_inputs = self.private_inputs_for_winning_utxo_and_slot(
                     utxo,
+                    slot,
                     epoch_state,
                     public_inputs,
                     latest_tree,
@@ -163,7 +164,7 @@ impl Leader {
             *utxo,
             &aged_path,
             &latest_path,
-            slot_secret,
+            *slot_secret.as_ref(),
             starting_slot,
             &leader_pk,
         )
@@ -263,6 +264,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
 
                 let leader_private = self.leader.private_inputs_for_winning_utxo_and_slot(
                     utxo,
+                    Slot::new(slot),
                     epoch_state,
                     public_inputs,
                     &latest_tree,

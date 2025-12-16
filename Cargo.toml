@@ -62,6 +62,7 @@ members = [
   "nomos-tracing",
   "nomos-utils",
   "testnet/cfgsync",
+  "testnet/marbella-offsite-2025/sequencer",
   "tests",
   "utxotree",
   "wallet",

@@ -86,7 +86,7 @@ async fn wait_for_inscriptions(
 }
 
 // Create 200KB data for each transaction
-const DATA_SIZE: usize = 1024; // 1KB
+const DATA_SIZE: usize = 200 * 1024; // 200KB
 
 #[tokio::test]
 #[serial]

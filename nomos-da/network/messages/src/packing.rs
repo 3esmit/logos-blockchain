@@ -6,9 +6,9 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::Result;
 
-type LenType = u16;
+type LenType = u32;
 const MAX_MSG_LEN_BYTES: usize = size_of::<LenType>();
-const MAX_MSG_LEN: usize = 1 << (MAX_MSG_LEN_BYTES * 8);
+const MAX_MSG_LEN: usize = 10 * 1024 * 1024; // 10 MiB
 
 struct MessageTooLargeError(usize);
 

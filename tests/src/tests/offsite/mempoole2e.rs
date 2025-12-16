@@ -35,38 +35,46 @@ async fn wait_for_inscriptions(
     inscriptions: Vec<ExpectedInscription>,
     duration: Duration,
 ) -> Result<(), &'static str> {
+    use std::collections::HashSet;
+
+    use nomos_core::header::HeaderId;
+
     timeout(duration, async {
         let mut remaining: Vec<_> = inscriptions.into_iter().collect();
+        let mut checked_blocks: HashSet<HeaderId> = HashSet::new();
 
         while !remaining.is_empty() {
             let info = executor.consensus_info().await;
-            let tip = info.tip;
+            let mut current_id = Some(info.tip);
 
-            // Collect blocks to check (tip and parent)
-            let mut blocks_to_check = vec![];
-            if let Some(block) = executor.get_block(tip).await {
-                if let Some(parent_block) = executor.get_block(block.header().parent()).await {
-                    blocks_to_check.push(parent_block);
+            // Walk back from tip, checking any blocks we haven't seen yet
+            while let Some(block_id) = current_id {
+                if checked_blocks.contains(&block_id) {
+                    break; // Already checked this block and its ancestors
                 }
-                blocks_to_check.push(block);
-            }
 
-            // Check each block for remaining inscriptions
-            for block in &blocks_to_check {
-                for tx in block.transactions() {
-                    for op in &tx.mantle_tx.ops {
-                        if let Op::ChannelInscribe(inscribe) = op {
-                            remaining.retain(|expected| {
-                                let found = inscribe.channel_id == expected.channel_id
-                                    && inscribe.inscription == expected.inscription
-                                    && inscribe.parent == expected.parent;
-                                if found {
-                                    println!("Found {} inscription", expected.label);
-                                }
-                                !found
-                            });
+                if let Some(block) = executor.get_block(block_id).await {
+                    checked_blocks.insert(block_id);
+
+                    for tx in block.transactions() {
+                        for op in &tx.mantle_tx.ops {
+                            if let Op::ChannelInscribe(inscribe) = op {
+                                remaining.retain(|expected| {
+                                    let found = inscribe.channel_id == expected.channel_id
+                                        && inscribe.inscription == expected.inscription
+                                        && inscribe.parent == expected.parent;
+                                    if found {
+                                        println!("Found {} inscription", expected.label);
+                                    }
+                                    !found
+                                });
+                            }
                         }
                     }
+
+                    current_id = Some(block.header().parent());
+                } else {
+                    break;
                 }
             }
 
@@ -176,7 +184,7 @@ async fn inscription_ops_e2e() {
         },
     ];
 
-    wait_for_inscriptions(executor, expected, adjust_timeout(Duration::from_secs(120)))
+    wait_for_inscriptions(executor, expected, adjust_timeout(Duration::from_mins(10)))
         .await
         .expect("All inscriptions should be found on executor");
 }

@@ -5386,6 +5386,7 @@ dependencies = [
  "nomos-core",
  "serde",
  "tokio",
+ "tokio-util",
  "url",
 ]
 

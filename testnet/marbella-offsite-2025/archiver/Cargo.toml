@@ -22,4 +22,5 @@ hex                = { default-features = false, features = ["alloc"], version =
 nomos-core         = { workspace = true }
 serde              = { workspace = true }
 tokio              = { workspace = true }
+tokio-util         = { default-features = false, version = "0.7" }
 url                = { default-features = false, version = "2.5.4" }

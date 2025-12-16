@@ -16,6 +16,7 @@ use nomos_core::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::{fs, select, signal::ctrl_c};
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 #[derive(Parser, Debug)]
@@ -84,6 +85,7 @@ async fn backfill_blocks(
     until_header_id: Option<HeaderId>,
     decoded_channel_id: &ChannelId,
     state_file: &Path,
+    cancel_token: &CancellationToken,
 ) -> Option<ArchiverState> {
     // Collect blocks by walking backwards from `from_header_id` until we reach
     // `until_header_id`
@@ -91,6 +93,12 @@ async fn backfill_blocks(
     let mut current_id = from_header_id;
 
     loop {
+        // Check for cancellation
+        if cancel_token.is_cancelled() {
+            println!("Backfill cancelled during block collection.");
+            break;
+        }
+
         let block = match client.get_block_by_id(endpoint.clone(), current_id).await {
             Ok(Some(block)) => block,
             Ok(None) => {
@@ -126,6 +134,12 @@ async fn backfill_blocks(
 
     let mut last_state = None;
     for block in blocks_to_process {
+        // Check for cancellation before processing each block
+        if cancel_token.is_cancelled() {
+            println!("Backfill cancelled during block processing. Saving progress...");
+            break;
+        }
+
         let header_id = block.header().id();
         let slot = block.header().slot();
 
@@ -179,6 +193,17 @@ async fn main() {
         Some(password),
     ))));
 
+    // Set up cancellation token
+    let cancel_token = CancellationToken::new();
+    let cancel_token_clone = cancel_token.clone();
+
+    // Spawn a task to listen for Ctrl-C
+    tokio::spawn(async move {
+        ctrl_c().await.expect("Failed to listen for Ctrl-C");
+        println!("\nReceived Ctrl-C, initiating graceful shutdown...");
+        cancel_token_clone.cancel();
+    });
+
     let mut lib_stream = Box::pin(
         client
             .get_lib_stream(nomos_node_http_endpoint.clone())
@@ -188,6 +213,13 @@ async fn main() {
 
     loop {
         select! {
+            biased;  // Prioritize cancellation check
+
+            _ = cancel_token.cancelled() => {
+                println!("Shutdown complete.");
+                break;
+            }
+
             block_info = lib_stream.next() => {
                 let Some(BlockInfo { header_id, height }) = block_info else {
                     println!("Stream ended.");
@@ -213,6 +245,7 @@ async fn main() {
                         until_header_id,
                         &decoded_channel_id,
                         state_file_path,
+                        &cancel_token,
                     ).await {
                         last_state = Some(new_state);
                     }
@@ -241,10 +274,6 @@ async fn main() {
                         }
                     }
                 }
-            }
-            _ = ctrl_c() => {
-                println!("Received Ctrl-C, shutting down.");
-                break;
             }
         }
     }

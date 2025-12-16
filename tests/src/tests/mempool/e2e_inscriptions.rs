@@ -27,7 +27,6 @@ struct ExpectedInscription {
     channel_id: ChannelId,
     inscription: Vec<u8>,
     parent: MsgId,
-    label: &'static str,
 }
 
 async fn wait_for_inscriptions(
@@ -155,7 +154,6 @@ async fn inscription_ops_e2e() {
             channel_id,
             inscription: genesis_data.clone(),
             parent: MsgId::root(),
-            label: "genesis",
         }],
         adjust_timeout(Duration::from_secs(120)),
     )
@@ -173,7 +171,6 @@ async fn inscription_ops_e2e() {
             channel_id,
             inscription: block1_data.clone(),
             parent: genesis_msg_id,
-            label: "block 1",
         }],
         adjust_timeout(Duration::from_secs(120)),
     )
@@ -191,7 +188,6 @@ async fn inscription_ops_e2e() {
             channel_id,
             inscription: block2_data,
             parent: block1_msg_id,
-            label: "block 2",
         }],
         adjust_timeout(Duration::from_secs(120)),
     )

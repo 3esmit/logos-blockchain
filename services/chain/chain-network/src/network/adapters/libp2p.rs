@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
+use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData, time::Instant};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok};
 use lb_chain_service_common::NetworkMessage;
@@ -27,7 +27,10 @@ use tokio::sync::oneshot;
 use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
 use tracing::debug;
 
-use crate::network::{BoxedStream, NetworkAdapter};
+use crate::{
+    metrics,
+    network::{BoxedStream, NetworkAdapter},
+};
 
 const MAX_PEERS_TO_TRY_FOR_ORPHAN_DOWNLOAD: usize = 3;
 
@@ -176,6 +179,7 @@ where
     }
 
     async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+        let started_at = Instant::now();
         let (reply_sender, receiver) = oneshot::channel();
         if let Err((e, _)) = self
             .network_relay
@@ -187,8 +191,12 @@ where
             return Err(Box::new(e));
         }
 
-        let result = receiver.await.map_err(|e| Box::new(e) as DynError)?;
-        result.map_err(|e| Box::new(e) as DynError)
+        let response = receiver
+            .await
+            .map_err(Into::into)
+            .and_then(|response| response.map_err(Into::into));
+
+        metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
     }
 
     async fn request_blocks_from_peer(

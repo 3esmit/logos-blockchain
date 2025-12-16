@@ -1571,6 +1571,9 @@ where
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
             tracing::debug!(target: LOG_TARGET, "Processed encapsulated data message: {remaining_encapsulated_message:?}");
             let processed_message = ProcessedMessage::from(*remaining_encapsulated_message);
+
+            crate::metrics::mix_packets_processed_total();
+
             scheduler.schedule_processed_message(processed_message.clone());
             (Some(processed_message), blending_tokens.into_iter())
         }

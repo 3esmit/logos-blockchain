@@ -1,5 +1,5 @@
 #[cfg(not(feature = "pol-dev-mode"))]
-use blake2::{Blake2b512, Digest as _};
+use blake2::Digest as _;
 use cryptarchia_engine::{Epoch, Slot};
 use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use groth16::Fr;
@@ -46,8 +46,8 @@ impl Leader {
     ) -> Self {
         #[cfg(not(feature = "pol-dev-mode"))]
         let merkle_pol_cache = {
-            let seed = Blake2b512::digest(fr_to_bytes(sk.to_public_key().as_fr()));
-            let seed: [u8; 64] = seed.into();
+            let seed = Blake2b256::digest(fr_to_bytes(sk.to_public_key().as_fr()));
+            let seed: [u8; 32] = seed.into();
             MerklePolCache::new(
                 seed.into(),
                 starting_slot,

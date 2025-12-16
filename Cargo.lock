@@ -5380,9 +5380,11 @@ dependencies = [
  "broadcast-service",
  "clap",
  "common-http-client",
+ "cryptarchia-engine",
  "futures",
  "hex",
  "nomos-core",
+ "serde",
  "tokio",
  "url",
 ]

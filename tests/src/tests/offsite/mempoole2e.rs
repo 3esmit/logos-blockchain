@@ -92,6 +92,7 @@ const DATA_SIZE: usize = 1024; // 1KB
 #[serial]
 async fn inscription_ops_e2e() {
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
+    topology.wait_network_ready().await;
     let validator = &topology.validators()[0];
     let executor = &topology.executors()[0];
 
@@ -146,47 +147,59 @@ async fn inscription_ops_e2e() {
     let block2_tx =
         create_channel_inscribe_tx(&signing_key, channel_id, block2_data.clone(), block1_msg_id);
 
-    // Submit all transactions to validator's mempool
     client
         .post_transaction(validator_url.clone(), genesis_tx)
         .await
         .expect("Failed to submit genesis inscription");
+
+    wait_for_inscriptions(
+        executor,
+        vec![ExpectedInscription {
+            channel_id,
+            inscription: genesis_data.clone(),
+            parent: MsgId::root(),
+            label: "genesis",
+        }],
+        adjust_timeout(Duration::from_secs(120)),
+    )
+    .await
+    .expect("Genesis inscription should be found on executor");
 
     client
         .post_transaction(validator_url.clone(), block1_tx)
         .await
         .expect("Failed to submit block 1 inscription");
 
+    wait_for_inscriptions(
+        executor,
+        vec![ExpectedInscription {
+            channel_id,
+            inscription: block1_data.clone(),
+            parent: genesis_msg_id,
+            label: "block 1",
+        }],
+        adjust_timeout(Duration::from_secs(120)),
+    )
+    .await
+    .expect("Block 1 inscription should be found on executor");
+
     client
         .post_transaction(validator_url.clone(), block2_tx)
         .await
         .expect("Failed to submit block 2 inscription");
 
-    // Wait for all inscriptions to appear on executor
-    let expected = vec![
-        ExpectedInscription {
-            channel_id,
-            inscription: genesis_data,
-            parent: MsgId::root(),
-            label: "genesis",
-        },
-        ExpectedInscription {
-            channel_id,
-            inscription: block1_data,
-            parent: genesis_msg_id,
-            label: "block 1",
-        },
-        ExpectedInscription {
+    wait_for_inscriptions(
+        executor,
+        vec![ExpectedInscription {
             channel_id,
             inscription: block2_data,
             parent: block1_msg_id,
             label: "block 2",
-        },
-    ];
-
-    wait_for_inscriptions(executor, expected, adjust_timeout(Duration::from_mins(10)))
-        .await
-        .expect("All inscriptions should be found on executor");
+        }],
+        adjust_timeout(Duration::from_secs(120)),
+    )
+    .await
+    .expect("Block 2 inscription should be found on executor");
 }
 
 async fn wait_for_validator_height(

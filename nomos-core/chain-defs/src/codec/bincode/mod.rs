@@ -17,7 +17,7 @@ pub type BincodeOptions = WithOtherTrailing<
     RejectTrailing,
 >;
 
-pub const DATA_LIMIT: u64 = 1 << 16; // Do not serialize/deserialize more than 64 KiB
+pub const DATA_LIMIT: u64 = 10 * 1024 * 1024; // Do not serialize/deserialize more than 10 MiB
 pub static OPTIONS: LazyLock<BincodeOptions> = LazyLock::new(|| {
     bincode::DefaultOptions::new()
         .with_little_endian()

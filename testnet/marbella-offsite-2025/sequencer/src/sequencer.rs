@@ -309,8 +309,26 @@ impl Sequencer {
 
         let tx_hash = format!("{:?}", tx.mantle_tx.hash());
 
-        // Post and wait for inclusion
-        self.post_and_wait(&tx).await?;
+        // Post and wait for inclusion - revert transfer if it fails
+        if let Err(e) = self.post_and_wait(&tx).await {
+            // Revert the transfer by doing the opposite
+            if let Err(revert_err) = self
+                .db
+                .transfer(&request.to, &request.from, request.amount)
+                .await
+            {
+                tracing::error!(
+                    "Failed to revert transfer after post failure: {}",
+                    revert_err
+                );
+            } else {
+                info!(
+                    "Reverted transfer {} -> {} (amount: {}) after post failure",
+                    request.from, request.to, request.amount
+                );
+            }
+            return Err(e);
+        }
 
         // Update the last message ID in database
         self.set_last_msg_id(new_msg_id).await?;

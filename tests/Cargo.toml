@@ -105,3 +105,7 @@ path = "src/tests/da/historic_sampling.rs"
 [[test]]
 name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
+
+[[test]]
+name = "test_offsite_mempool_e2e"
+path = "src/tests/offsite/mempoole2e.rs"

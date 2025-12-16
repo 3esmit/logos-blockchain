@@ -62,6 +62,7 @@ members = [
   "nomos-tracing",
   "nomos-utils",
   "testnet/cfgsync",
+  "testnet/marbella-offsite-2025/archiver",
   "tests",
   "utxotree",
   "wallet",
@@ -81,6 +82,7 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
+archiver                      = { default-features = false, path = "./testnet/marbella-offsite-2025/archiver" }
 broadcast-service             = { default-features = false, path = "./nomos-services/chain/broadcast-service" }
 bundler                       = { default-features = false, path = "./nomos-bundler" }
 cfgsync                       = { default-features = false, path = "./testnet/cfgsync" }

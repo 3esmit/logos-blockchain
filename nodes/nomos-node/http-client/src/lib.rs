@@ -2,13 +2,13 @@ use std::{collections::HashSet, fmt::Debug, hash::Hash, sync::Arc};
 
 use broadcast_service::BlockInfo;
 use futures::{Stream, StreamExt as _};
-use nomos_core::da::blob::Share;
+use nomos_core::{block::Block, da::blob::Share, mantle::SignedMantleTx};
 use nomos_da_messages::http::da::{
     DASharesCommitmentsRequest, DaSamplingRequest, GetSharesRequest,
 };
 use nomos_http_api_common::paths::{
     CRYPTARCHIA_LIB_STREAM, DA_GET_LIGHT_SHARE, DA_GET_SHARES, DA_GET_STORAGE_SHARES_COMMITMENTS,
-    MEMPOOL_ADD_TX,
+    MEMPOOL_ADD_TX, STORAGE_BLOCK,
 };
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
@@ -136,6 +136,13 @@ impl CommonHttpClient {
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
             _ => Err(Error::Server(format!("Unexpected response [{status}]",))),
         }
+    }
+
+    pub async fn get_block_by_id<HeaderId>(&self, base_url: Url, header_id: HeaderId) -> Result<Option<Block<SignedMantleTx>>, Error> where HeaderId: Serialize + Send + Sync {
+        let request_url = base_url
+            .join(STORAGE_BLOCK.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.post(request_url, &header_id).await
     }
 
     /// Get the commitments for a Blob

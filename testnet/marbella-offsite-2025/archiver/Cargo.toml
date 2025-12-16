@@ -1,0 +1,23 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-archiver"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+broadcast-service  = { workspace = true }
+clap               = { default-features = false, features = ["derive", "env", "std"], version = "4.5.13" }
+common-http-client = { workspace = true }
+futures            = { default-features = false, version = "0.3" }
+hex                = { default-features = false, features = ["alloc"], version = "0.4" }
+nomos-core         = { workspace = true }
+tokio              = { workspace = true }
+url                = { default-features = false, version = "2.5.4" }

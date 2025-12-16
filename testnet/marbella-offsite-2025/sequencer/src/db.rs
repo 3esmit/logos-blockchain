@@ -178,7 +178,7 @@ impl AccountDb {
 
         let block_id = {
             let mut table = write_txn.open_table(COUNTER_TABLE)?;
-            let current = table.get(BLOCK_ID_KEY)?.map(|v| v.value()).unwrap_or(0);
+            let current = table.get(BLOCK_ID_KEY)?.map_or(0, |v| v.value());
             let next = current + 1;
             table.insert(BLOCK_ID_KEY, next)?;
             next

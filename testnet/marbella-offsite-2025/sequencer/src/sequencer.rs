@@ -56,6 +56,29 @@ pub struct TransferRequest {
     pub amount: u64,
 }
 
+/// Transaction with unique ID for on-chain inscription
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transaction {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub amount: u64,
+}
+
+impl Transaction {
+    /// Create a new transaction from a transfer request with a random ID
+    pub fn from_transfer_request(request: &TransferRequest) -> Self {
+        let mut id_bytes = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut id_bytes);
+        Self {
+            id: hex::encode(id_bytes),
+            from: request.from.clone(),
+            to: request.to.clone(),
+            amount: request.amount,
+        }
+    }
+}
+
 /// Response after successful transfer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferResponse {
@@ -68,7 +91,7 @@ pub struct TransferResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockData {
     pub block_id: u64,
-    pub transactions: Vec<TransferRequest>,
+    pub transactions: Vec<Transaction>,
 }
 
 /// The sequencer that handles transactions
@@ -128,7 +151,7 @@ impl Sequencer {
 
         // Create a channel ID from the signing key's public key
         let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
-        info!("Sequencer channel ID: {:?}", channel_id);
+        info!("Sequencer channel ID: {}", hex::encode(channel_id.as_ref()));
 
         Ok(Self {
             db,
@@ -218,10 +241,18 @@ impl Sequencer {
             panic!("Expected ChannelInscribe op")
         };
 
-        let timeout_duration = Duration::from_secs(60);
+        let timeout_duration = Duration::from_mins(5);
         let poll_interval = Duration::from_millis(500);
         let start = std::time::Instant::now();
         let mut checked_blocks: HashSet<HeaderId> = HashSet::new();
+        // Don't walk back more than 50 blocks per poll (tx should be in recent blocks)
+        const MAX_DEPTH_PER_POLL: usize = 50;
+
+        tracing::debug!(
+            "Waiting for inscription: channel={}, parent={}",
+            hex::encode(expected_inscription.channel_id.as_ref()),
+            hex::encode(<[u8; 32]>::from(expected_inscription.parent))
+        );
 
         while start.elapsed() < timeout_duration {
             // Get current consensus info
@@ -231,10 +262,23 @@ impl Sequencer {
                 .await?;
             let mut current_id = Some(info.tip);
 
+            tracing::debug!(
+                "Polling: tip={}, height={}, checked_blocks={}",
+                info.tip,
+                info.height,
+                checked_blocks.len()
+            );
+
             // Walk back from tip, checking any blocks we haven't seen yet
+            let mut depth = 0;
             while let Some(block_id) = current_id {
                 if checked_blocks.contains(&block_id) {
                     break; // Already checked this block and its ancestors
+                }
+
+                if depth >= MAX_DEPTH_PER_POLL {
+                    tracing::debug!("Reached max depth {}, will continue next poll", depth);
+                    break;
                 }
 
                 if let Some(block) = self
@@ -243,22 +287,39 @@ impl Sequencer {
                     .await?
                 {
                     checked_blocks.insert(block_id);
+                    depth += 1;
+                    let tx_count = block.transactions().len();
+
+                    tracing::debug!(
+                        "Checking block {} (depth {}): {} transactions",
+                        block_id,
+                        depth,
+                        tx_count
+                    );
 
                     for tx in block.transactions() {
                         for op in &tx.mantle_tx.ops {
-                            if let Op::ChannelInscribe(inscribe) = op
-                                && inscribe.inscription == expected_inscription.inscription
-                                && inscribe.channel_id == expected_inscription.channel_id
-                                && inscribe.parent == expected_inscription.parent
-                            {
-                                info!("Transaction included in block!");
-                                return Ok(());
+                            if let Op::ChannelInscribe(inscribe) = op {
+                                tracing::debug!(
+                                    "Found inscription: channel={}, parent={}",
+                                    hex::encode(inscribe.channel_id.as_ref()),
+                                    hex::encode(<[u8; 32]>::from(inscribe.parent))
+                                );
+
+                                if inscribe.inscription == expected_inscription.inscription
+                                    && inscribe.channel_id == expected_inscription.channel_id
+                                    && inscribe.parent == expected_inscription.parent
+                                {
+                                    info!("Transaction included in block {}", block_id);
+                                    return Ok(());
+                                }
                             }
                         }
                     }
 
                     current_id = Some(block.header().parent());
                 } else {
+                    tracing::debug!("Block {} not found", block_id);
                     break;
                 }
             }
@@ -266,10 +327,19 @@ impl Sequencer {
             sleep(poll_interval).await;
         }
 
+        tracing::warn!(
+            "Timeout waiting for inscription after {:?}, checked {} blocks",
+            timeout_duration,
+            checked_blocks.len()
+        );
         Err(SequencerError::Timeout)
     }
 
     /// Process a transfer request
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "this is a demo, it is ok for now"
+    )]
     pub async fn process_transfer(&self, request: TransferRequest) -> Result<TransferResponse> {
         info!(
             "Processing transfer: {} -> {} (amount: {})",
@@ -285,15 +355,23 @@ impl Sequencer {
         // Get next block ID
         let block_id = self.db.next_block_id().await?;
 
+        // Create transaction with random ID from the transfer request
+        let transaction = Transaction::from_transfer_request(&request);
+
         // Create block data with block_id and transactions array
         let block_data = BlockData {
             block_id,
-            transactions: vec![request.clone()],
+            transactions: vec![transaction],
         };
 
         // Serialize block data for inscription
         let inscription_data = serde_json::to_vec(&block_data)
             .map_err(|e| SequencerError::Serialization(e.to_string()))?;
+
+        info!(
+            "Posting block data: {}",
+            serde_json::to_string(&block_data).unwrap_or_else(|_| "<serialization error>".into())
+        );
 
         // Get the current parent message ID from database
         let parent = self.get_last_msg_id().await?;

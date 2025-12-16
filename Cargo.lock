@@ -2576,6 +2576,7 @@ dependencies = [
  "chain-service",
  "common-http-client",
  "futures",
+ "hex",
  "key-management-system-service",
  "nomos-core",
  "rand 0.8.5",

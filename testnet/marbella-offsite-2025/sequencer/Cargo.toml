@@ -18,6 +18,7 @@ broadcast-service             = { workspace = true }
 chain-service                 = { workspace = true }
 common-http-client            = { workspace = true }
 futures                       = { default-features = false, version = "0.3" }
+hex                           = "0.4"
 key-management-system-service = { workspace = true }
 nomos-core                    = { workspace = true }
 rand                          = { workspace = true }

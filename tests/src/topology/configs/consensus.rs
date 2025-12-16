@@ -143,6 +143,7 @@ pub fn create_consensus_configs(
                 leader: LeaderConfig {
                     pk,
                     sk: sk.into_unsecured(),
+                    cache_depth: 20,
                 },
                 network: NetworkConfig {
                     bootstrap: chain_network::BootstrapConfig {

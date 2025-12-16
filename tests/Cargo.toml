@@ -108,4 +108,4 @@ path = "src/tests/mantle/sdp_ops.rs"
 
 [[test]]
 name = "test_mempool_e2e"
-path = "src/tests/mempool/mempoole2e.rs"
+path = "src/tests/mempool/e2e_inscriptions.rs."

@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 broadcast-service     = { workspace = true }
+chain-service         = { workspace = true }
 futures               = { default-features = false, version = "0.3.31" }
 nomos-core            = { workspace = true }
 nomos-da-messages     = { workspace = true }

@@ -4,6 +4,7 @@ use broadcast_service::BlockInfo;
 use clap::Parser;
 use common_http_client::{BasicAuthCredentials, CommonHttpClient};
 use cryptarchia_engine::Slot;
+use demo_sequencer::BlockData;
 use futures::StreamExt as _;
 use nomos_core::{
     block::Block,
@@ -63,7 +64,9 @@ fn process_block(block: Block<SignedMantleTx>, decoded_channel_id: &ChannelId) {
                 channel_id,
                 inscription,
                 ..
-            }) if &channel_id == decoded_channel_id => Some(inscription),
+            }) if &channel_id == decoded_channel_id => {
+                Some(serde_json::from_slice::<BlockData>(&inscription).unwrap())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -215,7 +218,7 @@ async fn main() {
         select! {
             biased;  // Prioritize cancellation check
 
-            _ = cancel_token.cancelled() => {
+            () = cancel_token.cancelled() => {
                 println!("Shutdown complete.");
                 break;
             }
@@ -229,12 +232,13 @@ async fn main() {
                 println!("Received block info: height={height}, header_id={header_id:?}");
 
                 // Check if we need to backfill
-                let needs_backfill = last_state.as_ref().map_or(height > 0, |state| Slot::from(height) > state.last_processed_height + 1 || (Slot::from(height) == state.last_processed_height + 1 && {
-                            // We should verify the parent matches, but for now just process
-                            false
-                        }));
+                // let needs_backfill = last_state.as_ref().map_or(height > 0, |state| Slot::from(height) > state.last_processed_height + 1 || (Slot::from(height) == state.last_processed_height + 1 && {
+                //             // We should verify the parent matches, but for now just process
+                //             false
+                //         }));
 
-                if needs_backfill {
+                // TODO: Re-enable later.
+                if false {
                     let until_header_id = last_state.as_ref().map(|s| s.last_processed_header_id);
                     println!("Backfilling blocks from {header_id:?} until {until_header_id:?}");
 

@@ -63,6 +63,7 @@ members = [
   "nomos-utils",
   "testnet/cfgsync",
   "testnet/marbella-offsite-2025/archiver",
+  "testnet/marbella-offsite-2025/sequencer",
   "tests",
   "utxotree",
   "wallet",
@@ -96,6 +97,7 @@ circuits-verifier             = { default-features = false, path = "./zk/circuit
 common-http-client            = { default-features = false, path = "./nodes/nomos-node/http-client" }
 cryptarchia-engine            = { default-features = false, path = "./consensus/cryptarchia-engine" }
 cryptarchia-sync              = { default-features = false, path = "./consensus/cryptarchia-sync" }
+demo-sequencer                = { default-features = false, path = "./testnet/marbella-offsite-2025/sequencer" }
 executor-http-client          = { default-features = false, path = "./nodes/nomos-executor/http-client" }
 groth16                       = { default-features = false, path = "./zk/groth16" }
 key-management-system-keys    = { default-features = false, path = "./nomos-kms/keys" }

@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
-use redb::{Database, ReadableTable as _, TableDefinition};
+use redb::{Database, ReadableTable as _, ReadableTableMetadata as _, TableDefinition};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
 const ACCOUNTS_TABLE: TableDefinition<&str, u64> = TableDefinition::new("accounts");
 const STATE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("state");
 const COUNTER_TABLE: TableDefinition<&str, u64> = TableDefinition::new("counters");
+// Queue table: key is tx_id, value is JSON-serialized PendingTransfer
+const QUEUE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("queue");
+// Transactions table: key is tx_id, value is JSON-serialized Transaction
+const TRANSACTIONS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("transactions");
 const LAST_MSG_ID_KEY: &str = "last_msg_id";
 const BLOCK_ID_KEY: &str = "block_id";
 
@@ -54,6 +58,8 @@ impl AccountDb {
             drop(write_txn.open_table(ACCOUNTS_TABLE)?);
             drop(write_txn.open_table(STATE_TABLE)?);
             drop(write_txn.open_table(COUNTER_TABLE)?);
+            drop(write_txn.open_table(QUEUE_TABLE)?);
+            drop(write_txn.open_table(TRANSACTIONS_TABLE)?);
         };
         write_txn.commit()?;
 
@@ -186,5 +192,81 @@ impl AccountDb {
 
         write_txn.commit()?;
         Ok(block_id)
+    }
+
+    /// Add a pending transfer to the queue
+    pub async fn queue_push(&self, tx_id: &str, data: &[u8]) -> Result<()> {
+        let write_txn = self.db.write().await.begin_write()?;
+        {
+            let mut table = write_txn.open_table(QUEUE_TABLE)?;
+            table.insert(tx_id, data)?;
+        };
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Get all pending transfers from the queue and clear it
+    pub async fn queue_drain(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        let write_txn = self.db.write().await.begin_write()?;
+
+        let items = {
+            let mut table = write_txn.open_table(QUEUE_TABLE)?;
+            let mut items = Vec::new();
+            for entry in table.iter()? {
+                let (key, value) = entry?;
+                items.push((key.value().to_owned(), value.value().to_vec()));
+            }
+            // Clear the queue
+            for (key, _) in &items {
+                table.remove(key.as_str())?;
+            }
+            items
+        };
+
+        write_txn.commit()?;
+        Ok(items)
+    }
+
+    /// Check if queue is empty
+    pub async fn queue_is_empty(&self) -> Result<bool> {
+        let read_txn = self.db.read().await.begin_read()?;
+        let table = read_txn.open_table(QUEUE_TABLE)?;
+        Ok(table.is_empty()?)
+    }
+
+    /// Get queue length
+    pub async fn queue_len(&self) -> Result<u64> {
+        let read_txn = self.db.read().await.begin_read()?;
+        let table = read_txn.open_table(QUEUE_TABLE)?;
+        Ok(table.len()?)
+    }
+
+    /// Save a transaction to the transactions table
+    pub async fn save_transaction(&self, tx_id: &str, data: &[u8]) -> Result<()> {
+        let write_txn = self.db.write().await.begin_write()?;
+        {
+            let mut table = write_txn.open_table(TRANSACTIONS_TABLE)?;
+            table.insert(tx_id, data)?;
+        };
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Get all transactions for an account (filtering done by caller with
+    /// deserialized data)
+    pub async fn get_all_transactions(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        let read_txn = self.db.read().await.begin_read()?;
+        let table = read_txn.open_table(TRANSACTIONS_TABLE)?;
+
+        let mut transactions = Vec::new();
+        for entry in table.iter()? {
+            let (key, value) = entry?;
+            transactions.push((key.value().to_owned(), value.value().to_vec()));
+        }
+        Ok(transactions)
+    }
+
+    pub const fn initial_balance(&self) -> u64 {
+        self.initial_balance
     }
 }

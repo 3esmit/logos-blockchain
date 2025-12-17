@@ -63,6 +63,13 @@ async fn main() {
     };
     info!("Sequencer initialized");
 
+    // Spawn background processing loop
+    let sequencer_clone = Arc::clone(&sequencer);
+    tokio::spawn(async move {
+        info!("Starting background processing loop");
+        sequencer_clone.run_processing_loop().await;
+    });
+
     // Create HTTP router
     let app = create_router(sequencer);
 

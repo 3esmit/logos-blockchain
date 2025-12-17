@@ -383,10 +383,7 @@ impl Sequencer {
         self.db.queue_push(&tx_id, &data).await?;
 
         let queue_len = self.db.queue_len().await?;
-        debug!(
-            "Queued tx {} (queue size: {})",
-            tx_id, queue_len
-        );
+        debug!("Queued tx {} (queue size: {})", tx_id, queue_len);
 
         // Return success immediately - actual on-chain posting happens in background
         Ok(TransferResponse {
@@ -570,18 +567,15 @@ impl Sequencer {
         Ok(self.db.list_accounts().await?)
     }
 
-    /// Get all transactions for an account (as sender or receiver), sorted by index
+    /// Get all transactions for an account (as sender or receiver), sorted by
+    /// index
     pub async fn get_account_transactions(&self, account: &str) -> Result<Vec<Transaction>> {
-        let all_txs = self.db.get_all_transactions().await?;
-        let mut transactions = Vec::new();
-
-        for (_tx_id, data) in all_txs {
-            if let Ok(tx) = serde_json::from_slice::<Transaction>(&data)
-                && (tx.from == account || tx.to == account)
-            {
-                transactions.push(tx);
-            }
-        }
+        let all_txs = self.db.get_all_transactions_raw().await?;
+        let mut transactions: Vec<Transaction> = all_txs
+            .iter()
+            .filter_map(|data| serde_json::from_slice::<Transaction>(data).ok())
+            .filter(|tx| tx.from == account || tx.to == account)
+            .collect();
 
         transactions.sort_by_key(|tx| tx.index);
         Ok(transactions)
@@ -590,11 +584,11 @@ impl Sequencer {
     /// Get confirmed balance based only on confirmed transactions
     pub async fn get_confirmed_balance(&self, account: &str) -> Result<u64> {
         let initial_balance = self.db.initial_balance();
-        let all_txs = self.db.get_all_transactions().await?;
+        let all_txs = self.db.get_all_transactions_raw().await?;
 
         let mut balance = initial_balance;
 
-        for (_tx_id, data) in all_txs {
+        for data in all_txs {
             if let Ok(tx) = serde_json::from_slice::<Transaction>(&data)
                 && tx.confirmed
             {

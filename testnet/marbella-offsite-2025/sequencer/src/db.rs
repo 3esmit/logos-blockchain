@@ -279,16 +279,15 @@ impl AccountDb {
         Ok(())
     }
 
-    /// Get all transactions for an account (filtering done by caller with
-    /// deserialized data)
-    pub async fn get_all_transactions(&self) -> Result<Vec<(String, Vec<u8>)>> {
+    /// Get all raw transaction data from the database
+    pub async fn get_all_transactions_raw(&self) -> Result<Vec<Vec<u8>>> {
         let read_txn = self.db.read().await.begin_read()?;
         let table = read_txn.open_table(TRANSACTIONS_TABLE)?;
 
         let mut transactions = Vec::new();
         for entry in table.iter()? {
-            let (key, value) = entry?;
-            transactions.push((key.value().to_owned(), value.value().to_vec()));
+            let (_key, value) = entry?;
+            transactions.push(value.value().to_vec());
         }
         Ok(transactions)
     }

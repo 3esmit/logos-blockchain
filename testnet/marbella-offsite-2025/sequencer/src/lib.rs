@@ -17,6 +17,8 @@ pub struct Transaction {
     pub amount: u64,
     #[serde(default)]
     pub confirmed: bool,
+    #[serde(default)]
+    pub index: u64,
 }
 
 /// Response after successful transfer

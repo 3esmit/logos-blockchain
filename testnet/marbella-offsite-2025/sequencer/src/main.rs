@@ -11,11 +11,11 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberI
 use crate::{api::create_router, config::Config, db::AccountDb, sequencer::Sequencer};
 
 fn print_banner() {
-    let blue = "\x1b[38;5;39m";
-    let reset = "\x1b[0m";
+    const BLUE: &str = "\x1b[38;5;39m";
+    const RESET: &str = "\x1b[0m";
     println!(
-        r#"
-{blue} __  __                 _____ _           _
+        r"
+{BLUE} __  __                 _____ _           _
 |  \/  | ___ _ __ ___  / ____| |__   __ _(_)_ __
 | |\/| |/ _ \ '_ ` _ \| |    | '_ \ / _` | | '_ \
 | |  | |  __/ | | | | | |____| | | | (_| | | | | |
@@ -25,10 +25,8 @@ fn print_banner() {
 \___ \ / _ \/ _` | | | |/ _ \ '_ \ / __/ _ \ '__|
  ___) |  __/ (_| | |_| |  __/ | | | (_|  __/ |
 |____/ \___|\__, |\__,_|\___|_| |_|\___\___|_|
-               |_|{reset}
-"#,
-        blue = blue,
-        reset = reset
+               |_|{RESET}
+"
     );
 }
 

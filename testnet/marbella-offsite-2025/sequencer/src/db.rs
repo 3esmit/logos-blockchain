@@ -13,6 +13,7 @@ const QUEUE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("queue");
 const TRANSACTIONS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("transactions");
 const LAST_MSG_ID_KEY: &str = "last_msg_id";
 const BLOCK_ID_KEY: &str = "block_id";
+const TX_INDEX_KEY: &str = "tx_index";
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -194,6 +195,22 @@ impl AccountDb {
         Ok(block_id)
     }
 
+    /// Get the next transaction index and increment the counter
+    pub async fn next_tx_index(&self) -> Result<u64> {
+        let write_txn = self.db.write().await.begin_write()?;
+
+        let tx_index = {
+            let mut table = write_txn.open_table(COUNTER_TABLE)?;
+            let current = table.get(TX_INDEX_KEY)?.map_or(0, |v| v.value());
+            let next = current + 1;
+            table.insert(TX_INDEX_KEY, next)?;
+            next
+        };
+
+        write_txn.commit()?;
+        Ok(tx_index)
+    }
+
     /// Add a pending transfer to the queue
     pub async fn queue_push(&self, tx_id: &str, data: &[u8]) -> Result<()> {
         let write_txn = self.db.write().await.begin_write()?;
@@ -247,6 +264,16 @@ impl AccountDb {
         {
             let mut table = write_txn.open_table(TRANSACTIONS_TABLE)?;
             table.insert(tx_id, data)?;
+        };
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    pub async fn delete_transaction(&self, tx_id: &str) -> Result<()> {
+        let write_txn = self.db.write().await.begin_write()?;
+        {
+            let mut table = write_txn.open_table(TRANSACTIONS_TABLE)?;
+            table.remove(tx_id)?;
         };
         write_txn.commit()?;
         Ok(())

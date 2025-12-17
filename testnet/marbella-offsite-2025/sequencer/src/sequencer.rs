@@ -53,6 +53,8 @@ pub type Result<T> = std::result::Result<T, SequencerError>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingTransfer {
     pub tx_id: String,
+    #[serde(default)]
+    pub tx_index: u64,
     pub request: TransferRequest,
     pub from_balance: u64,
     pub to_balance: u64,
@@ -352,12 +354,14 @@ impl Sequencer {
         };
 
         // Save transaction immediately with confirmed=false
+        let tx_index = self.db.next_tx_index().await?;
         let tx = Transaction {
             id: tx_id.clone(),
             from: request.from.clone(),
             to: request.to.clone(),
             amount: request.amount,
             confirmed: false,
+            index: tx_index,
         };
         let tx_data =
             serde_json::to_vec(&tx).map_err(|e| SequencerError::Serialization(e.to_string()))?;
@@ -366,6 +370,7 @@ impl Sequencer {
         // Create pending transfer and serialize for DB queue
         let pending = PendingTransfer {
             tx_id: tx_id.clone(),
+            tx_index,
             request,
             from_balance,
             to_balance,
@@ -461,6 +466,7 @@ impl Sequencer {
                 to: p.request.to.clone(),
                 amount: p.request.amount,
                 confirmed: true,
+                index: p.tx_index,
             };
             let tx_data = serde_json::to_vec(&tx)
                 .map_err(|e| SequencerError::Serialization(e.to_string()))?;
@@ -481,7 +487,8 @@ impl Sequencer {
                 from: p.request.from.clone(),
                 to: p.request.to.clone(),
                 amount: p.request.amount,
-                confirmed: false, // Will be set to true after inclusion
+                confirmed: false,
+                index: p.tx_index,
             })
             .collect();
 
@@ -539,7 +546,16 @@ impl Sequencer {
             }
             Err(e) => {
                 self.revert_transfers(&pending).await;
+                self.delete_transactions(&pending).await;
                 Err(e)
+            }
+        }
+    }
+
+    async fn delete_transactions(&self, pending: &[PendingTransfer]) {
+        for p in pending {
+            if let Err(e) = self.db.delete_transaction(&p.tx_id).await {
+                warn!("Failed to delete transaction {}: {}", p.tx_id, e);
             }
         }
     }
@@ -554,7 +570,7 @@ impl Sequencer {
         Ok(self.db.list_accounts().await?)
     }
 
-    /// Get all transactions for an account (as sender or receiver)
+    /// Get all transactions for an account (as sender or receiver), sorted by index
     pub async fn get_account_transactions(&self, account: &str) -> Result<Vec<Transaction>> {
         let all_txs = self.db.get_all_transactions().await?;
         let mut transactions = Vec::new();
@@ -567,6 +583,7 @@ impl Sequencer {
             }
         }
 
+        transactions.sort_by_key(|tx| tx.index);
         Ok(transactions)
     }
 

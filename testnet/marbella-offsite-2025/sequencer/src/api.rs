@@ -9,7 +9,7 @@ use axum::{
 };
 use demo_sequencer::{Transaction, TransferRequest};
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::sequencer::Sequencer;
 
@@ -52,8 +52,8 @@ async fn transfer(
     State(sequencer): State<AppState>,
     Json(request): Json<TransferRequest>,
 ) -> impl IntoResponse {
-    info!(
-        "Received transfer request: {} -> {} ({})",
+    debug!(
+        "API /transfer {} -> {} ({})",
         request.from, request.to, request.amount
     );
 
@@ -107,10 +107,7 @@ async fn get_balance(
     axum::extract::Path(account): axum::extract::Path<String>,
     axum::extract::Query(query): axum::extract::Query<AccountQuery>,
 ) -> impl IntoResponse {
-    info!(
-        "Received account request for: {} (tx={})",
-        account, query.tx
-    );
+    debug!("API /accounts/{}", account);
 
     match fetch_account_data(&sequencer, &account, query.tx).await {
         Ok((balance, confirmed_balance, transactions)) => (
@@ -137,7 +134,7 @@ async fn get_balance(
 /// GET /accounts
 /// Returns all accounts and their balances
 async fn list_accounts(State(sequencer): State<AppState>) -> impl IntoResponse {
-    info!("Received list accounts request");
+    debug!("API /accounts");
 
     match sequencer.list_accounts().await {
         Ok(accounts) => {

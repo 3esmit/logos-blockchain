@@ -19,7 +19,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::time::sleep;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::db::AccountDb;
 
@@ -77,7 +77,7 @@ fn empty_ledger_signature(tx_hash: &TxHash) -> key_management_system_service::ke
 /// Load signing key from file or generate a new one if it doesn't exist
 fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     if path.exists() {
-        info!("Loading existing signing key from {:?}", path);
+        debug!("Loading existing signing key from {:?}", path);
         let key_bytes = fs::read(path)?;
         if key_bytes.len() != ED25519_SECRET_KEY_SIZE {
             return Err(SequencerError::InvalidKeyFile {
@@ -89,7 +89,7 @@ fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
             key_bytes.try_into().expect("length already checked");
         Ok(Ed25519Key::from_bytes(&key_array))
     } else {
-        info!("Generating new signing key and saving to {:?}", path);
+        debug!("Generating new signing key and saving to {:?}", path);
         let mut key_bytes = [0u8; ED25519_SECRET_KEY_SIZE];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key_bytes);
         fs::write(path, key_bytes)?;
@@ -117,7 +117,7 @@ impl Sequencer {
 
         // Create a channel ID from the signing key's public key
         let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
-        info!("Sequencer channel ID: {}", hex::encode(channel_id.as_ref()));
+        info!("Channel ID: {}", hex::encode(channel_id.as_ref()));
 
         Ok(Self {
             db,
@@ -185,7 +185,7 @@ impl Sequencer {
             .post_transaction(self.node_url.clone(), tx.clone())
             .await?;
 
-        info!("Transaction posted, waiting for inclusion...");
+        debug!("Transaction posted, waiting for inclusion...");
 
         // Wait for the transaction to be included
         self.wait_for_inclusion(tx).await?;
@@ -211,7 +211,7 @@ impl Sequencer {
                         && inscribe.channel_id == expected.channel_id
                         && inscribe.parent == expected.parent
                     {
-                        info!("Transaction included in block {}", block_id);
+                        debug!("Transaction included in block {}", block_id);
                         return true;
                     }
                 }
@@ -323,10 +323,9 @@ impl Sequencer {
             sleep(poll_interval).await;
         }
 
-        tracing::warn!(
-            "Timeout waiting for inscription after {:?}, checked {} blocks",
-            timeout_duration,
-            checked_blocks.len()
+        warn!(
+            "Timeout waiting for chain inclusion after {:?}",
+            timeout_duration
         );
         Err(SequencerError::Timeout)
     }
@@ -335,7 +334,7 @@ impl Sequencer {
     /// returns immediately
     pub async fn process_transfer(&self, request: TransferRequest) -> Result<TransferResponse> {
         info!(
-            "Received transfer: {} -> {} (amount: {})",
+            "TRANSFER {} -> {} ({} tokens)",
             request.from, request.to, request.amount
         );
 
@@ -379,8 +378,8 @@ impl Sequencer {
         self.db.queue_push(&tx_id, &data).await?;
 
         let queue_len = self.db.queue_len().await?;
-        info!(
-            "Added transfer to queue (id: {}), queue size: {}",
+        debug!(
+            "Queued tx {} (queue size: {})",
             tx_id, queue_len
         );
 
@@ -446,8 +445,8 @@ impl Sequencer {
                     revert_err
                 );
             } else {
-                info!(
-                    "Reverted transfer {} -> {} (amount: {})",
+                warn!(
+                    "REVERTED {} -> {} ({} tokens)",
                     p.request.from, p.request.to, p.request.amount
                 );
             }
@@ -495,8 +494,9 @@ impl Sequencer {
             .map_err(|e| SequencerError::Serialization(e.to_string()))?;
 
         info!(
-            "Posting block data: {}",
-            serde_json::to_string(&block_data).unwrap_or_else(|_| "<serialization error>".into())
+            "BLOCK #{} posting to chain ({} tx)",
+            block_id,
+            pending.len()
         );
 
         let parent = self.get_last_msg_id().await?;
@@ -525,14 +525,14 @@ impl Sequencer {
         }
 
         let count = pending.len();
-        info!("Processing batch of {} transfers", count);
+        debug!("Processing batch of {} transfers", count);
 
         match self.create_and_post_block(&pending).await {
             Ok((block_data, new_msg_id)) => {
                 self.set_last_msg_id(new_msg_id).await?;
                 self.confirm_transactions(&pending).await?;
                 info!(
-                    "Block {} with {} transfers included",
+                    "BLOCK #{} confirmed on chain ({} tx)",
                     block_data.block_id, count
                 );
                 Ok(())

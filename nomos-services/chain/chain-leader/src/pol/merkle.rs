@@ -30,7 +30,7 @@ impl MerklePolCache {
         cache_depth: usize,
     ) -> Self {
         let sub_tree_depth = tree_depth - cache_depth;
-        let numer_of_sub_trees = 2usize.pow(cache_depth as u32);
+        let number_of_subtrees = 2usize.pow(cache_depth as u32);
         // we have to pre-cache the leaves so we can parallelize the subtree computation
         let lower_sub_trees: Vec<_> = Self::leaves_from_seed(seed)
             .take(numer_of_sub_trees)

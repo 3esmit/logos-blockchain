@@ -33,7 +33,7 @@ impl MerklePolCache {
         let number_of_subtrees = 2usize.pow(cache_depth as u32);
         // we have to pre-cache the leaves so we can parallelize the subtree computation
         let lower_sub_trees: Vec<_> = Self::leaves_from_seed(seed)
-            .take(numer_of_sub_trees)
+            .take(number_of_subtrees)
             .map(|seed| MerklePolSubtree::new(seed, sub_tree_depth))
             .collect();
 

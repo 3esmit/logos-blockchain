@@ -6,6 +6,7 @@ use groth16::Fr;
 #[cfg(not(feature = "pol-dev-mode"))]
 use groth16::fr_to_bytes;
 use nomos_core::{
+    codec::SerializeOp,
     mantle::{Utxo, ops::leader_claim::VoucherCm},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
     utils::merkle::MerklePath,
@@ -13,6 +14,7 @@ use nomos_core::{
 use nomos_ledger::{EpochState, UtxoTree};
 #[cfg(not(feature = "pol-dev-mode"))]
 use nomos_utils::blake_rng::Blake2b256;
+use rand::{RngCore as _, SeedableRng as _};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
 
@@ -48,8 +50,13 @@ impl Leader {
     ) -> Self {
         #[cfg(not(feature = "pol-dev-mode"))]
         let merkle_pol_cache = {
-            let seed = Blake2b256::digest(fr_to_bytes(sk.to_public_key().as_fr()));
-            let seed: [u8; 32] = seed.into();
+            let mut seed = rand::rngs::StdRng::from_entropy();
+            let seed: [u8; 32] = std::iter::repeat_with(|| seed.next_u64().to_le_bytes())
+                .take(4)
+                .flatten()
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("Size should match");
             MerklePolCache::new(
                 seed.into(),
                 starting_slot,

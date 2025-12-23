@@ -78,9 +78,9 @@ where
     }
 
     #[must_use]
-    pub fn push(&self, root: T) -> Self {
+    pub fn push(&self, value: T) -> Self {
         let mut last_root = Root {
-            root: *root.as_ref(),
+            root: *value.as_ref(),
             height: 1,
         };
         let mut roots = self.roots.clone();

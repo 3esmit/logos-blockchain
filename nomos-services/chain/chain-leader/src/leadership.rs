@@ -1,19 +1,13 @@
-#[cfg(not(feature = "pol-dev-mode"))]
-use blake2::Digest as _;
 use cryptarchia_engine::{Epoch, Slot};
-use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use groth16::Fr;
-#[cfg(not(feature = "pol-dev-mode"))]
-use groth16::fr_to_bytes;
+use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey, ZkPublicKey};
 use nomos_core::{
-    codec::SerializeOp,
     mantle::{Utxo, ops::leader_claim::VoucherCm},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
     utils::merkle::MerklePath,
 };
 use nomos_ledger::{EpochState, UtxoTree};
 #[cfg(not(feature = "pol-dev-mode"))]
-use nomos_utils::blake_rng::Blake2b256;
 use rand::{RngCore as _, SeedableRng as _};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;

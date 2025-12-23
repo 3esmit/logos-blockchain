@@ -179,8 +179,12 @@ impl Leader {
             // TODO: use proper u64 instead
             #[cfg(not(feature = "pol-dev-mode"))]
             {
-                self.merkle_pol_cache
-                    .merkle_path_for_index(slot.into_inner() as usize)
+                self.merkle_pol_cache.merkle_path_for_index(
+                    usize::try_from(
+                        slot.into_inner() - self.merkle_pol_cache.starting_slot.into_inner(),
+                    )
+                    .expect("Slot difference should always fit in usize"),
+                )
             }
             #[cfg(feature = "pol-dev-mode")]
             {

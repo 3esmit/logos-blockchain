@@ -80,7 +80,9 @@ impl MerklePolCache {
     }
 
     #[must_use]
-    pub fn merkle_path_for_index(&self, index: usize) -> MerklePath<Fr> {
+    pub fn merkle_path_for_slot(&self, slot: Slot) -> MerklePath<Fr> {
+        let index = usize::try_from(slot.into_inner() - self.starting_slot.into_inner())
+            .expect("Slot difference should always fit in usize");
         let mut cached_path = get_merkle_path(&self.cached_tree, index, self.cached_tree.len());
         let subtree_leaf_length = 2usize.pow((self.tree_depth - self.cache_depth()) as u32);
         let subtree_index = index / subtree_leaf_length;

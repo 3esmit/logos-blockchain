@@ -151,25 +151,100 @@ pub fn get_merkle_path(
 ) -> MerklePath<Fr> {
     let mut path = MerklePath::new();
 
-    for level in (0..tree_depth).rev() {
-        let sibling_index = if current_index.is_multiple_of(2) {
-            current_index + 1
-        } else {
-            current_index - 1
-        };
+    // Iterate from leaves level (tree_depth - 1) up to, but not including, the root
+    // level (0)
+    for level_idx in (1..tree_depth).rev() {
+        // sibling is the adjacent index: flip the lowest bit
+        let sibling_index = current_index ^ 1;
 
-        if sibling_index < cached_tree[level].len() {
-            let value = cached_tree[level][sibling_index];
-            let node = if sibling_index.is_multiple_of(2) {
-                MerkleNode::Left(value)
+        if sibling_index < cached_tree[level_idx].len() {
+            let sibling_value = cached_tree[level_idx][current_index];
+            // Orientation is relative to the current node position
+            let node = if current_index.is_multiple_of(2) {
+                MerkleNode::Left(sibling_value)
             } else {
-                MerkleNode::Right(value)
+                MerkleNode::Right(sibling_value)
             };
             path.push(node);
         }
 
+        // move to parent index for the next level up
         current_index /= 2;
     }
     path.reverse();
     path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to build a small deterministic tree and verify paths
+    fn build_cached_tree() -> CachedTree {
+        // Build 4 leaves (tree depth = 3: levels 0=root, 1=internal, 2=leaves)
+        let leaves: Vec<Fr> = vec![
+            fr_from_bytes_unchecked(&[1u8; 31]),
+            fr_from_bytes_unchecked(&[2u8; 31]),
+            fr_from_bytes_unchecked(&[3u8; 31]),
+            fr_from_bytes_unchecked(&[4u8; 31]),
+        ];
+
+        // Level 1 (internal)
+        let level1 = vec![
+            <ZkHasher as ZkDigest>::compress(&[leaves[0], leaves[1]]),
+            <ZkHasher as ZkDigest>::compress(&[leaves[2], leaves[3]]),
+        ];
+        // Level 0 (root)
+        let root = vec![<ZkHasher as ZkDigest>::compress(&[level1[0], level1[1]])];
+
+        vec![root, level1, leaves]
+    }
+
+    #[test]
+    fn compute_cached_tree_from_leafs_works() {
+        let expected = build_cached_tree();
+        let leaves: Vec<Fr> = vec![
+            fr_from_bytes_unchecked(&[1u8; 31]),
+            fr_from_bytes_unchecked(&[2u8; 31]),
+            fr_from_bytes_unchecked(&[3u8; 31]),
+            fr_from_bytes_unchecked(&[4u8; 31]),
+        ];
+        let cached_tree = compute_cached_tree_from_leafs(leaves.as_slice());
+        // Sanity: expected layout sizes: level 0 -> 1, level 1 -> 2, level 2 -> 4
+        assert_eq!(cached_tree.len(), 3);
+        assert_eq!(cached_tree[0].len(), 1);
+        assert_eq!(cached_tree[1].len(), 2);
+        assert_eq!(cached_tree[2].len(), 4);
+        assert_eq!(cached_tree, expected);
+    }
+
+    fn assert_node_match<T>(a: &MerkleNode<T>, b: &MerkleNode<T>) {
+        assert!(matches!(
+            (a, b),
+            (MerkleNode::Left(_), MerkleNode::Left(_))
+                | (MerkleNode::Right(_), MerkleNode::Right(_))
+        ));
+    }
+    #[test]
+    fn merkle_path_selects_correct_siblings_and_orientations() {
+        let cached = build_cached_tree();
+        let depth = 3usize;
+        let l1 = &cached[1];
+        let leaves = &cached[2];
+        let expected_path = [
+            vec![MerkleNode::Left(l1[0]), MerkleNode::Left(leaves[0])], // 1
+            vec![MerkleNode::Left(l1[0]), MerkleNode::Right(leaves[1])], // 2
+            vec![MerkleNode::Right(l1[1]), MerkleNode::Left(leaves[2])], // 3
+            vec![MerkleNode::Right(l1[1]), MerkleNode::Right(leaves[3])],
+        ];
+        for i in 0..4 {
+            let path = get_merkle_path(&cached, i, depth);
+            let expected = &expected_path[i];
+            assert_eq!(path.len(), expected.len());
+            for (a, b) in path.iter().zip(expected) {
+                assert_node_match(a, b);
+                assert_eq!(*a.item(), *b.item());
+            }
+        }
+    }
 }

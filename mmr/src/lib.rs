@@ -7,6 +7,7 @@ use poseidon2::{Digest, Fr};
 use rpds::StackSync;
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
+const DEFAULT_MMR_DEPTH: u8 = 32;
 
 /// An append-only persistent Merkle Mountain Range (MMR).
 ///
@@ -58,7 +59,7 @@ where
     Hash: Digest,
 {
     fn default() -> Self {
-        Self::new(32)
+        Self::new(DEFAULT_MMR_DEPTH)
     }
 }
 

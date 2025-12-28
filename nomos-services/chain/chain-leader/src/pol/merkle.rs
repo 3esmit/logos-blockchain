@@ -7,7 +7,10 @@ use nomos_core::{
 };
 use nomos_utils::blake_rng::{Blake2b256, BlakeRng256, BlakeRng256Seed, SeedableRng as _};
 use rand::RngCore as _;
-use rayon::iter::{IntoParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _};
+use rayon::{
+    iter::{IntoParallelRefIterator as _, ParallelIterator as _},
+    prelude::ParallelSlice as _,
+};
 
 use crate::pol::SlotSecret;
 
@@ -129,10 +132,9 @@ fn compute_cached_tree_from_leafs(tree_leafs: &[Fr]) -> Vec<Vec<Fr>> {
         if leafs.len() <= 1 {
             return None;
         }
-        let roots_chunks: Vec<&[Fr]> = leafs.chunks(2).collect();
         Some(
-            roots_chunks
-                .into_par_iter()
+            leafs
+                .par_chunks(2)
                 .map(|pair| <[Fr; 2]>::try_from(pair).unwrap())
                 .map(|pair| <ZkHasher as ZkDigest>::compress(&pair))
                 .collect(),

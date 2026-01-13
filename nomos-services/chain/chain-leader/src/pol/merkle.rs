@@ -160,17 +160,17 @@ pub fn get_merkle_path(
         let sibling_index = current_index ^ 1;
 
         if sibling_index < cached_tree[level_idx].len() {
-            let sibling_value = cached_tree[level_idx][current_index];
+            let value = cached_tree[level_idx][current_index];
             // Orientation is relative to the current node position
             let node = if current_index.is_multiple_of(2) {
-                MerkleNode::Left(sibling_value)
+                MerkleNode::Left(value)
             } else {
-                MerkleNode::Right(sibling_value)
+                MerkleNode::Right(value)
             };
             path.push(node);
         }
 
-        // move to parent index for the next level up
+        // move to index for the next level up
         current_index /= 2;
     }
     path.reverse();

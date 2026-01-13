@@ -33,7 +33,7 @@ pub struct LeaderConfig {
 impl Leader {
     #[cfg_attr(
         feature = "pol-dev-mode",
-        expect(unused, reason = "Variables used in dev mode only"),
+        expect(unused, reason = "Variables used in non-dev mode only"),
         expect(clippy::missing_const_for_fn, reason = "Non const fn in non dev-mode")
     )]
     pub fn new(
@@ -155,7 +155,7 @@ impl Leader {
 
     #[cfg_attr(
         feature = "pol-dev-mode",
-        expect(unused, reason = "Variables ar only used in non-dev mode")
+        expect(unused, reason = "Variables are only used in non-dev mode")
     )]
     fn private_inputs_for_winning_utxo_and_slot(
         &self,

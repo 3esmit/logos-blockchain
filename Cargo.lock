@@ -1805,7 +1805,6 @@ dependencies = [
  "chain-service 0.1.0",
  "cryptarchia-engine 0.1.0",
  "divan",
- "ed25519-dalek",
  "futures",
  "groth16 0.1.0",
  "key-management-system-keys 0.1.0",
@@ -1827,7 +1826,6 @@ dependencies = [
  "tracing-futures",
  "tx-service 0.1.0",
  "zeroize",
- "zksign 0.1.0",
 ]
 
 [[package]]

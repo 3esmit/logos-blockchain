@@ -88,7 +88,7 @@ impl Leader {
             let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
 
             let note_id = utxo.id().0;
-            let secret_key = self.slot_secret_key(slot);
+            let secret_key = self.secret_key();
 
             #[cfg(feature = "pol-dev-mode")]
             let winning = public_inputs.check_winning_dev(
@@ -209,7 +209,7 @@ impl Leader {
         )
     }
 
-    fn slot_secret_key(&self, _slot: Slot) -> UnsecuredZkKey {
+    fn secret_key(&self) -> UnsecuredZkKey {
         self.sk.clone()
     }
 }
@@ -293,7 +293,7 @@ impl<'service> WinningPoLSlotNotifier<'service> {
                 let slot = epoch_starting_slot
                     .checked_add(offset)
                     .expect("Slot calculation overflow.");
-                let secret_key = self.leader.slot_secret_key(slot.into());
+                let secret_key = self.leader.secret_key();
 
                 let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), &latest_tree);
                 if !public_inputs.check_winning(utxo.note.value, note_id, *secret_key.as_fr()) {

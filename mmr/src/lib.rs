@@ -156,11 +156,14 @@ where
 }
 
 fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
-    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; 32]> = OnceLock::new();
-    assert!(height < 32, "Height must be less than 32: {height}");
+    static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; DEFAULT_MMR_DEPTH as usize]> = OnceLock::new();
+    assert!(
+        height < DEFAULT_MMR_DEPTH as usize,
+        "Height must be less than {DEFAULT_MMR_DEPTH}: {height}"
+    );
     PRECOMPUTED_EMPTY_ROOTS.get_or_init(|| {
-        let mut hashes = [EMPTY_VALUE; 32];
-        for i in 1..32 {
+        let mut hashes = [EMPTY_VALUE; DEFAULT_MMR_DEPTH as usize];
+        for i in 1..DEFAULT_MMR_DEPTH as usize {
             hashes[i] = Hash::compress(&[hashes[i - 1], hashes[i - 1]]);
         }
         hashes
@@ -190,9 +193,9 @@ mod test {
 
     // bytes to poseidon field element
     fn b2p(b: &[u8]) -> Fr {
-        let mut repr = [0u8; 32];
-        assert!(b.len() <= 32);
-        let len = b.len().min(32);
+        let mut repr = [0u8; DEFAULT_MMR_DEPTH as usize];
+        assert!(b.len() <= DEFAULT_MMR_DEPTH as usize);
+        let len = b.len().min(DEFAULT_MMR_DEPTH as usize);
         repr[..len].copy_from_slice(&b[..len]);
         Fr::from_le_bytes_mod_order(&repr)
     }
@@ -201,7 +204,7 @@ mod test {
     #[expect(clippy::clone_on_copy, reason = "for the sake of the test")]
     fn test_empty_roots() {
         let mut root = Fr::ZERO;
-        for i in 0..32 {
+        for i in 0..DEFAULT_MMR_DEPTH as usize {
             assert_eq!(root, empty_subtree_root::<ZkHasher>(i));
             root = <ZkHasher as Digest>::compress(&[root.clone(), root]);
         }
@@ -231,7 +234,7 @@ mod test {
     }
 
     #[property_test]
-    fn test_frontier_root_8(elems: Vec<[u8; 32]>) {
+    fn test_frontier_root_8(elems: Vec<[u8; DEFAULT_MMR_DEPTH as usize]>) {
         let mut mmr = <MerkleMountainRange<TestFr, ZkHasher>>::new(8);
         for elem in &elems {
             mmr = mmr.push(elem.as_ref().into());
@@ -241,7 +244,7 @@ mod test {
 
     #[ignore = "very slow"]
     #[property_test]
-    fn test_frontier_root_16(elems: Vec<[u8; 32]>) {
+    fn test_frontier_root_16(elems: Vec<[u8; DEFAULT_MMR_DEPTH as usize]>) {
         let mut mmr = <MerkleMountainRange<TestFr, ZkHasher>>::new(16);
         for elem in &elems {
             mmr = mmr.push(elem.as_ref().into());
@@ -251,15 +254,15 @@ mod test {
 
     #[test]
     fn test_empty_tree() {
-        let mmr = <MerkleMountainRange<TestFr, ZkHasher>>::new(32);
+        let mmr = <MerkleMountainRange<TestFr, ZkHasher>>::new(DEFAULT_MMR_DEPTH);
         assert_eq!(mmr.len(), 0);
         assert!(mmr.is_empty());
     }
 
     #[test]
     fn test_mmr_push() {
-        let mut mmr =
-            <MerkleMountainRange<TestFr, ZkHasher>>::new(32).push(b"hello".as_ref().into());
+        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher>>::new(DEFAULT_MMR_DEPTH)
+            .push(b"hello".as_ref().into());
         assert_eq!(mmr.len(), 1);
         assert_eq!(mmr.roots.size(), 1);
         assert_eq!(mmr.roots.peek().unwrap().height, 1);

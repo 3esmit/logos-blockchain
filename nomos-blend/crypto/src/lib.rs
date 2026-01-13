@@ -1,5 +1,5 @@
 use blake2::{Blake2b512, digest::Digest as _};
-use nomos_utils::blake_rng::{BlakeRng, RngCore as _, SeedableRng as _};
+use nomos_utils::blake_rng::{BlakeRng, BlakeRng512, RngCore as _, SeedableRng as _};
 
 pub mod cipher;
 pub mod keys;
@@ -12,7 +12,7 @@ pub type ZkHasher = poseidon2::Poseidon2Bn254Hasher;
 #[must_use]
 pub fn random_sized_bytes<const SIZE: usize>() -> [u8; SIZE] {
     let mut buf = [0u8; SIZE];
-    <BlakeRng<SIZE> as nomos_utils::blake_rng::RngCore>::fill_bytes(
+    <BlakeRng512 as nomos_utils::blake_rng::RngCore>::fill_bytes(
         &mut BlakeRng::from_entropy(),
         &mut buf,
     );

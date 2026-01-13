@@ -239,9 +239,8 @@ mod tests {
             vec![MerkleNode::Right(l1[1]), MerkleNode::Left(leaves[2])], // 3
             vec![MerkleNode::Right(l1[1]), MerkleNode::Right(leaves[3])],
         ];
-        for i in 0..4 {
+        for (i, expected) in expected_path.iter().enumerate() {
             let path = get_merkle_path(&cached, i, depth);
-            let expected = &expected_path[i];
             assert_eq!(path.len(), expected.len());
             for (a, b) in path.iter().zip(expected) {
                 assert_node_match(a, b);

@@ -84,21 +84,21 @@ where
             height: 1,
         };
         let mut roots = self.roots.clone();
-        let max_height = self.max_height;
 
         while let Some(root) = roots.peek().copied() {
-            // we want the frontier root to have a fixed height, so each individual root
-            // must be less than MAX_HEIGHT
-            assert!(
-                root.height <= self.max_height,
-                "Height must be less than {max_height}"
-            );
             if last_root.height == root.height {
                 roots.pop_mut();
                 last_root = Root {
                     root: Hash::compress(&[root.root, last_root.root]),
                     height: last_root.height + 1,
                 };
+                // we want the frontier root to have a fixed height, so each individual root
+                // must be less than max_height
+                assert!(
+                    last_root.height < self.max_height,
+                    "Height must be less than {}",
+                    self.max_height
+                );
             } else {
                 break;
             }
@@ -108,7 +108,7 @@ where
         Self {
             roots,
             _hash: std::marker::PhantomData,
-            max_height,
+            max_height: self.max_height,
         }
     }
 

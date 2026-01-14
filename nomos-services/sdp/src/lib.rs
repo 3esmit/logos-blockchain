@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt as _};
+use futures::Stream;
 use key_management_system_keys::keys::ZkPublicKey;
 use nomos_core::{
     block::BlockNumber,
@@ -25,15 +25,12 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, oneshot};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::oneshot;
 
 use crate::adapters::{
     mempool::SdpMempoolAdapter,
     wallet::{SdpWalletAdapter as _, mock::MockWalletAdapter},
 };
-
-const BROADCAST_CHANNEL_SIZE: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeclarationState {
@@ -73,11 +70,6 @@ pub struct Declaration {
 }
 
 pub enum SdpMessage {
-    ProcessNewBlock,
-    ProcessLibBlock,
-    Subscribe {
-        result_sender: oneshot::Sender<BlockUpdateStream>,
-    },
     PostDeclaration {
         declaration: Box<DeclarationMessage>,
         reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
@@ -92,7 +84,6 @@ pub enum SdpMessage {
 
 pub struct SdpService<MempoolAdapter, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    finalized_update_tx: broadcast::Sender<BlockEvent>,
     current_declaration: Option<Declaration>,
     nonce: u64,
 }
@@ -129,12 +120,9 @@ where
             .notifier()
             .get_updated_settings();
 
-        let (finalized_update_tx, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
-
         Ok(Self {
             current_declaration: settings.declaration,
             service_resources_handle,
-            finalized_update_tx,
             nonce: 0,
         })
     }
@@ -156,17 +144,6 @@ where
 
         while let Some(msg) = self.service_resources_handle.inbound_relay.recv().await {
             match msg {
-                SdpMessage::ProcessNewBlock | SdpMessage::ProcessLibBlock => {
-                    todo!()
-                }
-                SdpMessage::Subscribe { result_sender } => {
-                    let receiver = self.finalized_update_tx.subscribe();
-                    let stream = make_finalized_stream(receiver);
-
-                    if result_sender.send(stream).is_err() {
-                        tracing::error!("Error sending finalized updates receiver");
-                    }
-                }
                 SdpMessage::PostActivity { metadata, .. } => {
                     self.handle_post_activity(metadata, &wallet_adapter, &mempool_adapter)
                         .await;
@@ -330,18 +307,4 @@ where
 
         Ok(())
     }
-}
-
-fn make_finalized_stream(receiver: broadcast::Receiver<BlockEvent>) -> BlockUpdateStream {
-    Box::pin(BroadcastStream::new(receiver).filter_map(|res| {
-        Box::pin(async move {
-            match res {
-                Ok(update) => Some(update),
-                Err(e) => {
-                    tracing::warn!("Lagging SDP subscriber: {e:?}");
-                    None
-                }
-            }
-        })
-    }))
 }

@@ -1,5 +1,5 @@
 use blake2::Digest as _;
-use chain_leader::pol::merkle::{MerklePolCache, MerklePolSubtree};
+use chain_leader::pol::merkle::{CachedPoLMerkleTree, PolMerkleSubtree};
 use cryptarchia_engine::Slot;
 use divan::{Bencher, black_box};
 use groth16::{Fr, fr_from_bytes};
@@ -18,7 +18,7 @@ fn precompute_slot_secret(bencher: Bencher, (tree_depth, cache_depth): (usize, u
             BlakeRng256Seed::from(seed_bytes)
         })
         .bench_values(|seed| {
-            black_box(MerklePolCache::new(
+            black_box(CachedPoLMerkleTree::new(
                 seed,
                 Slot::new(0),
                 tree_depth,
@@ -34,7 +34,7 @@ fn compute_non_cached_subtree(bencher: Bencher) {
             let seed: Fr = fr_from_bytes(b"1987").unwrap();
             seed
         })
-        .bench_values(|seed| black_box(MerklePolSubtree::new(seed, 5).merkle_path_for_index(0)));
+        .bench_values(|seed| black_box(PolMerkleSubtree::new(seed, 5).merkle_path_for_index(0)));
 }
 
 #[divan::bench(sample_count = 10, sample_size = 10)]
@@ -48,7 +48,7 @@ fn precompute_leaves(bencher: Bencher) {
         })
         .bench_values(|seed| {
             black_box(
-                MerklePolCache::leaves_from_seed(seed)
+                CachedPoLMerkleTree::leaves_from_seed(seed)
                     .take(2usize.pow(20))
                     .collect::<Vec<_>>(),
             )

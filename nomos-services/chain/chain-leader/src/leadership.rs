@@ -13,14 +13,14 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch::Sender;
 
 #[cfg(not(feature = "pol-dev-mode"))]
-use crate::pol::{MAX_TREE_DEPTH, merkle::MerklePolCache};
+use crate::pol::{MAX_TREE_DEPTH, merkle::CachedPoLMerkleTree};
 
 #[derive(Clone)]
 pub struct Leader {
     sk: UnsecuredZkKey,
     config: nomos_ledger::Config,
     #[cfg(not(feature = "pol-dev-mode"))]
-    merkle_pol_cache: MerklePolCache,
+    merkle_pol_cache: CachedPoLMerkleTree,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -51,7 +51,7 @@ impl Leader {
                 .collect::<Vec<_>>()
                 .try_into()
                 .expect("Size should match");
-            MerklePolCache::new(
+            CachedPoLMerkleTree::new(
                 seed.into(),
                 starting_slot,
                 MAX_TREE_DEPTH as usize,
@@ -184,7 +184,7 @@ impl Leader {
         let slot_secret: Fr = {
             #[cfg(not(feature = "pol-dev-mode"))]
             {
-                *self.merkle_pol_cache.root_slot_secret().as_ref()
+                self.merkle_pol_cache.slot_secret_for_slot(slot)
             }
             #[cfg(feature = "pol-dev-mode")]
             {

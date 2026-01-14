@@ -160,12 +160,12 @@ pub fn get_merkle_path(
         let sibling_index = current_index ^ 1;
 
         if sibling_index < cached_tree[level_idx].len() {
-            let value = cached_tree[level_idx][current_index];
+            let sibling_value = cached_tree[level_idx][sibling_index];
             // Orientation is relative to the current node position
-            let node = if current_index.is_multiple_of(2) {
-                MerkleNode::Left(value)
+            let node = if sibling_index.is_multiple_of(2) {
+                MerkleNode::Left(sibling_value)
             } else {
-                MerkleNode::Right(value)
+                MerkleNode::Right(sibling_value)
             };
             path.push(node);
         }
@@ -234,10 +234,10 @@ mod tests {
         let l1 = &cached[1];
         let leaves = &cached[2];
         let expected_path = [
-            vec![MerkleNode::Left(l1[0]), MerkleNode::Left(leaves[0])], // 1
-            vec![MerkleNode::Left(l1[0]), MerkleNode::Right(leaves[1])], // 2
-            vec![MerkleNode::Right(l1[1]), MerkleNode::Left(leaves[2])], // 3
-            vec![MerkleNode::Right(l1[1]), MerkleNode::Right(leaves[3])],
+            vec![MerkleNode::Right(l1[1]), MerkleNode::Right(leaves[1])], // 1
+            vec![MerkleNode::Right(l1[1]), MerkleNode::Left(leaves[0])],  // 2
+            vec![MerkleNode::Left(l1[0]), MerkleNode::Right(leaves[3])],  // 3
+            vec![MerkleNode::Left(l1[0]), MerkleNode::Left(leaves[2])],
         ];
         for (i, expected) in expected_path.iter().enumerate() {
             let path = get_merkle_path(&cached, i, depth);

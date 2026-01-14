@@ -187,12 +187,12 @@ mod test {
 
     impl From<&[u8]> for TestFr {
         fn from(value: &[u8]) -> Self {
-            Self(b2p(value))
+            Self(bytes_to_poseidon(value))
         }
     }
 
     // bytes to poseidon field element
-    fn b2p(b: &[u8]) -> Fr {
+    fn bytes_to_poseidon(b: &[u8]) -> Fr {
         let mut repr = [0u8; DEFAULT_MMR_DEPTH as usize];
         assert!(b.len() <= DEFAULT_MMR_DEPTH as usize);
         let len = b.len().min(DEFAULT_MMR_DEPTH as usize);
@@ -213,7 +213,7 @@ mod test {
     fn padded_leaves(elements: impl IntoIterator<Item = impl AsRef<[u8]>>, height: u8) -> Vec<Fr> {
         let mut leaves = elements
             .into_iter()
-            .map(|e| b2p(e.as_ref()))
+            .map(|e| bytes_to_poseidon(e.as_ref()))
             .collect::<Vec<_>>();
         let pad = (1 << height as usize) - leaves.len();
         leaves.extend(std::iter::repeat_n(EMPTY_VALUE, pad));
@@ -266,7 +266,7 @@ mod test {
         assert_eq!(mmr.len(), 1);
         assert_eq!(mmr.roots.size(), 1);
         assert_eq!(mmr.roots.peek().unwrap().height, 1);
-        assert_eq!(mmr.roots.peek().unwrap().root, b2p(b"hello"));
+        assert_eq!(mmr.roots.peek().unwrap().root, bytes_to_poseidon(b"hello"));
 
         mmr = mmr.push(b"world".as_ref().into());
         assert_eq!(mmr.len(), 2);
@@ -274,7 +274,10 @@ mod test {
         assert_eq!(mmr.roots.peek().unwrap().height, 2);
         assert_eq!(
             mmr.roots.peek().unwrap().root,
-            <ZkHasher as Digest>::compress(&[b2p(b"hello"), b2p(b"world")])
+            <ZkHasher as Digest>::compress(&[
+                bytes_to_poseidon(b"hello"),
+                bytes_to_poseidon(b"world")
+            ])
         );
 
         mmr = mmr.push(b"!".as_ref().into());
@@ -284,10 +287,13 @@ mod test {
         assert_eq!(top_root.height, 2);
         assert_eq!(
             top_root.root,
-            <ZkHasher as Digest>::compress(&[b2p(b"hello"), b2p(b"world")])
+            <ZkHasher as Digest>::compress(&[
+                bytes_to_poseidon(b"hello"),
+                bytes_to_poseidon(b"world")
+            ])
         );
         assert_eq!(mmr.roots.peek().unwrap().height, 1);
-        assert_eq!(mmr.roots.peek().unwrap().root, b2p(b"!"));
+        assert_eq!(mmr.roots.peek().unwrap().root, bytes_to_poseidon(b"!"));
 
         mmr = mmr.push(b"!".as_ref().into());
         assert_eq!(mmr.len(), 4);
@@ -296,8 +302,11 @@ mod test {
         assert_eq!(
             mmr.roots.peek().unwrap().root,
             <ZkHasher as Digest>::compress(&[
-                <ZkHasher as Digest>::compress(&[b2p(b"hello"), b2p(b"world")]),
-                <ZkHasher as Digest>::compress(&[b2p(b"!"), b2p(b"!")])
+                <ZkHasher as Digest>::compress(&[
+                    bytes_to_poseidon(b"hello"),
+                    bytes_to_poseidon(b"world")
+                ]),
+                <ZkHasher as Digest>::compress(&[bytes_to_poseidon(b"!"), bytes_to_poseidon(b"!")])
             ])
         );
     }

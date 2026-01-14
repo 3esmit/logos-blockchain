@@ -169,7 +169,8 @@ impl Leader {
     ) -> LeaderPrivate {
         // TODO: Get the actual witness paths and leader key
         let aged_path = Vec::new(); // Placeholder for aged path, aged UTXO tree is included in `EpochState`.
-        let latest_path: MerklePath<Fr> = {
+        let latest_path = Vec::new(); // Placeholder for latest path.
+        let slot_secret_path: MerklePath<Fr> = {
             // TODO: use proper u64 instead
             #[cfg(not(feature = "pol-dev-mode"))]
             {
@@ -204,6 +205,7 @@ impl Leader {
             &aged_path,
             &latest_path,
             slot_secret,
+            &slot_secret_path,
             starting_slot,
             &leader_pk,
         )

@@ -242,6 +242,7 @@ mod tests {
 
         let aged_path = vec![MerkleNode::Right(Fr::from(0u8))];
         let latest_path = vec![MerkleNode::Left(Fr::from(0u8))];
+        let slot_secret_path = vec![];
 
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let verifying_key = signing_key.public_key();
@@ -252,6 +253,7 @@ mod tests {
             &aged_path,
             &latest_path,
             Fr::from(6),
+            &slot_secret_path,
             0,
             &verifying_key,
         );

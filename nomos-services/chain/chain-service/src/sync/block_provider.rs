@@ -962,6 +962,7 @@ mod tests {
 
             let aged_path = vec![MerkleNode::Right(Fr::from(0u8))];
             let latest_path = vec![MerkleNode::Left(Fr::from(0u8))];
+            let slot_secret_path = vec![];
 
             let private_inputs = LeaderPrivate::new(
                 public_inputs,
@@ -969,7 +970,8 @@ mod tests {
                 &aged_path,
                 &latest_path,
                 Fr::from(6), // slot secret
-                0,           // starting slot
+                &slot_secret_path,
+                0, // starting slot
                 &Ed25519Key::from_bytes(&[1u8; 32]).public_key(),
             );
 

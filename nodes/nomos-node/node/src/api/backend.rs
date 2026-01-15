@@ -64,10 +64,8 @@ use {
 };
 
 use super::handlers::{
-    add_share, add_tx, balancer_stats, blacklisted_peers, block, block_peer, cryptarchia_headers,
-    cryptarchia_info, cryptarchia_lib_stream, da_get_commitments, da_get_light_share,
-    da_get_shares, da_get_storage_commitments, libp2p_info, mantle_metrics, mantle_status,
-    monitor_stats, unblock_peer, wallet,
+    add_tx, block, cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, libp2p_info,
+    mantle_metrics, mantle_status, wallet,
 };
 use crate::{
     WalletService,
@@ -390,61 +388,6 @@ where
                 routing::get(cryptarchia_lib_stream::<RuntimeServiceId>),
             )
             .route(
-                paths::DA_ADD_SHARE,
-                routing::post(
-                    add_share::<
-                        DaShare,
-                        DaVerifierNetwork,
-                        DaVerifierBackend,
-                        DaStorageConverter,
-                        VerifierMempoolAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_BLOCK_PEER,
-                routing::post(
-                    block_peer::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_UNBLOCK_PEER,
-                routing::post(
-                    unblock_peer::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_BLACKLISTED_PEERS,
-                routing::get(
-                    blacklisted_peers::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
                 paths::NETWORK_INFO,
                 routing::get(libp2p_info::<RuntimeServiceId>),
             )
@@ -455,75 +398,6 @@ where
             .route(
                 paths::MEMPOOL_ADD_TX,
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
-            )
-            .route(
-                paths::DA_GET_SHARES_COMMITMENTS,
-                routing::post(
-                    da_get_commitments::<
-                        BlobId,
-                        SamplingBackend,
-                        SamplingNetworkAdapter,
-                        SamplingStorage,
-                        SamplingMempoolAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_GET_STORAGE_SHARES_COMMITMENTS,
-                routing::get(
-                    da_get_storage_commitments::<
-                        DaStorageConverter,
-                        StorageAdapter,
-                        DaShare,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_GET_LIGHT_SHARE,
-                routing::get(
-                    da_get_light_share::<
-                        DaStorageConverter,
-                        StorageAdapter,
-                        DaShare,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_GET_SHARES,
-                routing::get(
-                    da_get_shares::<DaStorageConverter, StorageAdapter, DaShare, RuntimeServiceId>,
-                ),
-            )
-            .route(
-                paths::DA_BALANCER_STATS,
-                routing::get(
-                    balancer_stats::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::DA_MONITOR_STATS,
-                routing::get(
-                    monitor_stats::<
-                        DaNetworkValidatorBackend<Membership>,
-                        Membership,
-                        DaMembershipAdapter,
-                        DaMembershipStorage,
-                        ApiAdapter,
-                        SdpAdapter,
-                        RuntimeServiceId,
-                    >,
-                ),
             )
             .route(
                 paths::SDP_POST_DECLARATION,

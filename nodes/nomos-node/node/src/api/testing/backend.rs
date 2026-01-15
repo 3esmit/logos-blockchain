@@ -6,22 +6,12 @@ use axum::{
         HeaderValue,
         header::{CONTENT_TYPE, USER_AGENT},
     },
-    routing::{get, post},
+    routing::get,
 };
-use kzgrs_backend::common::share::DaShare;
 use nomos_api::Backend;
 use nomos_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
-use nomos_da_sampling::{
-    backend::kzgrs::KzgrsSamplingBackend,
-    network::adapters::validator::Libp2pAdapter as SamplingLibp2pAdapter,
-    storage::adapters::rocksdb::{
-        RocksAdapter as SamplingStorageAdapter, converter::DaStorageConverter,
-    },
-};
-use nomos_http_api_common::{
-    paths::{DA_GET_MEMBERSHIP, DA_HISTORIC_SAMPLING, MANTLE_SDP_DECLARATIONS},
-    utils::create_rate_limit_layer,
-};
+use nomos_da_sampling::network::adapters::validator::Libp2pAdapter as SamplingLibp2pAdapter;
+use nomos_http_api_common::{paths::MANTLE_SDP_DECLARATIONS, utils::create_rate_limit_layer};
 pub use nomos_network::backends::libp2p::Libp2p as NetworkBackend;
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
@@ -35,13 +25,8 @@ use tower_http::{
 
 use crate::{
     DaMembershipStorage, DaNetworkApiAdapter, NomosDaMembership,
-    api::{
-        backend::AxumBackendSettings,
-        testing::handlers::{da_get_membership, da_historic_sampling, get_sdp_declarations},
-    },
-    generic_services::{
-        self, DaMembershipAdapter, SamplingMempoolAdapter, SdpService, SdpServiceAdapterGeneric,
-    },
+    api::{backend::AxumBackendSettings, testing::handlers::get_sdp_declarations},
+    generic_services::{self, DaMembershipAdapter, SdpService, SdpServiceAdapterGeneric},
 };
 pub struct TestAxumBackend {
     settings: AxumBackendSettings,
@@ -123,41 +108,7 @@ where
             );
         }
 
-        // Simple router with ONLY testing endpoints
         let app = Router::new()
-            .route(
-                DA_GET_MEMBERSHIP,
-                post(
-                    da_get_membership::<
-                        DaNetworkValidatorBackend<NomosDaMembership>,
-                        NomosDaMembership,
-                        DaMembershipAdapter<RuntimeServiceId>,
-                        DaMembershipStorage,
-                        DaNetworkApiAdapter,
-                        SdpServiceAdapterGeneric<RuntimeServiceId>,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                DA_HISTORIC_SAMPLING,
-                post(
-                    da_historic_sampling::<
-                        KzgrsSamplingBackend,
-                        nomos_da_sampling::network::adapters::validator::Libp2pAdapter<
-                            NomosDaMembership,
-                            DaMembershipAdapter<RuntimeServiceId>,
-                            DaMembershipStorage,
-                            DaNetworkApiAdapter,
-                            SdpServiceAdapterGeneric<RuntimeServiceId>,
-                            RuntimeServiceId,
-                        >,
-                        SamplingStorageAdapter<DaShare, DaStorageConverter>,
-                        SamplingMempoolAdapter<RuntimeServiceId>,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
             .route(
                 MANTLE_SDP_DECLARATIONS,
                 get(get_sdp_declarations::<RuntimeServiceId>),

@@ -12,7 +12,7 @@
    sudo apt install zram-tools
    sudo swapoff /dev/zram0
    sudo zramctl --reset /dev/zram0
-   sudo zramctl --find --size 8G --algorithm lzo-rle
+   sudo zramctl --find --size 16G --algorithm lzo-rle
    sudo mkswap /dev/zram0
    sudo swapon /dev/zram0
    ```

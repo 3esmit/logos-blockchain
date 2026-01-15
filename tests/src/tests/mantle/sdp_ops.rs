@@ -28,6 +28,7 @@ use tokio::time::{sleep, timeout};
 ///   disappears.
 #[tokio::test]
 #[serial]
+#[ignore = "DA disabled"]
 async fn sdp_ops_e2e() {
     let note_sk = ZkKey::from(BigUint::from(42u64));
     let spare_note = Note::new(1, note_sk.to_public_key());

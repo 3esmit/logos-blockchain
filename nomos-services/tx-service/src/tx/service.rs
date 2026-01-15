@@ -5,6 +5,7 @@ pub mod openapi {
 }
 
 use std::{
+    any::Any,
     collections::BTreeSet,
     fmt::{Debug, Display},
     marker::PhantomData,
@@ -13,7 +14,7 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use nomos_core::mantle::Transaction;
+use nomos_core::mantle::{SignedMantleTx, Transaction};
 use nomos_network::{NetworkService, message::BackendNetworkMsg};
 use nomos_storage::StorageService;
 use overwatch::{
@@ -31,7 +32,7 @@ use tokio::sync::{broadcast, oneshot};
 
 use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
-    backend::{MemPool as MemPoolTrait, MempoolError, RecoverableMempool},
+    backend::{MemPool as MemPoolTrait, MempoolError, RecoverableMempool, has_da_ops},
     network::NetworkAdapter as NetworkAdapterTrait,
     storage::MempoolStorageAdapter,
     tx::{settings::TxMempoolSettings, state::TxMempoolState},
@@ -390,7 +391,17 @@ where
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
+        Pool::Item: Any,
     {
+        // Reject DA-related transactions (DA is disabled)
+        if Self::should_reject_da(&item) {
+            Self::handle_add_error(
+                MempoolError::Rejected("DA operations are not supported".into()),
+                reply_channel,
+            );
+            return;
+        }
+
         let item_for_broadcast = item.clone();
 
         match pool.add_item(key, item).await {
@@ -517,6 +528,18 @@ where
         }
     }
 
+    /// Returns true if the item should be rejected due to containing DA-related
+    /// operations. Uses downcast to check for `SignedMantleTx`. DA is
+    /// disabled in this version.
+    fn should_reject_da(item: &Pool::Item) -> bool
+    where
+        Pool::Item: Any,
+    {
+        (item as &dyn Any)
+            .downcast_ref::<SignedMantleTx>()
+            .is_some_and(has_da_ops)
+    }
+
     async fn handle_network_item(
         pool: &mut Pool,
         key: Pool::Key,
@@ -526,7 +549,14 @@ where
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
+        Pool::Item: Any,
     {
+        // Reject DA-related transactions (DA is disabled)
+        if Self::should_reject_da(&item) {
+            tracing::debug!("Rejected network transaction with DA operations");
+            return;
+        }
+
         if let Err(e) = pool.add_item(key, item.clone()).await {
             tracing::debug!("could not add item to the pool due to: {e}");
             return;

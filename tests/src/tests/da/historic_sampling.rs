@@ -8,6 +8,7 @@ use tests::{
 use tokio::time::Duration;
 
 #[tokio::test]
+#[ignore = "DA disabled"]
 async fn test_historical_sampling_across_sessions() {
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
     let executor = &topology.executors()[0];

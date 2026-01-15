@@ -50,7 +50,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use subnetworks_assignations::MembershipHandler;
 use tracing::error;
 use tx_service::{
-    TxMempoolService, backend::Mempool,
+    TxMempoolService,
+    backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 #[cfg(feature = "block-explorer")]

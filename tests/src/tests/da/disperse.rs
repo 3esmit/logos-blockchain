@@ -16,7 +16,7 @@ use tests::{
 };
 use tokio::time::interval;
 
-#[ignore = "for manual usage, disseminate_retrieve_reconstruct is preferred for ci"]
+#[ignore = "DA disabled"]
 #[tokio::test]
 #[serial]
 async fn disseminate_and_retrieve() {
@@ -59,6 +59,7 @@ async fn disseminate_and_retrieve() {
 
 #[tokio::test]
 #[serial]
+#[ignore = "DA disabled"]
 async fn disseminate_retrieve_reconstruct() {
     const ITERATIONS: usize = 10;
 
@@ -114,6 +115,7 @@ async fn disseminate_retrieve_reconstruct() {
 
 #[tokio::test]
 #[serial]
+#[ignore = "DA disabled"]
 async fn disseminate_from_non_membership() {
     const ITERATIONS: usize = 10;
 
@@ -199,7 +201,7 @@ async fn disseminate_from_non_membership() {
     }
 }
 
-#[ignore = "Reenable when tools to inspect mempool are added"]
+#[ignore = "DA disabled"]
 #[tokio::test]
 #[serial]
 async fn four_subnets_disseminate_retrieve_reconstruct() {
@@ -289,6 +291,7 @@ async fn four_subnets_disseminate_retrieve_reconstruct() {
 
 #[tokio::test]
 #[serial]
+#[ignore = "DA disabled"]
 async fn disseminate_same_data() {
     const ITERATIONS: usize = 10;
 

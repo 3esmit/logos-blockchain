@@ -3,6 +3,10 @@ pub mod pool;
 use std::pin::Pin;
 
 use futures::Stream;
+use nomos_core::{
+    mantle::{Op, SignedMantleTx},
+    sdp::{ActivityMetadata, ServiceType},
+};
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +16,21 @@ pub enum MempoolError {
     ExistingItem,
     #[error("Storage operation failed: {0}")]
     StorageError(String),
+    #[error("Transaction rejected: {0}")]
+    Rejected(String),
     #[error(transparent)]
     DynamicPoolError(#[from] overwatch::DynError),
+}
+
+/// Returns true if the transaction contains DA-related operations.
+#[must_use]
+pub fn has_da_ops(tx: &SignedMantleTx) -> bool {
+    tx.mantle_tx.ops.iter().any(|op| match op {
+        Op::ChannelBlob(_) => true,
+        Op::SDPDeclare(decl) => decl.service_type == ServiceType::DataAvailability,
+        Op::SDPActive(active) => matches!(active.metadata, ActivityMetadata::DataAvailability(_)),
+        _ => false,
+    })
 }
 
 #[async_trait::async_trait]

@@ -113,6 +113,7 @@ mod test {
     static DOMAIN: LazyLock<GeneralEvaluationDomain<Fr>> =
         LazyLock::new(|| GeneralEvaluationDomain::new(COEFFICIENTS_SIZE).unwrap());
     #[test]
+    #[ignore = "DA disabled"]
     fn test_poly_commit() {
         let poly = DensePolynomial::from_coefficients_vec((0..10).map(Fr::from).collect());
         assert!(commit_polynomial(&poly, &PROVING_KEY).is_ok());

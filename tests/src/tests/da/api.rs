@@ -20,6 +20,7 @@ use tests::{
 
 #[tokio::test]
 #[serial]
+#[ignore = "DA disabled"]
 async fn test_get_share_data() {
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
 
@@ -52,7 +53,7 @@ async fn test_get_share_data() {
 
 #[tokio::test]
 #[serial]
-#[ignore = "Reenable after transaction mempool is used"]
+#[ignore = "DA disabled"]
 async fn test_get_commitments_from_peers() {
     let interconnected_topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
     let executor = &interconnected_topology.executors()[0];
@@ -151,6 +152,7 @@ async fn test_block_peer() {
 
 #[tokio::test]
 #[serial]
+#[ignore = "DA disabled"]
 async fn test_get_shares() {
     let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
     topology.wait_membership_ready().await;

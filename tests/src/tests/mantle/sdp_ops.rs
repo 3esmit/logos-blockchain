@@ -28,12 +28,12 @@ use tokio::time::{sleep, timeout};
 ///   disappears.
 #[tokio::test]
 #[serial]
-#[ignore = "DA disabled"]
+#[ignore = "TODO: DA is not supported anymore, rewrite with Blend transaction"]
 async fn sdp_ops_e2e() {
     let note_sk = ZkKey::from(BigUint::from(42u64));
     let spare_note = Note::new(1, note_sk.to_public_key());
     let topology_config =
-        TopologyConfig::validator_and_executor().with_extra_genesis_note(GenesisNoteSpec {
+        TopologyConfig::two_validators().with_extra_genesis_note(GenesisNoteSpec {
             note: spare_note,
             note_sk: note_sk.clone(),
         });

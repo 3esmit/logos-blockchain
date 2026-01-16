@@ -8,7 +8,7 @@ use tests::topology::{Topology, TopologyConfig};
 #[tokio::test]
 #[serial]
 async fn test_post_mantle_tx() {
-    let topology = Topology::spawn(TopologyConfig::validator_and_executor()).await;
+    let topology = Topology::spawn(TopologyConfig::two_validators()).await;
     let validator = &topology.validators()[0];
 
     let validator_url = Url::parse(

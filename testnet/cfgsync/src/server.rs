@@ -8,10 +8,7 @@ use nomos_tracing_service::TracingSettings;
 use nomos_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use tests::{
-    nodes::{executor::create_executor_config, validator::create_validator_config},
-    topology::configs::da::DaParams,
-};
+use tests::{nodes::validator::create_validator_config, topology::configs::da::DaParams};
 use tokio::sync::oneshot::channel;
 
 use crate::{
@@ -122,30 +119,8 @@ async fn validator_config(
     )
 }
 
-async fn executor_config(
-    State(config_repo): State<Arc<ConfigRepo>>,
-    Json(payload): Json<ClientIp>,
-) -> impl IntoResponse {
-    let ClientIp { ip, identifier } = payload;
-
-    let (reply_tx, reply_rx) = channel();
-    config_repo.register(Host::default_executor_from_ip(ip, identifier), reply_tx);
-
-    (reply_rx.await).map_or_else(
-        |_| (StatusCode::INTERNAL_SERVER_ERROR, "Error receiving config").into_response(),
-        |config_response| match config_response {
-            RepoResponse::Config(config) => {
-                let config = create_executor_config(*config);
-                (StatusCode::OK, Json(config)).into_response()
-            }
-            RepoResponse::Timeout => (StatusCode::REQUEST_TIMEOUT).into_response(),
-        },
-    )
-}
-
 pub fn cfgsync_app(config_repo: Arc<ConfigRepo>) -> Router {
     Router::new()
         .route("/validator", post(validator_config))
-        .route("/executor", post(executor_config))
         .with_state(config_repo)
 }

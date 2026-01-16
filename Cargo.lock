@@ -1776,7 +1776,6 @@ dependencies = [
  "clap",
  "nomos-core 0.1.0",
  "nomos-da-network-core 0.1.0",
- "nomos-executor 0.1.0",
  "nomos-libp2p 0.1.0",
  "nomos-node 0.1.0",
  "nomos-tracing-service 0.1.0",
@@ -1806,7 +1805,7 @@ dependencies = [
  "key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-da-network-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
- "nomos-executor 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
+ "nomos-executor",
  "nomos-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-tracing-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -3620,18 +3619,6 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener 5.4.1",
  "pin-project-lite",
-]
-
-[[package]]
-name = "executor-http-client"
-version = "0.1.0"
-dependencies = [
- "common-http-client 0.1.0",
- "futures",
- "nomos-core 0.1.0",
- "nomos-http-api-common 0.1.0",
- "reqwest 0.12.28",
- "serde",
 ]
 
 [[package]]
@@ -7063,7 +7050,6 @@ name = "nomos-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "executor-http-client 0.1.0",
  "hex",
  "kzgrs-backend 0.1.0",
  "nomos-core 0.1.0",
@@ -7452,44 +7438,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tx-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
-]
-
-[[package]]
-name = "nomos-executor"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum 0.7.9",
- "broadcast-service 0.1.0",
- "clap",
- "color-eyre",
- "futures",
- "kzgrs-backend 0.1.0",
- "nomos-api 0.1.0",
- "nomos-core 0.1.0",
- "nomos-da-dispersal 0.1.0",
- "nomos-da-network-core 0.1.0",
- "nomos-da-network-service 0.1.0",
- "nomos-da-sampling 0.1.0",
- "nomos-da-verifier 0.1.0",
- "nomos-http-api-common 0.1.0",
- "nomos-libp2p 0.1.0",
- "nomos-network 0.1.0",
- "nomos-node 0.1.0",
- "nomos-sdp 0.1.0",
- "nomos-storage 0.1.0",
- "nomos-time 0.1.0",
- "overwatch",
- "serde",
- "services-utils 0.1.0",
- "subnetworks-assignations 0.1.0",
- "tokio",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tx-service 0.1.0",
- "utoipa",
- "utoipa-swagger-ui",
 ]
 
 [[package]]
@@ -11846,7 +11794,7 @@ dependencies = [
  "nomos-da-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-da-sampling 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-da-verifier 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
- "nomos-executor 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
+ "nomos-executor",
  "nomos-ledger 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-node 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -11882,7 +11830,7 @@ dependencies = [
  "nomos-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-da-network-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-da-network-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
- "nomos-executor 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
+ "nomos-executor",
  "nomos-http-api-common 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-libp2p 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-network 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -11951,7 +11899,7 @@ source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?b
 dependencies = [
  "async-trait",
  "chain-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
- "executor-http-client 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
+ "executor-http-client",
  "futures",
  "key-management-system-service 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
  "nomos-core 0.1.0 (git+https://github.com/logos-co/nomos-node.git?rev=1fce2dc3f482c16361316eb2a1b6ccd1206aa917)",
@@ -11979,7 +11927,6 @@ dependencies = [
  "cryptarchia-sync 0.1.0",
  "cucumber",
  "cucumber_ext",
- "executor-http-client 0.1.0",
  "futures",
  "futures-util",
  "groth16 0.1.0",
@@ -11987,6 +11934,7 @@ dependencies = [
  "key-management-system-service 0.1.0",
  "kzgrs-backend 0.1.0",
  "nomos-api 0.1.0",
+ "nomos-blend-proofs 0.1.0",
  "nomos-blend-service 0.1.0",
  "nomos-core 0.1.0",
  "nomos-da-dispersal 0.1.0",
@@ -11994,7 +11942,6 @@ dependencies = [
  "nomos-da-network-service 0.1.0",
  "nomos-da-sampling 0.1.0",
  "nomos-da-verifier 0.1.0",
- "nomos-executor 0.1.0",
  "nomos-http-api-common 0.1.0",
  "nomos-libp2p 0.1.0",
  "nomos-network 0.1.0",

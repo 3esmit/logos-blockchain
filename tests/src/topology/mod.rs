@@ -21,7 +21,7 @@ use nomos_core::{
     mantle::{GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType, SessionNumber},
 };
-use nomos_da_network_core::swarm::{BalancerStats, DAConnectionPolicySettings};
+use nomos_da_network_core::swarm::BalancerStats;
 use nomos_da_network_service::MembershipResponse;
 use nomos_network::backends::libp2p::Libp2pInfo;
 use nomos_utils::net::get_available_udp_port;
@@ -31,10 +31,7 @@ use tokio::time::{sleep, timeout};
 use crate::{
     adjust_timeout,
     common::kms::key_id_for_preload_backend,
-    nodes::{
-        executor::{Executor, create_executor_config},
-        validator::{Validator, create_validator_config},
-    },
+    nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         api::create_api_configs,
         blend::{GeneralBlendConfig, create_blend_configs},
@@ -47,7 +44,6 @@ use crate::{
 
 pub struct TopologyConfig {
     pub n_validators: usize,
-    pub n_executors: usize,
     pub da_params: DaParams,
     pub network_params: NetworkParams,
     pub extra_genesis_notes: Vec<GenesisNoteSpec>,
@@ -58,7 +54,6 @@ impl TopologyConfig {
     pub fn one_validator() -> Self {
         Self {
             n_validators: 1,
-            n_executors: 0,
             da_params: DaParams::default(),
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
@@ -69,62 +64,7 @@ impl TopologyConfig {
     pub fn two_validators() -> Self {
         Self {
             n_validators: 2,
-            n_executors: 0,
             da_params: DaParams::default(),
-            network_params: NetworkParams::default(),
-            extra_genesis_notes: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn validator_and_executor() -> Self {
-        Self {
-            n_validators: 1,
-            n_executors: 1,
-            da_params: DaParams {
-                dispersal_factor: 2,
-                subnetwork_size: 2,
-                num_subnets: 2,
-                policy_settings: DAConnectionPolicySettings {
-                    min_dispersal_peers: 1,
-                    min_replication_peers: 1,
-                    max_dispersal_failures: 0,
-                    max_sampling_failures: 0,
-                    max_replication_failures: 0,
-                    malicious_threshold: 0,
-                },
-                balancer_interval: Duration::from_secs(1),
-                ..Default::default()
-            },
-            network_params: NetworkParams::default(),
-            extra_genesis_notes: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn validators_and_executor(
-        num_validators: usize,
-        num_subnets: usize,
-        dispersal_factor: usize,
-    ) -> Self {
-        Self {
-            n_validators: num_validators,
-            n_executors: 1,
-            da_params: DaParams {
-                dispersal_factor,
-                subnetwork_size: num_subnets,
-                num_subnets: num_subnets as u16,
-                policy_settings: DAConnectionPolicySettings {
-                    min_dispersal_peers: num_subnets,
-                    min_replication_peers: dispersal_factor - 1,
-                    max_dispersal_failures: 0,
-                    max_sampling_failures: 0,
-                    max_replication_failures: 0,
-                    malicious_threshold: 0,
-                },
-                balancer_interval: Duration::from_secs(5),
-                ..Default::default()
-            },
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
         }
@@ -150,7 +90,6 @@ pub struct InjectedGenesisNote {
 
 pub struct Topology {
     validators: Vec<Validator>,
-    executors: Vec<Executor>,
     general_configs: Vec<GeneralConfig>,
     injected_genesis_notes: Vec<InjectedGenesisNote>,
 }
@@ -159,7 +98,7 @@ impl Topology {
     pub async fn spawn(config: TopologyConfig) -> Self {
         verify_pol_proof_dev_mode();
 
-        let n_participants = config.n_validators + config.n_executors;
+        let n_participants = config.n_validators;
 
         // we use the same random bytes for:
         // * da id
@@ -257,13 +196,10 @@ impl Topology {
 
         let general_configs = node_configs.clone();
 
-        let (validators, executors) =
-            Self::spawn_validators_executors(node_configs, config.n_validators, config.n_executors)
-                .await;
+        let validators = Self::spawn_validators(node_configs).await;
 
         Self {
             validators,
-            executors,
             general_configs,
             injected_genesis_notes: injected_infos,
         }
@@ -275,7 +211,7 @@ impl Topology {
         da_ports: &[u16],
         blend_ports: &[u16],
     ) -> Self {
-        let n_participants = config.n_validators + config.n_executors;
+        let n_participants = config.n_validators;
 
         let consensus_configs = create_consensus_configs(ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
         let da_configs = create_da_configs(ids, &config.da_params, da_ports);
@@ -305,46 +241,27 @@ impl Topology {
             });
         }
         let general_configs = node_configs.clone();
-        let (validators, executors) =
-            Self::spawn_validators_executors(node_configs, config.n_validators, config.n_executors)
-                .await;
+        let validators = Self::spawn_validators(node_configs).await;
 
         Self {
             validators,
-            executors,
             general_configs,
             injected_genesis_notes: Vec::new(),
         }
     }
 
-    async fn spawn_validators_executors(
-        config: Vec<GeneralConfig>,
-        n_validators: usize,
-        n_executors: usize,
-    ) -> (Vec<Validator>, Vec<Executor>) {
+    async fn spawn_validators(config: Vec<GeneralConfig>) -> Vec<Validator> {
         let mut validators = Vec::new();
-        for i in 0..n_validators {
-            let config = create_validator_config(config[i].clone());
+        for cfg in config {
+            let config = create_validator_config(cfg);
             validators.push(Validator::spawn(config).await.unwrap());
         }
-
-        let mut executors = Vec::new();
-        for i in n_validators..(n_validators + n_executors) {
-            let config = create_executor_config(config[i].clone());
-            executors.push(Executor::spawn(config).await);
-        }
-
-        (validators, executors)
+        validators
     }
 
     #[must_use]
     pub fn validators(&self) -> &[Validator] {
         &self.validators
-    }
-
-    #[must_use]
-    pub fn executors(&self) -> &[Executor] {
-        &self.executors
     }
 
     #[must_use]
@@ -386,17 +303,15 @@ impl Topology {
     }
 
     pub async fn wait_da_network_ready(&self) {
-        let total_nodes = self.validators.len() + self.executors.len();
+        let total_nodes = self.validators.len();
 
         if total_nodes == 0 {
             return;
         }
 
-        // Get num_subnets from first executor's config (all nodes have same num_subnets
+        // Get num_subnets from first validator's config (all nodes have same num_subnets
         // in tests)
-        let expected_subnets = if let Some(executor) = self.executors.first() {
-            executor.config().da_network.backend.num_subnets as usize
-        } else if let Some(validator) = self.validators.first() {
+        let expected_subnets = if let Some(validator) = self.validators.first() {
             validator
                 .config()
                 .da_network
@@ -432,7 +347,7 @@ impl Topology {
     }
 
     async fn wait_membership_assignations(&self, session: SessionNumber, expect_non_empty: bool) {
-        let total_nodes = self.validators.len() + self.executors.len();
+        let total_nodes = self.validators.len();
 
         if total_nodes == 0 {
             return;
@@ -454,11 +369,6 @@ impl Topology {
         self.validators
             .iter()
             .map(|node| node.config().network.backend.swarm.port)
-            .chain(
-                self.executors
-                    .iter()
-                    .map(|node| node.config().network.backend.swarm.port),
-            )
             .collect()
     }
 
@@ -474,15 +384,6 @@ impl Topology {
                     .filter_map(multiaddr_port)
                     .collect::<HashSet<u16>>()
             })
-            .chain(self.executors.iter().map(|node| {
-                node.config()
-                    .network
-                    .backend
-                    .initial_peers
-                    .iter()
-                    .filter_map(multiaddr_port)
-                    .collect::<HashSet<u16>>()
-            }))
             .collect()
     }
 
@@ -496,12 +397,6 @@ impl Topology {
                     node.config().network.backend.swarm.port
                 )
             })
-            .chain(self.executors.iter().enumerate().map(|(idx, node)| {
-                format!(
-                    "executor#{idx}@{}",
-                    node.config().network.backend.swarm.port
-                )
-            }))
             .collect()
     }
 }
@@ -555,12 +450,13 @@ impl<'a> ReadinessCheck<'a> for NetworkReadiness<'a> {
     type Data = Vec<Libp2pInfo>;
 
     async fn collect(&'a self) -> Self::Data {
-        let (validator_infos, executor_infos) = tokio::join!(
-            join_all(self.topology.validators.iter().map(Validator::network_info)),
-            join_all(self.topology.executors.iter().map(Executor::network_info))
-        );
-
-        validator_infos.into_iter().chain(executor_infos).collect()
+        join_all(
+            self.topology
+                .validators
+                .iter()
+                .map(Validator::network_info),
+        )
+        .await
     }
 
     fn is_ready(&self, data: &Self::Data) -> bool {
@@ -586,16 +482,13 @@ impl<'a> ReadinessCheck<'a> for DANetworkReadiness<'a> {
     type Data = Vec<BalancerStats>;
 
     async fn collect(&'a self) -> Self::Data {
-        let (validator_stats, executor_stats) = tokio::join!(
-            join_all(
-                self.topology
-                    .validators
-                    .iter()
-                    .map(Validator::balancer_stats)
-            ),
-            join_all(self.topology.executors.iter().map(Executor::balancer_stats))
-        );
-        validator_stats.into_iter().chain(executor_stats).collect()
+        join_all(
+            self.topology
+                .validators
+                .iter()
+                .map(Validator::balancer_stats),
+        )
+        .await
     }
 
     fn is_ready(&self, data: &Self::Data) -> bool {
@@ -655,25 +548,13 @@ impl<'a> ReadinessCheck<'a> for MembershipReadiness<'a> {
     type Data = Vec<Result<MembershipResponse, reqwest::Error>>;
 
     async fn collect(&'a self) -> Self::Data {
-        let (validator_responses, executor_responses) = tokio::join!(
-            join_all(
-                self.topology
-                    .validators
-                    .iter()
-                    .map(|node| node.da_get_membership(self.session)),
-            ),
-            join_all(
-                self.topology
-                    .executors
-                    .iter()
-                    .map(|node| node.da_get_membership(self.session)),
-            )
-        );
-
-        validator_responses
-            .into_iter()
-            .chain(executor_responses)
-            .collect()
+        join_all(
+            self.topology
+                .validators
+                .iter()
+                .map(|node| node.da_get_membership(self.session)),
+        )
+        .await
     }
 
     fn is_ready(&self, data: &Self::Data) -> bool {

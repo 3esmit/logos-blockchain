@@ -16,8 +16,6 @@ members = [
   "ledger/nomos-ledger",
   "mmr",
   "nodes/api-common",
-  "nodes/nomos-executor/executor",
-  "nodes/nomos-executor/http-client",
   "nodes/nomos-node/http-client",
   "nodes/nomos-node/node",
   "nomos-blend/core",
@@ -98,7 +96,6 @@ common-http-client            = { default-features = false, path = "./nodes/nomo
 cryptarchia-engine            = { default-features = false, path = "./consensus/cryptarchia-engine" }
 cryptarchia-sync              = { default-features = false, path = "./consensus/cryptarchia-sync" }
 demo-sequencer                = { default-features = false, path = "./testnet/l2-sequencer-archival-demo/sequencer" }
-executor-http-client          = { default-features = false, path = "./nodes/nomos-executor/http-client" }
 groth16                       = { default-features = false, path = "./zk/groth16" }
 key-management-system-keys    = { default-features = false, path = "./nomos-kms/keys" }
 key-management-system-macros  = { default-features = false, path = "./nomos-kms/macros" }
@@ -122,7 +119,6 @@ nomos-da-network-core         = { default-features = false, path = "./nomos-da/n
 nomos-da-network-service      = { default-features = false, path = "./nomos-services/data-availability/network" }
 nomos-da-sampling             = { default-features = false, path = "./nomos-services/data-availability/sampling" }
 nomos-da-verifier             = { default-features = false, path = "./nomos-services/data-availability/verifier" }
-nomos-executor                = { default-features = false, path = "./nodes/nomos-executor/executor" }
 nomos-http-api-common         = { default-features = false, path = "./nodes/api-common" }
 nomos-ledger                  = { default-features = false, path = "./ledger/nomos-ledger" }
 nomos-libp2p                  = { default-features = false, path = "./nomos-libp2p" }

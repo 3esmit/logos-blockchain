@@ -54,7 +54,6 @@ ENV NOMOS_CIRCUITS=/opt/circuits
 
 # Copy Binaries
 COPY --from=builder /nomos/target/release/nomos-node /usr/bin/
-COPY --from=builder /nomos/target/release/nomos-executor /usr/bin/
 COPY --from=builder /nomos/target/release/nomos-cli /usr/bin/
 COPY --from=builder /nomos/target/release/cfgsync-server /usr/bin/
 COPY --from=builder /nomos/target/release/cfgsync-client /usr/bin/

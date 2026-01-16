@@ -33,7 +33,6 @@ const DEFAULT_API_PORT: u16 = 18080;
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub enum HostKind {
     Validator,
-    Executor,
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
@@ -51,18 +50,6 @@ impl Host {
     pub const fn default_validator_from_ip(ip: Ipv4Addr, identifier: String) -> Self {
         Self {
             kind: HostKind::Validator,
-            ip,
-            identifier,
-            network_port: DEFAULT_LIBP2P_NETWORK_PORT,
-            da_network_port: DEFAULT_DA_NETWORK_PORT,
-            blend_port: DEFAULT_BLEND_PORT,
-        }
-    }
-
-    #[must_use]
-    pub const fn default_executor_from_ip(ip: Ipv4Addr, identifier: String) -> Self {
-        Self {
-            kind: HostKind::Executor,
             ip,
             identifier,
             network_port: DEFAULT_LIBP2P_NETWORK_PORT,

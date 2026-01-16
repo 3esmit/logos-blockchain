@@ -28,6 +28,40 @@ fn prove_zk_signature(tx_hash: &TxHash, keys: &[ZkKey]) -> ZkSignature {
     ZkKey::multi_sign(keys, tx_hash.as_ref()).expect("zk signature generation should succeed")
 }
 
+const TEST_SIGNING_KEY_BYTES: [u8; 32] = [0u8; 32];
+
+/// Creates an inscription transaction using the same hardcoded key as the mock
+/// wallet adapter.
+#[must_use]
+pub fn create_inscription_transaction_with_id(id: ChannelId) -> SignedMantleTx {
+    let signing_key = Ed25519Key::from_bytes(&TEST_SIGNING_KEY_BYTES);
+    let signer = signing_key.public_key();
+
+    let inscription_op = InscriptionOp {
+        channel_id: id,
+        inscription: format!("Test channel inscription {id:?}").into_bytes(),
+        parent: MsgId::root(),
+        signer,
+    };
+
+    let mantle_tx = MantleTx {
+        ops: vec![Op::ChannelInscribe(inscription_op)],
+        ledger_tx: LedgerTx::new(vec![], vec![]),
+        storage_gas_price: 0,
+        execution_gas_price: 0,
+    };
+
+    let tx_hash = mantle_tx.hash();
+    let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+
+    SignedMantleTx::new(
+        mantle_tx,
+        vec![OpProof::Ed25519Sig(signature)],
+        ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap(),
+    )
+    .unwrap()
+}
+
 #[must_use]
 pub fn create_channel_inscribe_tx(
     signing_key: &Ed25519Key,

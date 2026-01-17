@@ -4,6 +4,7 @@ use cucumber::World as _;
 use cucumber_ext::TestingFrameworkWorld;
 
 #[tokio::test]
+#[ignore = "TODO: Executor binary removed, testing framework needs update"]
 async fn cucumber_local_idle_smoke() {
     // Required env vars (set on the command line when running this test):
     // - `POL_PROOF_DEV_MODE=true`

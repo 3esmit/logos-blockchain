@@ -14,9 +14,9 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-clap                 = { default-features = false, features = ["derive", "std"], version = "4" }
-kzgrs-backend        = { workspace = true }
-nomos-tracing        = { workspace = true }
-serde_json           = { default-features = false, version = "1" }
-tracing              = { workspace = true }
-tracing-subscriber   = { default-features = false, version = "0.3" }
+clap               = { default-features = false, features = ["derive", "std"], version = "4" }
+kzgrs-backend      = { workspace = true }
+nomos-tracing      = { workspace = true }
+serde_json         = { default-features = false, version = "1" }
+tracing            = { workspace = true }
+tracing-subscriber = { default-features = false, version = "0.3" }

@@ -4,7 +4,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 use nomos_core::{
-    mantle::{Op, SignedMantleTx},
+    mantle::{Op, SignedMantleTx, mock::MockTransaction},
     sdp::{ActivityMetadata, ServiceType},
 };
 pub use pool::{Mempool, PoolRecoveryState};
@@ -22,15 +22,31 @@ pub enum MempoolError {
     DynamicPoolError(#[from] overwatch::DynError),
 }
 
-/// Returns true if the transaction contains DA-related operations.
-#[must_use]
-pub fn has_da_ops(tx: &SignedMantleTx) -> bool {
-    tx.mantle_tx.ops.iter().any(|op| match op {
-        Op::ChannelBlob(_) => true,
-        Op::SDPDeclare(decl) => decl.service_type == ServiceType::DataAvailability,
-        Op::SDPActive(active) => matches!(active.metadata, ActivityMetadata::DataAvailability(_)),
-        _ => false,
-    })
+/// Trait to check if an item contains DA-related operations.
+/// DA is disabled in this version, so items with DA ops should be rejected.
+pub trait DaOpsCheck {
+    /// Returns true if this item contains DA-related operations.
+    fn has_da_ops(&self) -> bool;
+}
+
+impl DaOpsCheck for SignedMantleTx {
+    fn has_da_ops(&self) -> bool {
+        self.mantle_tx.ops.iter().any(|op| match op {
+            Op::ChannelBlob(_) => true,
+            Op::SDPDeclare(decl) => decl.service_type == ServiceType::DataAvailability,
+            Op::SDPActive(active) => {
+                matches!(active.metadata, ActivityMetadata::DataAvailability(_))
+            }
+            _ => false,
+        })
+    }
+}
+
+/// Mock transactions never contain DA operations.
+impl<M> DaOpsCheck for MockTransaction<M> {
+    fn has_da_ops(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait::async_trait]

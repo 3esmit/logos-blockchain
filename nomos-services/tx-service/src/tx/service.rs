@@ -5,7 +5,6 @@ pub mod openapi {
 }
 
 use std::{
-    any::Any,
     collections::BTreeSet,
     fmt::{Debug, Display},
     marker::PhantomData,
@@ -14,7 +13,7 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use nomos_core::mantle::{SignedMantleTx, Transaction};
+use nomos_core::mantle::Transaction;
 use nomos_network::{NetworkService, message::BackendNetworkMsg};
 use nomos_storage::StorageService;
 use overwatch::{
@@ -32,7 +31,7 @@ use tokio::sync::{broadcast, oneshot};
 
 use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
-    backend::{MemPool as MemPoolTrait, MempoolError, RecoverableMempool, has_da_ops},
+    backend::{DaOpsCheck, MemPool as MemPoolTrait, MempoolError, RecoverableMempool},
     network::NetworkAdapter as NetworkAdapterTrait,
     storage::MempoolStorageAdapter,
     tx::{settings::TxMempoolSettings, state::TxMempoolState},
@@ -159,7 +158,7 @@ where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + Clone + Send + 'static,
+    Pool::Item: Transaction<Hash = Pool::Key> + Clone + Send + DaOpsCheck + 'static,
     Pool::Settings: Clone + Sync + Send,
     NetworkAdapter:
         NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
@@ -284,6 +283,7 @@ where
     where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
+        Pool::Item: DaOpsCheck,
     {
         loop {
             tokio::select! {
@@ -316,6 +316,7 @@ where
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
+        Pool::Item: DaOpsCheck,
     {
         match message {
             MempoolMsg::Add {
@@ -391,7 +392,7 @@ where
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
-        Pool::Item: Any,
+        Pool::Item: DaOpsCheck,
     {
         // Reject DA-related transactions (DA is not supported in this version)
         if Self::should_reject_da(&item) {
@@ -529,15 +530,12 @@ where
     }
 
     /// Returns true if the item should be rejected due to containing DA-related
-    /// operations. Uses downcast to check for `SignedMantleTx`. DA is
-    /// disabled in this version.
+    /// operations. DA is disabled in this version.
     fn should_reject_da(item: &Pool::Item) -> bool
     where
-        Pool::Item: Any,
+        Pool::Item: DaOpsCheck,
     {
-        (item as &dyn Any)
-            .downcast_ref::<SignedMantleTx>()
-            .is_some_and(has_da_ops)
+        item.has_da_ops()
     }
 
     async fn handle_network_item(
@@ -549,7 +547,7 @@ where
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
-        Pool::Item: Any,
+        Pool::Item: DaOpsCheck,
     {
         // Reject DA-related transactions (DA is not supported in this version)
         if Self::should_reject_da(&item) {

@@ -335,14 +335,13 @@ where
         &mut self,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     ) -> Result<(), DynError> {
+        // DA services (DaVerifier, DaNetworkService, DaStorageService) are disabled
+        // and not started, so we don't wait for them.
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_secs(60)),
             Cryptarchia<_>,
-            DaVerifier<_, _, _, _, _, _>,
-            nomos_da_network_service::NetworkService<_, _, _, _, _, _, _>,
             nomos_network::NetworkService<_, _>,
-            DaStorageService<_>,
             TxMempoolService<_, _, _,  _>
         )
         .await?;

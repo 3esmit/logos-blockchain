@@ -102,15 +102,11 @@ pub type MempoolBackend<RuntimeServiceId> = Mempool<
 pub type CryptarchiaService<RuntimeServiceId> =
     CryptarchiaConsensus<SignedMantleTx, RocksBackend, RuntimeServiceId>;
 
-pub type ChainNetworkService<SamplingAdapter, RuntimeServiceId> = chain_network::ChainNetwork<
+pub type ChainNetworkService<RuntimeServiceId> = chain_network::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,
     LibP2pAdapter<SignedMantleTx, RuntimeServiceId>,
     MempoolBackend<RuntimeServiceId>,
     MempoolAdapter<RuntimeServiceId>,
-    SamplingMempoolAdapter<RuntimeServiceId>,
-    KzgrsSamplingBackend,
-    SamplingAdapter,
-    DaSamplingStorage,
     NtpTimeBackend,
     RuntimeServiceId,
 >;
@@ -131,11 +127,7 @@ pub type CryptarchiaLeaderService<Cryptarchia, Wallet, SamplingAdapter, RuntimeS
         BlendService<SamplingAdapter, RuntimeServiceId>,
         MempoolBackend<RuntimeServiceId>,
         MempoolAdapter<RuntimeServiceId>,
-        SamplingMempoolAdapter<RuntimeServiceId>,
         nomos_core::mantle::select::FillSize<MB16, SignedMantleTx>,
-        KzgrsSamplingBackend,
-        SamplingAdapter,
-        DaSamplingStorage,
         NtpTimeBackend,
         Cryptarchia,
         Wallet,

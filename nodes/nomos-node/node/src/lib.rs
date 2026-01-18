@@ -147,8 +147,7 @@ pub(crate) type WalletService =
 
 pub(crate) type CryptarchiaService = generic_services::CryptarchiaService<RuntimeServiceId>;
 
-pub(crate) type ChainNetworkService =
-    generic_services::ChainNetworkService<DaNetworkAdapter, RuntimeServiceId>;
+pub(crate) type ChainNetworkService = generic_services::ChainNetworkService<RuntimeServiceId>;
 
 pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderService<
     CryptarchiaService,
@@ -276,9 +275,11 @@ pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId
             tracing: config.tracing,
             http: config.http,
             mempool: mempool_service_config,
-            da_network: config.da_network,
-            da_sampling: config.da_sampling,
-            da_verifier: config.da_verifier,
+            // DA services are disabled - use placeholder settings.
+            // These services won't be started but settings are needed for type system.
+            da_network: config::da::disabled_da_network_settings(),
+            da_sampling: config::da::disabled_da_sampling_settings(),
+            da_verifier: config::da::disabled_da_verifier_settings(),
             cryptarchia: chain_service_config,
             chain_network: chain_network_config,
             cryptarchia_leader: chain_leader_config,
@@ -299,8 +300,6 @@ pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId
 
 pub async fn get_services_to_start(
     app: &Overwatch<RuntimeServiceId>,
-    must_blend_service_group_start: bool,
-    must_da_service_group_start: bool,
 ) -> Result<Vec<RuntimeServiceId>, OverwatchError> {
     let mut service_ids = app.handle().retrieve_service_ids().await?;
 
@@ -309,19 +308,15 @@ pub async fn get_services_to_start(
     let blend_inner_service_ids = [RuntimeServiceId::BlendCore, RuntimeServiceId::BlendEdge];
     service_ids.retain(|value| !blend_inner_service_ids.contains(value));
 
-    if !must_blend_service_group_start {
-        service_ids.retain(|value| value != &RuntimeServiceId::Blend);
-    }
-
-    if !must_da_service_group_start {
-        let da_service_ids = [
-            RuntimeServiceId::DaVerifier,
-            RuntimeServiceId::DaSampling,
-            RuntimeServiceId::DaNetwork,
-            RuntimeServiceId::Mempool,
-        ];
-        service_ids.retain(|value| !da_service_ids.contains(value));
-    }
+    // DA services are disabled - exclude them from starting.
+    // The services remain in the Nomos struct for type system compatibility
+    // but are not started.
+    let da_service_ids = [
+        RuntimeServiceId::DaVerifier,
+        RuntimeServiceId::DaSampling,
+        RuntimeServiceId::DaNetwork,
+    ];
+    service_ids.retain(|value| !da_service_ids.contains(value));
 
     Ok(service_ids)
 }

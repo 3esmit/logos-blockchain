@@ -15,14 +15,9 @@ use futures::StreamExt as _;
 use network::NetworkAdapter;
 use nomos_core::{
     block::{Block, Proposal},
-    da::{self},
     header::HeaderId,
-    mantle::{AuthenticatedMantleTx, Transaction, TxHash, genesis_tx::GenesisTx, ops::Op},
+    mantle::{AuthenticatedMantleTx, Transaction, TxHash, genesis_tx::GenesisTx},
     sdp::ServiceType,
-};
-use nomos_da_sampling::{
-    DaSamplingService, DaSamplingServiceMsg, backend::DaSamplingServiceBackend,
-    mempool::DaMempoolAdapter,
 };
 pub use nomos_ledger::EpochState;
 use nomos_ledger::LedgerState;
@@ -32,7 +27,6 @@ use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
-        relay::OutboundRelay,
         state::{NoOperator, NoState},
     },
 };
@@ -57,8 +51,6 @@ pub use crate::{
     bootstrap::config::{BootstrapConfig, IbdConfig},
     sync::config::{OrphanConfig, SyncConfig},
 };
-
-type SamplingRelay<BlobId> = OutboundRelay<DaSamplingServiceMsg<BlobId>>;
 
 const CRYPTARCHIA_ID: &str = "Cryptarchia";
 
@@ -111,10 +103,6 @@ pub struct ChainNetwork<
     NetAdapter,
     Mempool,
     MempoolNetAdapter,
-    MempoolDaAdapter,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingStorage,
     TimeBackend,
     RuntimeServiceId,
 > where
@@ -131,13 +119,7 @@ pub struct ChainNetwork<
     Mempool::Item: AuthenticatedMantleTx,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
-    MempoolDaAdapter: DaMempoolAdapter,
     MempoolNetAdapter::Settings: Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
     TimeBackend: nomos_time::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
@@ -149,10 +131,6 @@ impl<
     NetAdapter,
     Mempool,
     MempoolNetAdapter,
-    MempoolDaAdapter,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingStorage,
     TimeBackend,
     RuntimeServiceId,
 > ServiceData
@@ -161,10 +139,6 @@ impl<
         NetAdapter,
         Mempool,
         MempoolNetAdapter,
-        MempoolDaAdapter,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
         TimeBackend,
         RuntimeServiceId,
     >
@@ -180,13 +154,7 @@ where
     Mempool::Item: AuthenticatedMantleTx + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
-    MempoolDaAdapter: DaMempoolAdapter,
     MempoolNetAdapter::Settings: Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
     TimeBackend: nomos_time::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
@@ -202,10 +170,6 @@ impl<
     NetAdapter,
     Mempool,
     MempoolNetAdapter,
-    MempoolDaAdapter,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingStorage,
     TimeBackend,
     RuntimeServiceId,
 > ServiceCore<RuntimeServiceId>
@@ -214,10 +178,6 @@ impl<
         NetAdapter,
         Mempool,
         MempoolNetAdapter,
-        MempoolDaAdapter,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
         TimeBackend,
         RuntimeServiceId,
     >
@@ -249,14 +209,7 @@ where
         + Send
         + Sync
         + 'static,
-    MempoolDaAdapter: DaMempoolAdapter + Send + Sync + 'static,
     MempoolNetAdapter::Settings: Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + Send + 'static,
-    SamplingNetworkAdapter:
-        nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId> + Send + Sync,
-    SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync,
     TimeBackend: nomos_time::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Debug
@@ -269,15 +222,6 @@ where
         + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
-        >
-        + AsServiceId<
-            DaSamplingService<
-                SamplingBackend,
-                SamplingNetworkAdapter,
-                SamplingStorage,
-                MempoolDaAdapter,
-                RuntimeServiceId,
-            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
@@ -296,11 +240,9 @@ where
             Cryptarchia,
             Mempool,
             MempoolNetAdapter,
-            MempoolDaAdapter,
             NetAdapter,
-            SamplingBackend,
             RuntimeServiceId,
-        > = ChainNetworkRelays::from_service_resources_handle::<_, _, _>(
+        > = ChainNetworkRelays::from_service_resources_handle::<_>(
             &self.service_resources_handle,
         )
         .await;
@@ -329,12 +271,10 @@ where
 
         let recent_blob_validation = blob::Validation::<RecentBlobStrategy>::new(
             ledger_config.base_period_length(),
-            relays.sampling_relay().clone(),
             relays.time_relay().clone(),
         );
         let historic_blob_validation = blob::Validation::<HistoricBlobStrategy>::new(
             ledger_config.base_period_length(),
-            relays.sampling_relay().clone(),
             relays.time_relay().clone(),
         );
 
@@ -344,18 +284,16 @@ where
             Cryptarchia,
             NetworkService<_, _>,
             TxMempoolService<_, _, _, _>,
-            DaSamplingService<_, _, _, _, _>,
             TimeService<_, _>
         )
         .await?;
 
         let initial_block_download = InitialBlockDownload::new(
             bootstrap_config.ibd,
-            ChainNetworkIbdBlockProcessor::<_, Mempool, SamplingBackend, _> {
+            ChainNetworkIbdBlockProcessor::<_, Mempool, _> {
                 historic_blob_validation: historic_blob_validation.clone(),
                 cryptarchia: relays.cryptarchia().clone(),
                 mempool_adapter: relays.mempool_adapter().clone(),
-                sampling_relay: relays.sampling_relay().clone(),
             },
             network_adapter,
         );
@@ -424,12 +362,11 @@ where
 
                         Self::log_received_block(&block);
 
-                        match process_block::<_,_,Mempool, SamplingBackend,_>(
+                        match process_block::<_, _, Mempool, _>(
                             block.clone(),
                             Some(&historic_blob_validation),
                             relays.cryptarchia(),
                             relays.mempool_adapter(),
-                            relays.sampling_relay(),
                         ).await {
                             Ok(()) => {
                                 info!(counter.consensus_processed_blocks = 1);
@@ -464,10 +401,6 @@ impl<
     NetAdapter,
     Mempool,
     MempoolNetAdapter,
-    MempoolDaAdapter,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingStorage,
     TimeBackend,
     RuntimeServiceId,
 >
@@ -476,10 +409,6 @@ impl<
         NetAdapter,
         Mempool,
         MempoolNetAdapter,
-        MempoolDaAdapter,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
         TimeBackend,
         RuntimeServiceId,
     >
@@ -510,13 +439,7 @@ where
         + Send
         + Sync
         + 'static,
-    MempoolDaAdapter: DaMempoolAdapter + Send + Sync + 'static,
     MempoolNetAdapter::Settings: Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
     TimeBackend: nomos_time::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Display + AsServiceId<Self> + Sync,
@@ -538,9 +461,7 @@ where
             Cryptarchia,
             Mempool,
             MempoolNetAdapter,
-            MempoolDaAdapter,
             NetAdapter,
-            SamplingBackend,
             RuntimeServiceId,
         >,
     ) where
@@ -608,9 +529,7 @@ where
             Cryptarchia,
             Mempool,
             MempoolNetAdapter,
-            MempoolDaAdapter,
             NetAdapter,
-            SamplingBackend,
             RuntimeServiceId,
         >,
     ) where
@@ -620,12 +539,11 @@ where
 
         let block_id = block.header().id();
 
-        match process_block::<_, _, Mempool, SamplingBackend, _>(
+        match process_block::<_, _, Mempool, _>(
             block,
             Some(recent_blob_validation),
             relays.cryptarchia(),
             relays.mempool_adapter(),
-            relays.sampling_relay(),
         )
         .await
         {
@@ -690,14 +608,13 @@ where
 #[expect(clippy::allow_attributes_without_reason)]
 #[instrument(
     level = "debug",
-    skip(blob_validation, cryptarchia, mempool_adapter, sampling_relay)
+    skip(blob_validation, cryptarchia, mempool_adapter)
 )]
-async fn process_block<BlobStrategy, Cryptarchia, Mempool, SamplingBackend, RuntimeServiceId>(
+async fn process_block<BlobStrategy, Cryptarchia, Mempool, RuntimeServiceId>(
     block: Block<Cryptarchia::Tx>,
     blob_validation: Option<&blob::Validation<BlobStrategy>>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     mempool_adapter: &MempoolAdapter<Mempool::Item, Mempool::Item>,
-    sampling_relay: &SamplingRelay<SamplingBackend::BlobId>,
 ) -> Result<(), Error>
 where
     BlobStrategy: blob::Strategy + Sync,
@@ -705,7 +622,6 @@ where
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId>,
     RuntimeServiceId: Send + Sync,
 {
     debug!("received proposal {:?}", block);
@@ -732,35 +648,7 @@ where
         .await
         .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
 
-    let blob_ids: Vec<da::BlobId> = block
-        .transactions()
-        .flat_map(|tx| tx.mantle_tx().ops.iter())
-        .filter_map(|op| {
-            if let Op::ChannelBlob(blob_op) = op {
-                Some(blob_op.blob)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if !blob_ids.is_empty() {
-        mark_blob_in_block(sampling_relay, blob_ids).await;
-    }
-
     Ok(())
-}
-
-async fn mark_blob_in_block<BlobId: Debug + Send>(
-    sampling_relay: &SamplingRelay<BlobId>,
-    blobs_id: Vec<BlobId>,
-) {
-    if let Err((_e, DaSamplingServiceMsg::MarkInBlock { blobs_id })) = sampling_relay
-        .send(DaSamplingServiceMsg::MarkInBlock { blobs_id })
-        .await
-    {
-        error!("Error marking in block for blobs ids: {blobs_id:?}");
-    }
 }
 
 /// Reconstruct a Block from a Proposal by looking up transactions from mempool

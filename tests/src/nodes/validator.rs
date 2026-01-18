@@ -17,23 +17,8 @@ use nomos_core::{
     mantle::{SignedMantleTx, Transaction as _, TxHash},
     sdp::{Declaration, SessionNumber},
 };
-use nomos_da_network_core::{
-    protocols::sampling::SubnetsConfig,
-    swarm::{BalancerStats, DAConnectionPolicySettings, MonitorStats},
-};
-use nomos_da_network_service::{
-    MembershipResponse, NetworkConfig as DaNetworkConfig, api::http::ApiAdapterSettings,
-    backends::libp2p::common::DaNetworkBackendSettings,
-};
-use nomos_da_sampling::{
-    DaSamplingServiceSettings, backend::kzgrs::KzgrsSamplingBackendSettings,
-    verifier::kzgrs::KzgrsDaVerifierSettings as SamplingVerifierSettings,
-};
-use nomos_da_verifier::{
-    DaVerifierServiceSettings,
-    backend::{kzgrs::KzgrsDaVerifierSettings, trigger::MempoolPublishTriggerConfig},
-    storage::adapters::rocksdb::RocksAdapterSettings as VerifierStorageAdapterSettings,
-};
+use nomos_da_network_core::swarm::{BalancerStats, MonitorStats};
+use nomos_da_network_service::MembershipResponse;
 use nomos_http_api_common::paths::{
     CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_GET_MEMBERSHIP,
     DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, MANTLE_SDP_DECLARATIONS,
@@ -51,7 +36,7 @@ use nomos_node::{
 use nomos_sdp::SdpSettings;
 use nomos_tracing::logging::local::FileConfig;
 use nomos_tracing_service::LoggerLayer;
-use nomos_utils::{math::NonNegativeF64, net::get_available_tcp_port};
+use nomos_utils::net::get_available_tcp_port;
 use nomos_wallet::WalletServiceSettings;
 use reqwest::Url;
 use tempfile::NamedTempFile;
@@ -134,12 +119,6 @@ impl Validator {
         }
 
         config.storage.db_path = dir.path().join("db");
-        dir.path().clone_into(
-            &mut config
-                .da_verifier
-                .storage_adapter_settings
-                .blob_storage_directory,
-        );
 
         serde_yaml::to_writer(&mut file, &config).unwrap();
         let exe_path = get_exe_path(BIN_PATH_DEBUG, BIN_PATH_RELEASE);
@@ -456,14 +435,12 @@ impl Validator {
 }
 
 #[must_use]
-#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
 pub fn create_validator_config(config: GeneralConfig) -> Config {
     let testing_http_address = format!("127.0.0.1:{}", get_available_tcp_port().unwrap())
         .parse()
         .unwrap();
     let custom_deployment_config = default_e2e_deployment_settings();
 
-    let da_policy_settings = config.da_config.policy_settings;
     Config {
         network: config.network_config,
         blend: config.blend_config.0,
@@ -474,54 +451,6 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
             recovery_path: "./recovery/mempool.json".into(),
         },
 
-        da_network: DaNetworkConfig {
-            backend: DaNetworkBackendSettings {
-                node_key: config.da_config.node_key,
-                listening_address: config.da_config.listening_address,
-                policy_settings: DAConnectionPolicySettings {
-                    min_dispersal_peers: 0,
-                    min_replication_peers: da_policy_settings.min_replication_peers,
-                    max_dispersal_failures: da_policy_settings.max_dispersal_failures,
-                    max_sampling_failures: da_policy_settings.max_sampling_failures,
-                    max_replication_failures: da_policy_settings.max_replication_failures,
-                    malicious_threshold: da_policy_settings.malicious_threshold,
-                },
-                monitor_settings: config.da_config.monitor_settings,
-                balancer_interval: config.da_config.balancer_interval,
-                redial_cooldown: config.da_config.redial_cooldown,
-                replication_settings: config.da_config.replication_settings,
-                subnets_settings: SubnetsConfig {
-                    num_of_subnets: config.da_config.num_samples as usize,
-                    shares_retry_limit: config.da_config.retry_shares_limit,
-                    commitments_retry_limit: config.da_config.retry_commitments_limit,
-                },
-            },
-            membership: config.da_config.membership.clone(),
-            api_adapter_settings: ApiAdapterSettings {
-                api_port: config.api_config.address.port(),
-                is_secure: false,
-            },
-            subnet_refresh_interval: config.da_config.subnets_refresh_interval,
-            subnet_threshold: config.da_config.num_subnets as usize,
-            min_session_members: config.da_config.num_subnets as usize,
-        },
-        da_verifier: DaVerifierServiceSettings {
-            share_verifier_settings: KzgrsDaVerifierSettings {
-                global_params_path: config.da_config.global_params_path.clone(),
-                domain_size: config.da_config.num_subnets as usize,
-            },
-            tx_verifier_settings: (),
-            network_adapter_settings: (),
-            storage_adapter_settings: VerifierStorageAdapterSettings {
-                blob_storage_directory: "./".into(),
-            },
-            mempool_trigger_settings: MempoolPublishTriggerConfig {
-                publish_threshold: NonNegativeF64::try_from(0.8).unwrap(),
-                share_duration: Duration::from_secs(5),
-                prune_duration: Duration::from_secs(30),
-                prune_interval: Duration::from_secs(5),
-            },
-        },
         tracing: config.tracing_config.tracing_settings,
         http: nomos_api::ApiServiceSettings {
             backend_settings: AxumBackendSettings {
@@ -531,20 +460,6 @@ pub fn create_validator_config(config: GeneralConfig) -> Config {
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },
-        },
-        da_sampling: DaSamplingServiceSettings {
-            sampling_settings: KzgrsSamplingBackendSettings {
-                num_samples: config.da_config.num_samples,
-                num_subnets: config.da_config.num_subnets,
-                old_blobs_check_interval: config.da_config.old_blobs_check_interval,
-                blobs_validity_duration: config.da_config.blobs_validity_duration,
-            },
-            share_verifier_settings: SamplingVerifierSettings {
-                global_params_path: config.da_config.global_params_path,
-                domain_size: config.da_config.num_subnets as usize,
-            },
-            commitments_wait_duration: Duration::from_secs(1),
-            sdp_blob_trigger_sampling_delay: adjust_timeout(Duration::from_secs(5)),
         },
         storage: RocksBackendSettings {
             db_path: "./db".into(),

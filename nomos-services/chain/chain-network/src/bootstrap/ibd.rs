@@ -8,17 +8,15 @@ use cryptarchia_sync::GetTipResponse;
 use futures::StreamExt as _;
 use nomos_core::{
     block::Block,
-    da,
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, TxHash},
 };
-use nomos_da_sampling::backend::DaSamplingServiceBackend;
 use overwatch::DynError;
 use tracing::{debug, error};
 use tx_service::backend::RecoverableMempool;
 
 use crate::{
-    Error as ChainError, IbdConfig, SamplingRelay, blob,
+    Error as ChainError, IbdConfig, blob,
     bootstrap::download::{Delay, Download, Downloads, DownloadsOutput},
     mempool::adapter::MempoolAdapter,
     network::NetworkAdapter,
@@ -30,30 +28,26 @@ pub trait IbdBlockProcessor<B> {
     async fn has_processed_block(&self, header: HeaderId) -> Result<bool, Error>;
 }
 
-pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, SamplingBackend, RuntimeServiceId>
+pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId>,
     RuntimeServiceId: Send + Sync,
 {
     pub historic_blob_validation: blob::Validation<blob::HistoricBlobStrategy>,
     pub cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     pub mempool_adapter: MempoolAdapter<Mempool::Item, Mempool::Item>,
-    pub sampling_relay: SamplingRelay<SamplingBackend::BlobId>,
 }
 
-impl<Cryptarchia, Mempool, SamplingBackend, RuntimeServiceId>
-    IbdBlockProcessor<Block<Cryptarchia::Tx>>
-    for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, SamplingBackend, RuntimeServiceId>
+impl<Cryptarchia, Mempool, RuntimeServiceId> IbdBlockProcessor<Block<Cryptarchia::Tx>>
+    for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId>,
     RuntimeServiceId: Send + Sync,
 {
     async fn info(&self) -> Result<CryptarchiaInfo, Error> {
@@ -61,12 +55,11 @@ where
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {
-        crate::process_block::<_, _, Mempool, SamplingBackend, _>(
+        crate::process_block::<_, _, Mempool, _>(
             block,
             Some(&self.historic_blob_validation),
             &self.cryptarchia,
             &self.mempool_adapter,
-            &self.sampling_relay,
         )
         .await
         .map_err(|e| {

@@ -3,22 +3,13 @@ use clap::Parser as _;
 use crate::config::CliArgs;
 
 #[test]
-fn start_all_service_groups() {
+fn parse_config_path() {
     let parsed_args = CliArgs::parse_from(["", "test_cfg.yaml"]);
-    assert!(parsed_args.must_blend_service_group_start());
-    assert!(parsed_args.must_da_service_group_start());
+    assert_eq!(parsed_args.config_path().to_str().unwrap(), "test_cfg.yaml");
 }
 
 #[test]
-fn start_blend_service_group_only() {
-    let parsed_args = CliArgs::parse_from(["", "test_cfg.yaml", "--blend-service-group"]);
-    assert!(parsed_args.must_blend_service_group_start());
-    assert!(!parsed_args.must_da_service_group_start());
-}
-
-#[test]
-fn start_da_service_group_only() {
-    let parsed_args = CliArgs::parse_from(["", "test_cfg.yaml", "--da-service-group"]);
-    assert!(!parsed_args.must_blend_service_group_start());
-    assert!(parsed_args.must_da_service_group_start());
+fn parse_dry_run_flag() {
+    let parsed_args = CliArgs::parse_from(["", "test_cfg.yaml", "--check-config"]);
+    assert!(parsed_args.dry_run());
 }

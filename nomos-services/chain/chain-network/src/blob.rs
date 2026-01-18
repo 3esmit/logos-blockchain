@@ -1,36 +1,28 @@
-use std::{collections::BTreeSet, fmt::Debug, marker::PhantomData, num::NonZero};
+use std::{marker::PhantomData, num::NonZero};
 
 use cryptarchia_engine::Slot;
 use nomos_core::{
     block::Block,
-    da,
     mantle::{AuthenticatedMantleTx, Op},
 };
-use nomos_da_sampling::DaSamplingServiceMsg;
 use nomos_time::TimeServiceMessage;
 use tokio::sync::oneshot;
 use tracing::debug;
 
-use crate::{LOG_TARGET, SamplingRelay, relays::TimeRelay};
+use crate::{LOG_TARGET, relays::TimeRelay};
 
 /// An instance for validating blobs in blocks.
 #[derive(Clone)]
 pub struct Validation<S: Strategy> {
     consensus_base_period_length: NonZero<u64>,
-    sampling_relay: SamplingRelay<da::BlobId>,
     time_relay: TimeRelay,
     _phantom: PhantomData<S>,
 }
 
 impl<S: Strategy> Validation<S> {
-    pub const fn new(
-        consensus_base_period_length: NonZero<u64>,
-        sampling_relay: SamplingRelay<da::BlobId>,
-        time_relay: TimeRelay,
-    ) -> Self {
+    pub const fn new(consensus_base_period_length: NonZero<u64>, time_relay: TimeRelay) -> Self {
         Self {
             consensus_base_period_length,
-            sampling_relay,
             time_relay,
             _phantom: PhantomData,
         }
@@ -55,7 +47,7 @@ impl<S: Strategy + Sync> Validation<S> {
             return Ok(());
         }
 
-        S::validate(block, &self.sampling_relay).await
+        S::validate(block).await
     }
 }
 
@@ -83,10 +75,7 @@ const fn blob_validation_window_in_slots(consensus_base_period_length: NonZero<u
 
 #[async_trait::async_trait]
 pub trait Strategy {
-    async fn validate<Tx>(
-        block: &Block<Tx>,
-        sampling_relay: &SamplingRelay<da::BlobId>,
-    ) -> Result<(), Error>
+    async fn validate<Tx>(block: &Block<Tx>) -> Result<(), Error>
     where
         Tx: AuthenticatedMantleTx + Sync;
 }
@@ -98,31 +87,25 @@ pub struct RecentBlobStrategy;
 
 #[async_trait::async_trait]
 impl Strategy for RecentBlobStrategy {
-    async fn validate<Tx>(
-        block: &Block<Tx>,
-        sampling_relay: &SamplingRelay<da::BlobId>,
-    ) -> Result<(), Error>
+    async fn validate<Tx>(block: &Block<Tx>) -> Result<(), Error>
     where
         Tx: AuthenticatedMantleTx + Sync,
     {
         debug!(target = LOG_TARGET, "Validating recent blobs");
-        let sampled_blobs = get_sampled_blobs(sampling_relay).await?;
-        let all_blobs_sampled = block
+
+        // Check if block contains any DA blob operations
+        let has_blob_ops = block
             .transactions()
             .flat_map(|tx| tx.mantle_tx().ops.iter())
-            .filter_map(|op| {
-                if let Op::ChannelBlob(op) = op {
-                    Some(op.blob)
-                } else {
-                    None
-                }
-            })
-            .all(|blob| sampled_blobs.contains(&blob));
-        if all_blobs_sampled {
-            Ok(())
-        } else {
-            Err(Error::InvalidBlobs)
+            .any(|op| matches!(op, Op::ChannelBlob(_)));
+
+        if has_blob_ops {
+            // DA is not supported in this version - reject block containing DA blobs
+            tracing::error!(target: LOG_TARGET, "Found DA blobs in block but DA is not supported in this version");
+            return Err(Error::DaNotSupported);
         }
+
+        Ok(())
     }
 }
 
@@ -134,41 +117,25 @@ pub struct HistoricBlobStrategy;
 
 #[async_trait::async_trait]
 impl Strategy for HistoricBlobStrategy {
-    async fn validate<Tx>(
-        block: &Block<Tx>,
-        sampling_relay: &SamplingRelay<da::BlobId>,
-    ) -> Result<(), Error>
+    async fn validate<Tx>(block: &Block<Tx>) -> Result<(), Error>
     where
         Tx: AuthenticatedMantleTx + Sync,
     {
         debug!(target = LOG_TARGET, "Validating historic blobs");
 
-        let (sender, receiver) = oneshot::channel();
-        sampling_relay
-            .send(DaSamplingServiceMsg::RequestHistoricSampling {
-                block_id: block.header().id(),
-                blob_ids: block
-                    .transactions()
-                    .flat_map(|tx| tx.mantle_tx().ops.iter())
-                    .filter_map(|op| {
-                        if let Op::ChannelBlob(op) = op {
-                            Some((op.blob, op.session))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect(),
-                reply_channel: sender,
-            })
-            .await
-            .map_err(|(e, _)| e)?;
+        // Check if block contains any DA blob operations
+        let has_blob_ops = block
+            .transactions()
+            .flat_map(|tx| tx.mantle_tx().ops.iter())
+            .any(|op| matches!(op, Op::ChannelBlob(_)));
 
-        let sampling_succeeded = receiver.await?;
-        if sampling_succeeded {
-            Ok(())
-        } else {
-            Err(Error::InvalidBlobs)
+        if has_blob_ops {
+            // DA is not supported in this version - reject block containing DA blobs
+            tracing::error!(target: LOG_TARGET, "Found DA blobs in block but DA is not supported in this version");
+            return Err(Error::DaNotSupported);
         }
+
+        Ok(())
     }
 }
 
@@ -176,27 +143,12 @@ impl Strategy for HistoricBlobStrategy {
 pub enum Error {
     #[error("Block contains invalid blobs")]
     InvalidBlobs,
+    #[error("DA operations are not supported")]
+    DaNotSupported,
     #[error("Relay error: {0}")]
     Relay(#[from] overwatch::services::relay::RelayError),
     #[error("Reply channel error: {0}")]
     ReplyRecv(#[from] oneshot::error::RecvError),
-}
-
-/// Retrieves all the blobs that have been sampled by the sampling service.
-pub async fn get_sampled_blobs<BlobId>(
-    sampling_relay: &SamplingRelay<BlobId>,
-) -> Result<BTreeSet<BlobId>, Error>
-where
-    BlobId: Send,
-{
-    let (sender, receiver) = oneshot::channel();
-    sampling_relay
-        .send(DaSamplingServiceMsg::GetValidatedBlobs {
-            reply_channel: sender,
-        })
-        .await
-        .map_err(|(e, _)| e)?;
-    Ok(receiver.await?)
 }
 
 #[cfg(test)]

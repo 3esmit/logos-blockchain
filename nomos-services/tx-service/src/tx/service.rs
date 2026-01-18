@@ -393,7 +393,7 @@ where
         NetworkAdapter::Settings: Send + Sync,
         Pool::Item: Any,
     {
-        // Reject DA-related transactions (DA is disabled)
+        // Reject DA-related transactions (DA is not supported in this version)
         if Self::should_reject_da(&item) {
             Self::handle_add_error(
                 MempoolError::Rejected("DA operations are not supported".into()),
@@ -551,7 +551,7 @@ where
         NetworkAdapter::Settings: Send + Sync,
         Pool::Item: Any,
     {
-        // Reject DA-related transactions (DA is disabled)
+        // Reject DA-related transactions (DA is not supported in this version)
         if Self::should_reject_da(&item) {
             tracing::debug!("Rejected network transaction with DA operations");
             return;

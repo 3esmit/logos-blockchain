@@ -4,7 +4,7 @@ mod mempool;
 mod relays;
 
 use core::fmt::Debug;
-use std::{collections::BTreeSet, fmt::Display, iter, pin::Pin, time::Duration};
+use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
 use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use cryptarchia_engine::{Epoch, Slot};
@@ -13,7 +13,6 @@ use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
 pub use leadership::LeaderConfig;
 use nomos_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
-    da,
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, Op, Transaction, TxHash, TxSelect, gas::MainnetGasConstants,
@@ -21,14 +20,10 @@ use nomos_core::{
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
-use nomos_da_sampling::{
-    DaSamplingService, DaSamplingServiceMsg, backend::DaSamplingServiceBackend,
-    mempool::DaMempoolAdapter,
-};
 use nomos_time::{SlotTick, TimeService, TimeServiceMessage};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
+    services::{AsServiceId, ServiceCore, ServiceData},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use services_utils::wait_until_services_are_ready;
@@ -49,8 +44,6 @@ use crate::{
     mempool::MempoolAdapter as _,
     relays::CryptarchiaConsensusRelays,
 };
-
-type SamplingRelay<BlobId> = OutboundRelay<DaSamplingServiceMsg<BlobId>>;
 
 const LEADER_ID: &str = "Leader";
 
@@ -103,11 +96,7 @@ pub struct CryptarchiaLeader<
     BlendService,
     Mempool,
     MempoolNetAdapter,
-    MempoolDaAdapter,
     TxS,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingStorage,
     TimeBackend,
     CryptarchiaService,
     Wallet,
@@ -122,15 +111,9 @@ pub struct CryptarchiaLeader<
     Mempool::Item: AuthenticatedMantleTx,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
-    MempoolDaAdapter: DaMempoolAdapter + Send + Sync + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
     TxS: TxSelect<Tx = Mempool::Item>,
     TxS::Settings: Send,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
     TimeBackend: nomos_time::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData,
@@ -144,11 +127,7 @@ impl<
     BlendService,
     Mempool,
     MempoolNetAdapter,
-    MempoolDaAdapter,
     TxS,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingStorage,
     TimeBackend,
     CryptarchiaService,
     Wallet,
@@ -158,11 +137,7 @@ impl<
         BlendService,
         Mempool,
         MempoolNetAdapter,
-        MempoolDaAdapter,
         TxS,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
         TimeBackend,
         CryptarchiaService,
         Wallet,
@@ -178,14 +153,8 @@ where
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    MempoolDaAdapter: DaMempoolAdapter + Send + Sync + 'static,
     TxS: TxSelect<Tx = Mempool::Item>,
     TxS::Settings: Send,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
     TimeBackend: nomos_time::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData,
@@ -202,11 +171,7 @@ impl<
     BlendService,
     Mempool,
     MempoolNetAdapter,
-    MempoolDaAdapter,
     TxS,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingStorage,
     TimeBackend,
     CryptarchiaService,
     Wallet,
@@ -216,11 +181,7 @@ impl<
         BlendService,
         Mempool,
         MempoolNetAdapter,
-        MempoolDaAdapter,
         TxS,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
         TimeBackend,
         CryptarchiaService,
         Wallet,
@@ -253,17 +214,9 @@ where
         + Send
         + Sync
         + 'static,
-    MempoolDaAdapter: DaMempoolAdapter + Send + Sync + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
     TxS: TxSelect<Tx = Mempool::Item> + Clone + Send + Sync + 'static,
     TxS::Settings: Send + Sync + 'static,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send + 'static,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + Send + 'static,
-    SamplingNetworkAdapter:
-        nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    SamplingStorage:
-        nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     TimeBackend: nomos_time::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
@@ -277,15 +230,6 @@ where
         + AsServiceId<BlendService>
         + AsServiceId<
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
-        >
-        + AsServiceId<
-            DaSamplingService<
-                SamplingBackend,
-                SamplingNetworkAdapter,
-                SamplingStorage,
-                MempoolDaAdapter,
-                RuntimeServiceId,
-            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<CryptarchiaService>
@@ -307,8 +251,6 @@ where
     async fn run(mut self) -> Result<(), DynError> {
         let relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
             Self,
-            SamplingNetworkAdapter,
-            SamplingStorage,
             TimeBackend,
             CryptarchiaService,
         >(&self.service_resources_handle)
@@ -359,7 +301,6 @@ where
             Some(Duration::from_secs(60)),
             BlendService,
             TxMempoolService<_, _, _, _>,
-            DaSamplingService<_, _, _, _, _>,
             TimeService<_, _>,
             CryptarchiaService,
             Wallet
@@ -490,11 +431,7 @@ impl<
     BlendService,
     Mempool,
     MempoolNetAdapter,
-    MempoolDaAdapter,
     TxS,
-    SamplingBackend,
-    SamplingNetworkAdapter,
-    SamplingStorage,
     TimeBackend,
     CryptarchiaService,
     Wallet,
@@ -504,11 +441,7 @@ impl<
         BlendService,
         Mempool,
         MempoolNetAdapter,
-        MempoolDaAdapter,
         TxS,
-        SamplingBackend,
-        SamplingNetworkAdapter,
-        SamplingStorage,
         TimeBackend,
         CryptarchiaService,
         Wallet,
@@ -541,16 +474,10 @@ where
         + Send
         + Sync
         + 'static,
-    MempoolDaAdapter: DaMempoolAdapter + Send + Sync + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
     <Mempool as MemPool>::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     TxS: TxSelect<Tx = Mempool::Item> + Clone + Send + Sync + 'static,
     TxS::Settings: Send + Sync + 'static,
-    SamplingBackend: DaSamplingServiceBackend<BlobId = da::BlobId> + Send,
-    SamplingBackend::Settings: Clone,
-    SamplingBackend::Share: Debug + 'static,
-    SamplingNetworkAdapter: nomos_da_sampling::network::NetworkAdapter<RuntimeServiceId>,
-    SamplingStorage: nomos_da_sampling::storage::DaStorageAdapter<RuntimeServiceId>,
     TimeBackend: nomos_time::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
@@ -567,31 +494,29 @@ where
         slot: Slot,
         proof: Groth16LeaderProof,
         tx_selector: TxS,
-        relays: &CryptarchiaConsensusRelays<
-            BlendService,
-            Mempool,
-            MempoolNetAdapter,
-            MempoolDaAdapter,
-            SamplingBackend,
-            RuntimeServiceId,
-        >,
+        relays: &CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>,
         mut ledger_state: nomos_ledger::LedgerState,
         ledger_config: &nomos_ledger::Config,
     ) -> Result<Block<Mempool::Item>, Error> {
-        let txs = relays.mempool_adapter().get_mempool_view([0; 32].into());
-        let sampling_relay = relays.sampling_relay().clone();
-        let blobs_ids = get_sampled_blobs(sampling_relay);
+        let txs_stream = relays
+            .mempool_adapter()
+            .get_mempool_view([0; 32].into())
+            .await
+            .map_err(Error::FetchBlockTransactions)?;
 
-        let (txs_stream, blobs) =
-            futures::try_join!(txs, blobs_ids).map_err(Error::FetchBlockTransactions)?;
-
-        let filtered_stream = txs_stream.filter(move |tx| {
-            let is_valid = tx.mantle_tx().ops.iter().all(|op| match op {
-                Op::ChannelBlob(op) => blobs.contains(&op.blob),
-                _ => true,
-            });
-
-            future::ready(is_valid)
+        // DA is not supported in this version - filter out any transactions with blob
+        // operations. This is defensive; DA transactions should be rejected at
+        // mempool level.
+        let filtered_stream = txs_stream.filter(|tx| {
+            let has_blob = tx
+                .mantle_tx()
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::ChannelBlob(_)));
+            if has_blob {
+                tracing::warn!(target: LOG_TARGET, "Filtering out DA blob transaction - DA is not supported in this version");
+            }
+            future::ready(!has_blob)
         });
 
         let mut tx_stream: Pin<Box<_>> = Box::pin(filtered_stream);
@@ -658,22 +583,6 @@ where
 
         Ok(block)
     }
-}
-
-async fn get_sampled_blobs<BlobId>(
-    sampling_relay: SamplingRelay<BlobId>,
-) -> Result<BTreeSet<BlobId>, DynError>
-where
-    BlobId: Send,
-{
-    let (sender, receiver) = oneshot::channel();
-    sampling_relay
-        .send(DaSamplingServiceMsg::GetValidatedBlobs {
-            reply_channel: sender,
-        })
-        .await
-        .map_err(|(error, _)| Box::new(error) as DynError)?;
-    receiver.await.map_err(|error| Box::new(error) as DynError)
 }
 
 fn handle_inbound_message(

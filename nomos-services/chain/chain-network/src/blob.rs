@@ -81,8 +81,9 @@ pub trait Strategy {
 }
 
 /// Validation strategy for blobs in blocks received through recent block
-/// propagation, under the assumption that the DA sampling service has already
-/// sampled and validated the blobs.
+/// propagation.
+///
+/// DA is not supported: blocks containing blob operations are rejected.
 pub struct RecentBlobStrategy;
 
 #[async_trait::async_trait]
@@ -91,27 +92,25 @@ impl Strategy for RecentBlobStrategy {
     where
         Tx: AuthenticatedMantleTx + Sync,
     {
-        debug!(target = LOG_TARGET, "Validating recent blobs");
-
-        // Check if block contains any DA blob operations
-        let has_blob_ops = block
+        // DA is not supported: reject any block containing blob operations
+        let has_blobs = block
             .transactions()
             .flat_map(|tx| tx.mantle_tx().ops.iter())
             .any(|op| matches!(op, Op::ChannelBlob(_)));
 
-        if has_blob_ops {
-            // DA is not supported in this version - reject block containing DA blobs
-            tracing::error!(target: LOG_TARGET, "Found DA blobs in block but DA is not supported in this version");
-            return Err(Error::DaNotSupported);
+        if has_blobs {
+            debug!(target: LOG_TARGET, "Rejecting block with blobs - DA is not supported");
+            Err(Error::DaNotSupported)
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 }
 
 /// Validation strategy for blobs in blocks retrieved manually (e.g. chain
-/// bootstrapping or orphan handling), under the assumption that the DA sampling
-/// service has not yet sampled and validated the blobs.
+/// bootstrapping or orphan handling).
+///
+/// DA is not supported: blocks containing blob operations are rejected.
 #[derive(Clone)]
 pub struct HistoricBlobStrategy;
 
@@ -121,29 +120,24 @@ impl Strategy for HistoricBlobStrategy {
     where
         Tx: AuthenticatedMantleTx + Sync,
     {
-        debug!(target = LOG_TARGET, "Validating historic blobs");
-
-        // Check if block contains any DA blob operations
-        let has_blob_ops = block
+        // DA is not supported: reject any block containing blob operations
+        let has_blobs = block
             .transactions()
             .flat_map(|tx| tx.mantle_tx().ops.iter())
             .any(|op| matches!(op, Op::ChannelBlob(_)));
 
-        if has_blob_ops {
-            // DA is not supported in this version - reject block containing DA blobs
-            tracing::error!(target: LOG_TARGET, "Found DA blobs in block but DA is not supported in this version");
-            return Err(Error::DaNotSupported);
+        if has_blobs {
+            debug!(target: LOG_TARGET, "Rejecting block with blobs - DA is not supported");
+            Err(Error::DaNotSupported)
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Block contains invalid blobs")]
-    InvalidBlobs,
-    #[error("DA operations are not supported")]
+    #[error("DA is not supported - blocks with blobs are rejected")]
     DaNotSupported,
     #[error("Relay error: {0}")]
     Relay(#[from] overwatch::services::relay::RelayError),

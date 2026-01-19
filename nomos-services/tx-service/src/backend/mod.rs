@@ -3,12 +3,12 @@ pub mod pool;
 use std::pin::Pin;
 
 use futures::Stream;
+#[cfg(feature = "mock")]
+use nomos_core::mantle::mock::MockTransaction;
 use nomos_core::{
     mantle::{Op, SignedMantleTx},
     sdp::{ActivityMetadata, ServiceType},
 };
-#[cfg(feature = "mock")]
-use nomos_core::mantle::mock::MockTransaction;
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 

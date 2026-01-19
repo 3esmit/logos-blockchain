@@ -234,13 +234,15 @@ where
             )
             .route(
                 paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
-                routing::post(wallet::post_transactions_transfer_funds::<
-                    WalletService,
-                    DaStorageBackend,
-                    MempoolStorageAdapter,
-                    TimeBackend,
-                    _,
-                >),
+                routing::post(
+                    wallet::post_transactions_transfer_funds::<
+                        WalletService,
+                        DaStorageBackend,
+                        MempoolStorageAdapter,
+                        TimeBackend,
+                        _,
+                    >,
+                ),
             );
 
         #[cfg(feature = "block-explorer")]

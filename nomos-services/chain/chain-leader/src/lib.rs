@@ -496,7 +496,12 @@ where
         slot: Slot,
         proof: Groth16LeaderProof,
         tx_selector: TxS,
-        relays: &CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>,
+        relays: &CryptarchiaConsensusRelays<
+            BlendService,
+            Mempool,
+            MempoolNetAdapter,
+            RuntimeServiceId,
+        >,
         mut ledger_state: nomos_ledger::LedgerState,
         ledger_config: &nomos_ledger::Config,
     ) -> Result<Block<Mempool::Item>, Error> {

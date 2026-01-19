@@ -16,13 +16,11 @@ use nomos_core::{
     sdp::Declaration,
 };
 use nomos_http_api_common::paths::{
-    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS,
-    NETWORK_INFO, STORAGE_BLOCK,
+    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
 };
 use nomos_network::backends::libp2p::Libp2pInfo;
 use nomos_node::{
-    Config, HeaderId, RocksBackendSettings,
-    api::backend::AxumBackendSettings,
+    Config, HeaderId, RocksBackendSettings, api::backend::AxumBackendSettings,
     config::mempool::serde::Config as MempoolConfig,
 };
 use nomos_sdp::SdpSettings;

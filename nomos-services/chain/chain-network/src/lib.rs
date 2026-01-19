@@ -126,14 +126,7 @@ pub struct ChainNetwork<
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
-impl<
-    Cryptarchia,
-    NetAdapter,
-    Mempool,
-    MempoolNetAdapter,
-    TimeBackend,
-    RuntimeServiceId,
-> ServiceData
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId> ServiceData
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
@@ -165,14 +158,8 @@ where
 }
 
 #[async_trait::async_trait]
-impl<
-    Cryptarchia,
-    NetAdapter,
-    Mempool,
-    MempoolNetAdapter,
-    TimeBackend,
-    RuntimeServiceId,
-> ServiceCore<RuntimeServiceId>
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
+    ServiceCore<RuntimeServiceId>
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
@@ -242,10 +229,8 @@ where
             MempoolNetAdapter,
             NetAdapter,
             RuntimeServiceId,
-        > = ChainNetworkRelays::from_service_resources_handle::<_>(
-            &self.service_resources_handle,
-        )
-        .await;
+        > = ChainNetworkRelays::from_service_resources_handle::<_>(&self.service_resources_handle)
+            .await;
 
         let ChainNetworkSettings {
             config: ledger_config,
@@ -396,22 +381,8 @@ where
     }
 }
 
-impl<
-    Cryptarchia,
-    NetAdapter,
-    Mempool,
-    MempoolNetAdapter,
-    TimeBackend,
-    RuntimeServiceId,
->
-    ChainNetwork<
-        Cryptarchia,
-        NetAdapter,
-        Mempool,
-        MempoolNetAdapter,
-        TimeBackend,
-        RuntimeServiceId,
-    >
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
+    ChainNetwork<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
     NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Item>, Proposal = Proposal>
@@ -606,10 +577,7 @@ where
 /// Try to add a [`Block`] to [`Cryptarchia`].
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
-#[instrument(
-    level = "debug",
-    skip(blob_validation, cryptarchia, mempool_adapter)
-)]
+#[instrument(level = "debug", skip(blob_validation, cryptarchia, mempool_adapter))]
 async fn process_block<BlobStrategy, Cryptarchia, Mempool, RuntimeServiceId>(
     block: Block<Cryptarchia::Tx>,
     blob_validation: Option<&blob::Validation<BlobStrategy>>,

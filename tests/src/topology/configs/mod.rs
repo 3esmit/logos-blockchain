@@ -7,25 +7,20 @@ pub mod time;
 pub mod tracing;
 
 use blend::GeneralBlendConfig;
-use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
-use key_management_system_service::{
-    backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
-};
+use consensus::{create_genesis_tx_with_declarations, GeneralConsensusConfig, ProviderInfo};
+use key_management_system_service::backend::preload::PreloadKMSBackendSettings;
 use network::GeneralNetworkConfig;
 use nomos_core::{
     mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
 use nomos_utils::net::get_available_udp_port;
-use rand::{Rng as _, thread_rng};
+use rand::{thread_rng, Rng as _};
 use tracing::GeneralTracingConfig;
 
-use crate::{
-    common::kms::key_id_for_preload_backend,
-    topology::configs::{
-        api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
-        time::GeneralTimeConfig,
-    },
+use crate::topology::configs::{
+    api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, network::NetworkParams,
+    time::GeneralTimeConfig,
 };
 
 #[derive(Clone)]

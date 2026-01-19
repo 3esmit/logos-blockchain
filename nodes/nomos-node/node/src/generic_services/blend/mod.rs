@@ -1,7 +1,6 @@
 use core::{
     fmt::{Debug, Display},
     future::ready,
-    marker::PhantomData,
     time::Duration,
 };
 
@@ -16,7 +15,6 @@ use nomos_blend_service::{
     membership::service::Adapter,
 };
 use nomos_core::crypto::ZkHash;
-use nomos_da_sampling::network::NetworkAdapter;
 use nomos_libp2p::PeerId;
 use nomos_time::backends::NtpTimeBackend;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
@@ -35,51 +33,47 @@ mod proofs;
 
 pub type BlendMembershipAdapter<RuntimeServiceId> =
     Adapter<BlockBroadcastService<RuntimeServiceId>, PeerId>;
-pub type BlendCoreService<SamplingAdapter, RuntimeServiceId> =
-    nomos_blend_service::core::BlendService<
-        nomos_blend_service::core::backends::libp2p::Libp2pBlendBackend,
-        PeerId,
-        nomos_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
-        BlendMembershipAdapter<RuntimeServiceId>,
-        SdpService<RuntimeServiceId>,
-        CoreProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
-        BlendProofsVerifier,
-        NtpTimeBackend,
-        CryptarchiaService<RuntimeServiceId>,
-        PolInfoProvider<SamplingAdapter>,
-        RuntimeServiceId,
-    >;
-pub type BlendEdgeService<SamplingAdapter, RuntimeServiceId> = nomos_blend_service::edge::BlendService<
-        nomos_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
-        PeerId,
-        <nomos_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as nomos_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
-        BlendMembershipAdapter<RuntimeServiceId>,
-        EdgeProofsGenerator,
-        NtpTimeBackend,
-        CryptarchiaService<RuntimeServiceId>,
-        PolInfoProvider<SamplingAdapter>,
-        RuntimeServiceId
-    >;
-pub type BlendService<SamplingAdapter, RuntimeServiceId> = nomos_blend_service::BlendService<
-    BlendCoreService<SamplingAdapter, RuntimeServiceId>,
-    BlendEdgeService<SamplingAdapter, RuntimeServiceId>,
+pub type BlendCoreService<RuntimeServiceId> = nomos_blend_service::core::BlendService<
+    nomos_blend_service::core::backends::libp2p::Libp2pBlendBackend,
+    PeerId,
+    nomos_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
+    BlendMembershipAdapter<RuntimeServiceId>,
+    SdpService<RuntimeServiceId>,
+    CoreProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
+    BlendProofsVerifier,
+    NtpTimeBackend,
+    CryptarchiaService<RuntimeServiceId>,
+    PolInfoProvider,
+    RuntimeServiceId,
+>;
+pub type BlendEdgeService<RuntimeServiceId> = nomos_blend_service::edge::BlendService<
+    nomos_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
+    PeerId,
+    <nomos_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as nomos_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
+    BlendMembershipAdapter<RuntimeServiceId>,
+    EdgeProofsGenerator,
+    NtpTimeBackend,
+    CryptarchiaService<RuntimeServiceId>,
+    PolInfoProvider,
+    RuntimeServiceId,
+>;
+pub type BlendService<RuntimeServiceId> = nomos_blend_service::BlendService<
+    BlendCoreService<RuntimeServiceId>,
+    BlendEdgeService<RuntimeServiceId>,
     RuntimeServiceId,
 >;
 
 /// The provider of a stream of winning `PoL` epoch slots for the Blend service,
 /// without introducing a cyclic dependency from Blend service to chain service.
-pub struct PolInfoProvider<SamplingAdapter>(PhantomData<SamplingAdapter>);
+pub struct PolInfoProvider;
 
 #[async_trait]
-impl<SamplingAdapter, RuntimeServiceId> PolInfoProviderTrait<RuntimeServiceId>
-    for PolInfoProvider<SamplingAdapter>
+impl<RuntimeServiceId> PolInfoProviderTrait<RuntimeServiceId> for PolInfoProvider
 where
-    SamplingAdapter: NetworkAdapter<RuntimeServiceId> + 'static,
     RuntimeServiceId: AsServiceId<
             CryptarchiaLeaderService<
                 CryptarchiaService<RuntimeServiceId>,
                 WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
-                SamplingAdapter,
                 RuntimeServiceId,
             >,
         > + Debug
@@ -101,7 +95,6 @@ where
             CryptarchiaLeaderService<
                 CryptarchiaService<RuntimeServiceId>,
                 WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
-                SamplingAdapter,
                 RuntimeServiceId,
             >
         )
@@ -111,7 +104,6 @@ where
             .relay::<CryptarchiaLeaderService<
                 CryptarchiaService<RuntimeServiceId>,
                 WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
-                SamplingAdapter,
                 RuntimeServiceId,
             >>()
             .await

@@ -1,7 +1,6 @@
 pub mod api;
 pub mod blend;
 pub mod consensus;
-pub mod da;
 pub mod deployment;
 pub mod network;
 pub mod time;
@@ -9,7 +8,6 @@ pub mod tracing;
 
 use blend::GeneralBlendConfig;
 use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
-use da::GeneralDaConfig;
 use key_management_system_service::{
     backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
 };
@@ -25,7 +23,7 @@ use tracing::GeneralTracingConfig;
 use crate::{
     common::kms::key_id_for_preload_backend,
     topology::configs::{
-        api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD, da::DaParams,
+        api::GeneralApiConfig, consensus::SHORT_PROLONGED_BOOTSTRAP_PERIOD,
         network::NetworkParams, time::GeneralTimeConfig,
     },
 };
@@ -34,7 +32,6 @@ use crate::{
 pub struct GeneralConfig {
     pub api_config: GeneralApiConfig,
     pub consensus_config: GeneralConsensusConfig,
-    pub da_config: GeneralDaConfig,
     pub network_config: GeneralNetworkConfig,
     pub blend_config: GeneralBlendConfig,
     pub tracing_config: GeneralTracingConfig,
@@ -71,19 +68,16 @@ pub fn create_general_configs_with_blend_core_subset(
     // Blend relies on each node declaring a different ZK public key, so we need
     // different IDs to generate different keys.
     let mut ids: Vec<_> = (0..n_nodes).map(|i| [i as u8; 32]).collect();
-    let mut da_ports = vec![];
     let mut blend_ports = vec![];
 
     for id in &mut ids {
         thread_rng().fill(id);
-        da_ports.push(get_available_udp_port().unwrap());
         blend_ports.push(get_available_udp_port().unwrap());
     }
 
     let mut consensus_configs =
         consensus::create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD);
     let network_configs = network::create_network_configs(&ids, network_params);
-    let da_configs = da::create_da_configs(&ids, &DaParams::default(), &da_ports);
     let api_configs = api::create_api_configs(&ids);
     let blend_configs = blend::create_blend_configs(&ids, &blend_ports);
     let tracing_configs = tracing::create_tracing_configs(&ids);
@@ -111,7 +105,7 @@ pub fn create_general_configs_with_blend_core_subset(
         c.override_genesis_tx(genesis_tx.clone());
     }
 
-    // Set Blend and DA keys in KMS of each node config.
+    // Set Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
         .iter()
         .map(|(blend_conf, zk_secret_key)| PreloadKMSBackendSettings {
@@ -137,7 +131,6 @@ pub fn create_general_configs_with_blend_core_subset(
         general_configs.push(GeneralConfig {
             api_config: api_configs[i].clone(),
             consensus_config: consensus_configs[i].clone(),
-            da_config: da_configs[i].clone(),
             network_config: network_configs[i].clone(),
             blend_config: blend_configs[i].clone(),
             tracing_config: tracing_configs[i].clone(),

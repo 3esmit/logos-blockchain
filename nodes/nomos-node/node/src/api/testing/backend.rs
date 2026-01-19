@@ -9,8 +9,6 @@ use axum::{
     routing::get,
 };
 use nomos_api::Backend;
-use nomos_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
-use nomos_da_sampling::network::adapters::validator::Libp2pAdapter as SamplingLibp2pAdapter;
 use nomos_http_api_common::{paths::MANTLE_SDP_DECLARATIONS, utils::create_rate_limit_layer};
 pub use nomos_network::backends::libp2p::Libp2p as NetworkBackend;
 use overwatch::{DynError, overwatch::handle::OverwatchHandle, services::AsServiceId};
@@ -24,35 +22,12 @@ use tower_http::{
 };
 
 use crate::{
-    DaMembershipStorage, DaNetworkApiAdapter, NomosDaMembership,
     api::{backend::AxumBackendSettings, testing::handlers::get_sdp_declarations},
-    generic_services::{self, DaMembershipAdapter, SdpService, SdpServiceAdapterGeneric},
+    generic_services::{self, SdpService},
 };
 pub struct TestAxumBackend {
     settings: AxumBackendSettings,
 }
-
-type TestDaNetworkService<RuntimeServiceId> = nomos_da_network_service::NetworkService<
-    DaNetworkValidatorBackend<NomosDaMembership>,
-    NomosDaMembership,
-    DaMembershipAdapter<RuntimeServiceId>,
-    DaMembershipStorage,
-    DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric<RuntimeServiceId>,
-    RuntimeServiceId,
->;
-
-type TestDaSamplingService<RuntimeServiceId> = generic_services::DaSamplingService<
-    SamplingLibp2pAdapter<
-        NomosDaMembership,
-        DaMembershipAdapter<RuntimeServiceId>,
-        DaMembershipStorage,
-        DaNetworkApiAdapter,
-        SdpServiceAdapterGeneric<RuntimeServiceId>,
-        RuntimeServiceId,
-    >,
-    RuntimeServiceId,
->;
 
 type TestCryptarchiaService<RuntimeServiceId> =
     generic_services::CryptarchiaService<RuntimeServiceId>;
@@ -69,8 +44,6 @@ where
         + Debug
         + Clone
         + 'static
-        + AsServiceId<TestDaNetworkService<RuntimeServiceId>>
-        + AsServiceId<TestDaSamplingService<RuntimeServiceId>>
         + AsServiceId<TestCryptarchiaService<RuntimeServiceId>>
         + AsServiceId<TestHttpCryptarchiaService<RuntimeServiceId>>
         + AsServiceId<SdpService<RuntimeServiceId>>

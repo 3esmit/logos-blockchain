@@ -10,27 +10,19 @@ use broadcast_service::BlockInfo;
 use chain_service::CryptarchiaInfo;
 use common_http_client::CommonHttpClient;
 use futures::Stream;
-use kzgrs_backend::common::share::{DaLightShare, DaShare, DaSharesCommitments};
 use nomos_core::{
     block::Block,
-    da::BlobId,
     mantle::{SignedMantleTx, Transaction as _, TxHash},
-    sdp::{Declaration, SessionNumber},
+    sdp::Declaration,
 };
-use nomos_da_network_core::swarm::{BalancerStats, MonitorStats};
-use nomos_da_network_service::MembershipResponse;
 use nomos_http_api_common::paths::{
-    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, DA_BALANCER_STATS, DA_GET_MEMBERSHIP,
-    DA_GET_SHARES_COMMITMENTS, DA_HISTORIC_SAMPLING, DA_MONITOR_STATS, MANTLE_SDP_DECLARATIONS,
+    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS,
     NETWORK_INFO, STORAGE_BLOCK,
 };
 use nomos_network::backends::libp2p::Libp2pInfo;
 use nomos_node::{
     Config, HeaderId, RocksBackendSettings,
-    api::{
-        backend::AxumBackendSettings, handlers::GetCommitmentsRequest,
-        testing::handlers::HistoricSamplingRequest,
-    },
+    api::backend::AxumBackendSettings,
     config::mempool::serde::Config as MempoolConfig,
 };
 use nomos_sdp::SdpSettings;
@@ -54,7 +46,6 @@ const BIN_PATH_DEBUG: &str = "../target/debug/nomos-node";
 const BIN_PATH_RELEASE: &str = "../target/release/nomos-node";
 
 pub enum Pool {
-    Da,
     Mantle,
 }
 
@@ -181,29 +172,9 @@ impl Validator {
             .unwrap()
     }
 
-    pub async fn get_commitments(
-        &self,
-        blob_id: BlobId,
-        session: SessionNumber,
-    ) -> Option<DaSharesCommitments> {
-        let request = GetCommitmentsRequest { blob_id, session };
-
-        CLIENT
-            .post(format!("http://{}{}", self.addr, DA_GET_SHARES_COMMITMENTS))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&request).unwrap())
-            .send()
-            .await
-            .unwrap()
-            .json::<Option<DaSharesCommitments>>()
-            .await
-            .unwrap()
-    }
-
     pub async fn get_mempoool_metrics(&self, pool: Pool) -> MempoolMetrics {
         let discr = match pool {
             Pool::Mantle => "mantle",
-            Pool::Da => "da",
         };
         let addr = format!("/{discr}/metrics");
         let res = self
@@ -231,29 +202,6 @@ impl Validator {
             .json::<Vec<Declaration>>()
             .await
             .expect("Failed to deserialize SDP declarations response")
-    }
-
-    pub async fn da_historic_sampling(
-        &self,
-        block_id: HeaderId,
-        blob_ids: Vec<(BlobId, SessionNumber)>,
-    ) -> Result<bool, reqwest::Error> {
-        let request = HistoricSamplingRequest { block_id, blob_ids };
-
-        let response = CLIENT
-            .post(format!(
-                "http://{}{}",
-                self.testing_http_addr, DA_HISTORIC_SAMPLING
-            ))
-            .json(&request)
-            .send()
-            .await?;
-
-        response.error_for_status_ref()?;
-
-        // Parse the boolean response
-        let success: bool = response.json().await?;
-        Ok(success)
     }
 
     // not async so that we can use this in `Drop`
@@ -313,73 +261,8 @@ impl Validator {
         res.unwrap().json().await.unwrap()
     }
 
-    pub async fn balancer_stats(&self) -> BalancerStats {
-        self.get(DA_BALANCER_STATS)
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap()
-    }
-
-    pub async fn monitor_stats(&self) -> MonitorStats {
-        self.get(DA_MONITOR_STATS)
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap()
-    }
-
-    pub async fn da_get_membership(
-        &self,
-        session_id: SessionNumber,
-    ) -> Result<MembershipResponse, reqwest::Error> {
-        let response = CLIENT
-            .post(format!(
-                "http://{}{}",
-                self.testing_http_addr, DA_GET_MEMBERSHIP
-            ))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&session_id).unwrap())
-            .send()
-            .await?;
-
-        response.error_for_status()?.json().await
-    }
-
     pub async fn network_info(&self) -> Libp2pInfo {
         self.get(NETWORK_INFO).await.unwrap().json().await.unwrap()
-    }
-
-    pub async fn get_shares(
-        &self,
-        blob_id: BlobId,
-        requested_shares: HashSet<[u8; 2]>,
-        filter_shares: HashSet<[u8; 2]>,
-        return_available: bool,
-    ) -> Result<impl Stream<Item = DaLightShare>, common_http_client::Error> {
-        self.http_client
-            .get_shares::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-                requested_shares,
-                filter_shares,
-                return_available,
-            )
-            .await
-    }
-
-    pub async fn get_storage_commitments(
-        &self,
-        blob_id: BlobId,
-    ) -> Result<Option<DaSharesCommitments>, common_http_client::Error> {
-        self.http_client
-            .get_storage_commitments::<DaShare>(
-                Url::from_str(&format!("http://{}", self.addr))?,
-                blob_id,
-            )
-            .await
     }
 
     pub async fn get_lib_stream(

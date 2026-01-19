@@ -29,7 +29,6 @@ use crate::{
 
 pub mod blend;
 pub mod cryptarchia;
-pub mod da;
 pub mod deployment;
 pub mod mempool;
 pub mod network;

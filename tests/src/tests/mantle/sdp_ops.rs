@@ -4,7 +4,7 @@ use common_http_client::CommonHttpClient;
 use key_management_system_service::keys::{Ed25519Key, ZkKey};
 use nomos_core::{
     mantle::{Note, NoteId, Transaction as _},
-    sdp::{ActiveMessage, Declaration, Locator, ServiceType, SessionNumber, WithdrawMessage},
+    sdp::{ActiveMessage, Declaration, Locator, ServiceType, WithdrawMessage},
 };
 use num_bigint::BigUint;
 use serial_test::serial;
@@ -41,9 +41,9 @@ async fn sdp_ops_e2e() {
 
     topology.wait_network_ready().await;
 
-    topology
-        .wait_membership_ready_for_session(SessionNumber::from(0u64))
-        .await;
+    // topology
+    //     .wait_membership_ready_for_session(SessionNumber::from(0u64))
+    //     .await;
 
     let validator = &topology.validators()[0];
 

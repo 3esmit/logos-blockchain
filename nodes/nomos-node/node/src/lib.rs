@@ -3,9 +3,6 @@ pub mod config;
 pub mod generic_services;
 
 use color_eyre::eyre::{Result, eyre};
-use generic_services::{SamplingMempoolAdapter, VerifierMempoolAdapter};
-use kzgrs_backend::common::share::DaShare;
-pub use kzgrs_backend::dispersal::BlobInfo;
 pub use nomos_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackend as BlendBackend,
@@ -18,23 +15,6 @@ pub use nomos_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash, select::FillSize as FillSizeWithTx},
 };
-pub use nomos_da_network_service::backends::libp2p::validator::DaNetworkValidatorBackend;
-use nomos_da_network_service::{
-    DaAddressbook, api::http::HttApiAdapter, membership::handler::DaMembershipHandler,
-};
-use nomos_da_sampling::{
-    backend::kzgrs::KzgrsSamplingBackend,
-    network::adapters::validator::Libp2pAdapter as SamplingLibp2pAdapter,
-    storage::adapters::rocksdb::{
-        RocksAdapter as SamplingStorageAdapter, converter::DaStorageConverter,
-    },
-};
-use nomos_da_verifier::{
-    backend::kzgrs::KzgrsDaVerifier,
-    network::adapters::validator::Libp2pAdapter as VerifierNetworkAdapter,
-    storage::adapters::rocksdb::RocksAdapter as VerifierStorageAdapter,
-};
-use nomos_libp2p::PeerId;
 pub use nomos_network::backends::libp2p::Libp2p as NetworkBackend;
 use nomos_sdp::SdpSettings;
 pub use nomos_storage::backends::{
@@ -49,7 +29,6 @@ use overwatch::{
     DynError, derive_services,
     overwatch::{Error as OverwatchError, Overwatch, OverwatchRunner},
 };
-use subnetworks_assignations::versions::history_aware_refill::HistoryAware;
 use tx_service::storage::adapters::RocksStorageAdapter;
 pub use tx_service::{
     network::adapters::libp2p::{
@@ -67,78 +46,23 @@ use crate::{
         mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
         time::ServiceConfig as TimeConfig,
     },
-    generic_services::{
-        DaMembershipAdapter, DaMembershipStorageGeneric, SdpMempoolAdapterGeneric, SdpService,
-        SdpServiceAdapterGeneric,
-    },
+    generic_services::{SdpMempoolAdapterGeneric, SdpService},
 };
 
-pub const DA_TOPIC: &str = "da";
 pub const MB16: usize = 1024 * 1024 * 16;
-
-/// Membership used by the DA Network service.
-pub type NomosDaMembership = HistoryAware<PeerId>;
-type DaMembershipStorage = DaMembershipStorageGeneric<RuntimeServiceId>;
-pub type DaNetworkApiAdapter = HttApiAdapter<DaMembershipHandler<NomosDaMembership>, DaAddressbook>;
 
 #[cfg(feature = "tracing")]
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
 pub(crate) type NetworkService = nomos_network::NetworkService<NetworkBackend, RuntimeServiceId>;
 
-pub(crate) type DaSamplingAdapter = SamplingLibp2pAdapter<
-    NomosDaMembership,
-    DaMembershipAdapter<RuntimeServiceId>,
-    DaMembershipStorage,
-    DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric<RuntimeServiceId>,
-    RuntimeServiceId,
->;
-
-pub(crate) type BlendCoreService =
-    generic_services::blend::BlendCoreService<DaSamplingAdapter, RuntimeServiceId>;
-pub(crate) type BlendEdgeService =
-    generic_services::blend::BlendEdgeService<DaSamplingAdapter, RuntimeServiceId>;
-pub(crate) type BlendService =
-    generic_services::blend::BlendService<DaSamplingAdapter, RuntimeServiceId>;
+pub(crate) type BlendCoreService = generic_services::blend::BlendCoreService<RuntimeServiceId>;
+pub(crate) type BlendEdgeService = generic_services::blend::BlendEdgeService<RuntimeServiceId>;
+pub(crate) type BlendService = generic_services::blend::BlendService<RuntimeServiceId>;
 
 pub(crate) type BlockBroadcastService = broadcast_service::BlockBroadcastService<RuntimeServiceId>;
-pub(crate) type DaVerifierService = generic_services::DaVerifierService<
-    VerifierNetworkAdapter<
-        NomosDaMembership,
-        DaMembershipAdapter<RuntimeServiceId>,
-        DaMembershipStorage,
-        DaNetworkApiAdapter,
-        SdpServiceAdapterGeneric<RuntimeServiceId>,
-        RuntimeServiceId,
-    >,
-    VerifierMempoolAdapter<RuntimeServiceId>,
-    RuntimeServiceId,
->;
-
-pub(crate) type DaSamplingService =
-    generic_services::DaSamplingService<DaSamplingAdapter, RuntimeServiceId>;
-
-pub(crate) type DaNetworkService = nomos_da_network_service::NetworkService<
-    DaNetworkValidatorBackend<NomosDaMembership>,
-    NomosDaMembership,
-    DaMembershipAdapter<RuntimeServiceId>,
-    DaMembershipStorage,
-    DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric<RuntimeServiceId>,
-    RuntimeServiceId,
->;
 
 pub(crate) type MempoolService = generic_services::TxMempoolService<RuntimeServiceId>;
-
-pub(crate) type DaNetworkAdapter = nomos_da_sampling::network::adapters::validator::Libp2pAdapter<
-    NomosDaMembership,
-    DaMembershipAdapter<RuntimeServiceId>,
-    DaMembershipStorage,
-    DaNetworkApiAdapter,
-    SdpServiceAdapterGeneric<RuntimeServiceId>,
-    RuntimeServiceId,
->;
 
 pub(crate) type KeyManagementService = generic_services::KeyManagementService<RuntimeServiceId>;
 
@@ -149,12 +73,8 @@ pub(crate) type CryptarchiaService = generic_services::CryptarchiaService<Runtim
 
 pub(crate) type ChainNetworkService = generic_services::ChainNetworkService<RuntimeServiceId>;
 
-pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderService<
-    CryptarchiaService,
-    WalletService,
-    DaNetworkAdapter,
-    RuntimeServiceId,
->;
+pub(crate) type CryptarchiaLeaderService =
+    generic_services::CryptarchiaLeaderService<CryptarchiaService, WalletService, RuntimeServiceId>;
 
 pub(crate) type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
@@ -163,36 +83,7 @@ pub(crate) type ApiStorageAdapter<RuntimeServiceId> =
 
 pub(crate) type ApiService = nomos_api::ApiService<
     AxumBackend<
-        DaShare,
-        NomosDaMembership,
-        DaMembershipAdapter<RuntimeServiceId>,
-        DaMembershipStorage,
-        KzgrsDaVerifier,
-        VerifierNetworkAdapter<
-            NomosDaMembership,
-            DaMembershipAdapter<RuntimeServiceId>,
-            DaMembershipStorage,
-            DaNetworkApiAdapter,
-            SdpServiceAdapterGeneric<RuntimeServiceId>,
-            RuntimeServiceId,
-        >,
-        VerifierStorageAdapter<DaShare, DaStorageConverter>,
-        DaStorageConverter,
-        KzgrsSamplingBackend,
-        nomos_da_sampling::network::adapters::validator::Libp2pAdapter<
-            NomosDaMembership,
-            DaMembershipAdapter<RuntimeServiceId>,
-            DaMembershipStorage,
-            DaNetworkApiAdapter,
-            SdpServiceAdapterGeneric<RuntimeServiceId>,
-            RuntimeServiceId,
-        >,
-        SamplingMempoolAdapter<RuntimeServiceId>,
-        SamplingStorageAdapter<DaShare, DaStorageConverter>,
-        VerifierMempoolAdapter<RuntimeServiceId>,
         NtpTimeBackend,
-        DaNetworkApiAdapter,
-        SdpServiceAdapterGeneric<RuntimeServiceId>,
         ApiStorageAdapter<RuntimeServiceId>,
         RocksStorageAdapter<SignedMantleTx, TxHash>,
         SdpMempoolAdapterGeneric<RuntimeServiceId>,
@@ -216,9 +107,6 @@ pub struct Nomos {
     blend: BlendService,
     blend_core: BlendCoreService,
     blend_edge: BlendEdgeService,
-    da_verifier: DaVerifierService,
-    da_sampling: DaSamplingService,
-    da_network: DaNetworkService,
     mempool: MempoolService,
     cryptarchia: CryptarchiaService,
     chain_network: ChainNetworkService,
@@ -275,11 +163,6 @@ pub fn run_node_from_config(config: Config) -> Result<Overwatch<RuntimeServiceId
             tracing: config.tracing,
             http: config.http,
             mempool: mempool_service_config,
-            // DA services are disabled - use placeholder settings.
-            // These services won't be started but settings are needed for type system.
-            da_network: config::da::disabled_da_network_settings(),
-            da_sampling: config::da::disabled_da_sampling_settings(),
-            da_verifier: config::da::disabled_da_verifier_settings(),
             cryptarchia: chain_service_config,
             chain_network: chain_network_config,
             cryptarchia_leader: chain_leader_config,
@@ -307,16 +190,6 @@ pub async fn get_services_to_start(
     // on demand by the blend service.
     let blend_inner_service_ids = [RuntimeServiceId::BlendCore, RuntimeServiceId::BlendEdge];
     service_ids.retain(|value| !blend_inner_service_ids.contains(value));
-
-    // DA services are disabled - exclude them from starting.
-    // The services remain in the Nomos struct for type system compatibility
-    // but are not started.
-    let da_service_ids = [
-        RuntimeServiceId::DaVerifier,
-        RuntimeServiceId::DaSampling,
-        RuntimeServiceId::DaNetwork,
-    ];
-    service_ids.retain(|value| !da_service_ids.contains(value));
 
     Ok(service_ids)
 }

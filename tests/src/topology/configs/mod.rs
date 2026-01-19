@@ -7,7 +7,7 @@ pub mod time;
 pub mod tracing;
 
 use blend::GeneralBlendConfig;
-use consensus::{create_genesis_tx_with_declarations, GeneralConsensusConfig, ProviderInfo};
+use consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations};
 use key_management_system_service::backend::preload::PreloadKMSBackendSettings;
 use network::GeneralNetworkConfig;
 use nomos_core::{
@@ -15,7 +15,7 @@ use nomos_core::{
     sdp::{Locator, ServiceType},
 };
 use nomos_utils::net::get_available_udp_port;
-use rand::{thread_rng, Rng as _};
+use rand::{Rng as _, thread_rng};
 use tracing::GeneralTracingConfig;
 
 use crate::topology::configs::{

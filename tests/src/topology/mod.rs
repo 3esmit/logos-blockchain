@@ -9,9 +9,7 @@ use configs::{
     tracing::create_tracing_configs,
 };
 use futures::future::join_all;
-use key_management_system_service::{
-    backend::preload::PreloadKMSBackendSettings, keys::Ed25519Key,
-};
+use key_management_system_service::backend::preload::PreloadKMSBackendSettings;
 use nomos_core::{
     mantle::{GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType},
@@ -23,7 +21,6 @@ use tokio::time::{sleep, timeout};
 
 use crate::{
     adjust_timeout,
-    common::kms::key_id_for_preload_backend,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         api::create_api_configs,

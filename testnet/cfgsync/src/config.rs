@@ -153,9 +153,9 @@ fn create_providers(
     blend_configs
         .iter()
         .enumerate()
-        .map(|(i, (blend_conf, secret_zk_key))| ProviderInfo {
+        .map(|(i, (_, private_key, secret_zk_key))| ProviderInfo {
             service_type: ServiceType::BlendNetwork,
-            provider_sk: blend_conf.non_ephemeral_signing_key.clone().into(),
+            provider_sk: private_key.clone(),
             zk_sk: secret_zk_key.clone(),
             locator: Locator(
                 Multiaddr::from_str(&format!(

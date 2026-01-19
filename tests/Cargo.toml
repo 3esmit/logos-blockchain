@@ -15,7 +15,6 @@ workspace = true
 
 [dependencies]
 async-trait                    = "0.1"
-blst                           = { version = "0.3.11" }
 broadcast-service              = { workspace = true }
 chain-leader                   = { workspace = true }
 chain-network                  = { workspace = true }
@@ -30,12 +29,9 @@ futures-util                   = { default-features = false, version = "0.3.31" 
 groth16                        = { workspace = true }
 hex                            = { default-features = false, version = "0.4.3" }
 key-management-system-service  = { workspace = true }
-kzgrs-backend                  = { workspace = true }
 nomos-api                      = { workspace = true }
 nomos-blend-service            = { features = ["libp2p"], workspace = true }
 nomos-core                     = { workspace = true }
-nomos-da-network-core          = { workspace = true }
-nomos-da-network-service       = { workspace = true }
 nomos-http-api-common          = { workspace = true }
 nomos-libp2p                   = { workspace = true }
 nomos-network                  = { features = ["libp2p"], workspace = true }
@@ -52,7 +48,6 @@ reqwest                        = { features = ["json"], workspace = true }
 serde_json                     = "1.0"
 serde_yaml                     = "0.9"
 serial_test                    = "3.1.1"
-subnetworks-assignations       = { workspace = true }
 tempfile                       = { workspace = true }
 testing-framework-core         = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }
 testing-framework-runner-local = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", branch = "master" }

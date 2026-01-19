@@ -20,7 +20,6 @@ cryptarchia-engine = { features = ["serde"], workspace = true }
 cryptarchia-sync   = { workspace = true }
 futures            = { default-features = false, version = "0.3" }
 nomos-core         = { workspace = true }
-nomos-da-sampling  = { workspace = true }
 nomos-ledger       = { features = ["serde"], workspace = true }
 nomos-network      = { workspace = true }
 nomos-time         = { workspace = true }

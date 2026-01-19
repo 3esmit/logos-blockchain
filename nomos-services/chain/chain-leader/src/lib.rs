@@ -9,7 +9,7 @@ use std::{fmt::Display, iter, pin::Pin, time::Duration};
 use chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use cryptarchia_engine::{Epoch, Slot};
 use futures::{StreamExt as _, future, stream};
-use key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
+use key_management_system_keys::keys::Ed25519Key;
 pub use leadership::LeaderConfig;
 use nomos_core::{
     block::{Block, Error as BlockError, MAX_TRANSACTIONS},
@@ -45,6 +45,8 @@ use crate::{
     relays::CryptarchiaConsensusRelays,
 };
 
+pub(crate) type WinningPolInfo = (LeaderPrivate, Epoch);
+
 const LEADER_ID: &str = "Leader";
 
 pub(crate) const LOG_TARGET: &str = "cryptarchia::leader";
@@ -78,7 +80,7 @@ pub enum LeaderMsg {
     /// * a new consumer subscribes -> the latest value that was sent to all the
     ///   other consumers, if any
     WinningPolEpochSlotStreamSubscribe {
-        sender: oneshot::Sender<watch::Receiver<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>>,
+        sender: oneshot::Sender<watch::Receiver<Option<WinningPolInfo>>>,
     },
 }
 
@@ -120,7 +122,7 @@ pub struct CryptarchiaLeader<
     Wallet: nomos_wallet::api::WalletServiceData,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    winning_pol_epoch_slots_sender: watch::Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+    winning_pol_epoch_slots_sender: watch::Sender<Option<WinningPolInfo>>,
 }
 
 impl<
@@ -587,7 +589,7 @@ where
 
 fn handle_inbound_message(
     msg: LeaderMsg,
-    winning_pol_epoch_slots_sender: &watch::Sender<Option<(LeaderPrivate, UnsecuredZkKey, Epoch)>>,
+    winning_pol_epoch_slots_sender: &watch::Sender<Option<WinningPolInfo>>,
 ) {
     let LeaderMsg::WinningPolEpochSlotStreamSubscribe { sender } = msg;
 

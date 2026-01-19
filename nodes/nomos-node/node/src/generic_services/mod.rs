@@ -49,7 +49,7 @@ pub type MempoolBackend<RuntimeServiceId> = Mempool<
 >;
 
 pub type CryptarchiaService<RuntimeServiceId> =
-    CryptarchiaConsensus<SignedMantleTx, RocksBackend, RuntimeServiceId>;
+    CryptarchiaConsensus<SignedMantleTx, RocksBackend, NtpTimeBackend, RuntimeServiceId>;
 
 pub type ChainNetworkService<RuntimeServiceId> = chain_network::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,

@@ -87,13 +87,15 @@ pub fn create_general_configs_with_blend_core_subset(
         .iter()
         .enumerate()
         .take(n_blend_core_nodes)
-        .map(|(i, (blend_conf, secret_zk_key))| ProviderInfo {
-            service_type: ServiceType::BlendNetwork,
-            provider_sk: blend_conf.non_ephemeral_signing_key.clone().into(),
-            zk_sk: secret_zk_key.clone(),
-            locator: Locator(blend_conf.core.backend.listening_address.clone()),
-            note: consensus_configs[0].blend_notes[i].clone(),
-        })
+        .map(
+            |(i, (blend_conf, private_key, secret_zk_key))| ProviderInfo {
+                service_type: ServiceType::BlendNetwork,
+                provider_sk: private_key.clone(),
+                zk_sk: secret_zk_key.clone(),
+                locator: Locator(blend_conf.core.backend.listening_address.clone()),
+                note: consensus_configs[0].blend_notes[i].clone(),
+            },
+        )
         .collect();
     let ledger_tx = consensus_configs[0]
         .genesis_tx()
@@ -108,21 +110,21 @@ pub fn create_general_configs_with_blend_core_subset(
     // Set Blend keys in KMS of each node config.
     let kms_configs: Vec<_> = blend_configs
         .iter()
-        .map(|(blend_conf, zk_secret_key)| PreloadKMSBackendSettings {
-            keys: [
-                (
-                    key_id_for_preload_backend(
-                        &Ed25519Key::from(blend_conf.non_ephemeral_signing_key.clone()).into(),
+        .map(
+            |(blend_conf, private_key, zk_secret_key)| PreloadKMSBackendSettings {
+                keys: [
+                    (
+                        blend_conf.non_ephemeral_signing_key_id.clone(),
+                        private_key.clone().into(),
                     ),
-                    Ed25519Key::from(blend_conf.non_ephemeral_signing_key.clone()).into(),
-                ),
-                (
-                    blend_conf.core.zk.secret_key_kms_id.clone(),
-                    zk_secret_key.clone().into(),
-                ),
-            ]
-            .into(),
-        })
+                    (
+                        blend_conf.core.zk.secret_key_kms_id.clone(),
+                        zk_secret_key.clone().into(),
+                    ),
+                ]
+                .into(),
+            },
+        )
         .collect();
 
     let mut general_configs = vec![];

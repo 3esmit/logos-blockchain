@@ -7848,6 +7848,7 @@ dependencies = [
  "futures",
  "key-management-system-keys 0.1.0",
  "nomos-core 0.1.0",
+ "nomos-wallet 0.1.0",
  "overwatch",
  "serde",
  "thiserror 2.0.17",

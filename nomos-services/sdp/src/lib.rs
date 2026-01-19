@@ -134,7 +134,7 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        let wallet_adapter = MockWalletAdapter::new();
+        let wallet_adapter = MockWalletAdapter::new(());
         let mempool_relay = self
             .service_resources_handle
             .overwatch_handle

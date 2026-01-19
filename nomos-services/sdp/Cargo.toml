@@ -17,6 +17,7 @@ async-trait                = "0.1"
 futures                    = { default-features = false, version = "0.3" }
 key-management-system-keys = { workspace = true }
 nomos-core                 = { workspace = true }
+nomos-wallet               = { workspace = true }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true, features = ["derive"] }
 thiserror                  = { workspace = true }

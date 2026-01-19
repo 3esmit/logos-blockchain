@@ -4,9 +4,11 @@ use std::pin::Pin;
 
 use futures::Stream;
 use nomos_core::{
-    mantle::{Op, SignedMantleTx, mock::MockTransaction},
+    mantle::{Op, SignedMantleTx},
     sdp::{ActivityMetadata, ServiceType},
 };
+#[cfg(feature = "mock")]
+use nomos_core::mantle::mock::MockTransaction;
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +45,7 @@ impl DaOpsCheck for SignedMantleTx {
 }
 
 /// Mock transactions never contain DA operations.
+#[cfg(feature = "mock")]
 impl<M> DaOpsCheck for MockTransaction<M> {
     fn has_da_ops(&self) -> bool {
         false

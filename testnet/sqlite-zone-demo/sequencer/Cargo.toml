@@ -1,0 +1,16 @@
+[package]
+categories  = { workspace = true }
+description = "Sqlite sequencer"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "demo-sqlite-sequencer"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+rusqlite = { version = "0.38.0", features = ["bundled"] }

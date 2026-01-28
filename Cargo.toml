@@ -60,6 +60,7 @@ members = [
   "testnet/cfgsync",
   "testnet/faucet",
   "testnet/l2-sequencer-archival-demo/archiver",
+  "testnet/sqlite-zone-demo/sequencer",
   "testnet/l2-sequencer-archival-demo/sequencer",
   "tests",
   "tests/testing_framework",
@@ -85,6 +86,7 @@ resolver = "2"
 [workspace.dependencies]
 # Internal
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
+demo-sqlite-sequencer            = { default-features = false, path = "./testnet/sqlite-zone-demo/sequencer" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }

@@ -116,3 +116,7 @@ harness           = false                        # Cucumber will have its own ma
 name              = "cucumber"
 path              = "cucumber_tests/cucumber.rs"
 required-features = ["cucumber"]
+
+[[test]]
+name = "generate_config"
+path = "src/tests/generate_config.rs"

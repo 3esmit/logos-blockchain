@@ -90,6 +90,7 @@ test-log = { default-features = false, features = ["trace"], version = "0.2.18" 
 block-explorer  = ["lb-api-service/block-explorer"]
 default         = ["tracing"]
 instrumentation = []
+pol-dev-mode    = ["lb-chain-leader-service/pol-dev-mode", "lb-chain-network-service/pol-dev-mode", "lb-chain-service/pol-dev-mode", "lb-core/pol-dev-mode", "lb-pol/high-active-slot-coefficient"]
 profiling       = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
 testing         = ["lb-key-management-system-service/unsafe"]
 tracing         = []

@@ -13,4 +13,21 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-rusqlite = { version = "0.38.0", features = ["bundled"] }
+rusqlite                         = { version = "0.38.0", features = ["bundled", "trace"] }
+axum                             = { default-features = false, features = ["http1", "http2", "json", "tokio", "macros"], version = "0.7.5" }
+hex                              = "0.4"
+lb-common-http-client            = { workspace = true }
+lb-core                          = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+owo-colors                       = { default-features = false, version = "4.2.3" }
+rand                             = { workspace = true }
+reqwest                          = { features = ["json", "rustls-tls"], workspace = true }
+serde                            = { features = ["derive"], workspace = true }
+serde_json                       = { workspace = true }
+thiserror                        = { workspace = true }
+tokio                            = { default-features = false, features = ["macros", "net", "rt-multi-thread", "signal", "sync"], version = "1" }
+tokio-util                       = { version = "0.7" }
+tower-http                       = { features = ["cors"], version = "0.6.8" }
+tracing                          = { workspace = true }
+tracing-subscriber               = { features = ["env-filter"], version = "0.3" }
+fs2                              = "0.4"

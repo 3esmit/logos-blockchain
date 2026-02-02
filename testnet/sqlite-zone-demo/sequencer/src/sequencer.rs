@@ -1,12 +1,10 @@
-use std::{collections::HashSet, fs, io, path::Path, time::Duration};
-use rusqlite::{Connection, Result};
+use std::{collections::HashSet, fs::OpenOptions, io::{BufRead, BufReader}, path::Path, time::Duration, io, fs};
+use fs2::FileExt;
 
-use common_http_client::CommonHttpClient;
-use demo_sqlite_sequencer::{
-    db::{Menu, Dish},
-};
-use key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use nomos_core::{
+use lb_common_http_client::CommonHttpClient;
+use demo_sqlite_sequencer::db::MessageIdTable;
+use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
@@ -19,63 +17,49 @@ use nomos_core::{
     },
 };
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
+use rusqlite::Error as SqliteError;
+
 #[derive(Debug, Error)]
 pub enum SequencerError {
-    #[error("Database error: {0}")]
-    Db(#[from] rusqlite::Error),
     #[error("HTTP client error: {0}")]
-    Http(#[from] common_http_client::Error),
+    Http(#[from] lb_common_http_client::Error),
     #[error("URL parse error: {0}")]
     Url(String),
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] SqliteError),
     #[error("Invalid key file: expected {expected} bytes, got {actual}")]
     InvalidKeyFile { expected: usize, actual: usize },
     #[error("{0}")]
     InvalidChannelId(String),
     #[error("Transaction not included after timeout")]
     Timeout,
-    #[error("Serialization error: {0}")]
-    Serialization(String),
-}
-
-impl From<DbError> for SequencerError {
-    fn from(err: DbError) -> Self {
-        Self::Db(Box::new(err))
-    }
+    #[error("UTF8 conversion error: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
 }
 
 pub type Result<T> = std::result::Result<T, SequencerError>;
 
-/// Pending transfer stored in the DB queue
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingTransfer {
-    pub tx_id: String,
-    #[serde(default)]
-    pub tx_index: u64,
-    pub request: TransferRequest,
-    pub from_balance: u64,
-    pub to_balance: u64,
-}
-
 /// The sequencer that handles transactions
 pub struct Sequencer {
-    db: Menu,
+    db_path: String,
+    state_db: MessageIdTable,
     http_client: CommonHttpClient,
     node_url: Url,
     signing_key: Ed25519Key,
     channel_id: ChannelId,
+    queue_file: String,
 }
 
 const MAX_DEPTH_PER_POLL: usize = 50;
 
-fn empty_ledger_signature(tx_hash: &TxHash) -> key_management_system_service::keys::ZkSignature {
-    key_management_system_service::keys::ZkKey::multi_sign(&[], tx_hash.as_ref())
+fn empty_ledger_signature(tx_hash: &TxHash) -> lb_key_management_system_service::keys::ZkSignature {
+    lb_key_management_system_service::keys::ZkKey::multi_sign(&[], tx_hash.as_ref())
         .expect("multi-sign with empty key set works")
 }
 
@@ -104,17 +88,19 @@ fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
 
 impl Sequencer {
     pub fn new(
-        db: Menu,
+        db_path: &str,
+        state_db: MessageIdTable,
         node_endpoint: &str,
         signing_key_path: &str,
         channel_id_str: &str,
         node_auth_username: Option<String>,
         node_auth_password: Option<String>,
+        queue_file: &str,
     ) -> Result<Self> {
         let node_url = Url::parse(node_endpoint).map_err(|e| SequencerError::Url(e.to_string()))?;
 
         let basic_auth = node_auth_username.map(|username| {
-            common_http_client::BasicAuthCredentials::new(username, node_auth_password)
+            lb_common_http_client::BasicAuthCredentials::new(username, node_auth_password)
         });
         let http_client = CommonHttpClient::new(basic_auth);
 
@@ -138,81 +124,31 @@ impl Sequencer {
         info!("Channel ID: {}", hex::encode(channel_id.as_ref()));
 
         Ok(Self {
-            db,
+            db_path: db_path.to_string(),
+            state_db,
             http_client,
             node_url,
             signing_key,
             channel_id,
+            queue_file: queue_file.to_string(),
         })
     }
 
     /// Get the last message ID from the database, or root if not set
     async fn get_last_msg_id(&self) -> Result<MsgId> {
-        (self.db.get_last_msg_id().await?)
+        (self.state_db.get_last_msg_id().await?)
             .map_or_else(|| Ok(MsgId::root()), |bytes| Ok(MsgId::from(bytes)))
     }
 
     /// Save the last message ID to the database
     async fn set_last_msg_id(&self, msg_id: MsgId) -> Result<()> {
         let bytes: [u8; 32] = msg_id.into();
-        self.db.set_last_msg_id(&bytes).await?;
-        Ok(())
-    }
-
-    /// Create and sign a transaction for inscribing data
-    fn create_inscribe_tx(&self, data: Vec<u8>, parent: MsgId) -> SignedMantleTx {
-        let verifying_key_bytes = self.signing_key.public_key().to_bytes();
-        let verifying_key =
-            Ed25519PublicKey::from_bytes(&verifying_key_bytes).expect("valid ed25519 public key");
-
-        let inscribe_op = InscriptionOp {
-            channel_id: self.channel_id,
-            inscription: data,
-            parent,
-            signer: verifying_key,
-        };
-
-        let ledger_tx = LedgerTx::new(vec![], vec![]);
-
-        let inscribe_tx = MantleTx {
-            ops: vec![Op::ChannelInscribe(inscribe_op)],
-            ledger_tx,
-            storage_gas_price: 0,
-            execution_gas_price: 0,
-        };
-
-        let tx_hash = inscribe_tx.hash();
-        let signature_bytes = self
-            .signing_key
-            .sign_payload(tx_hash.as_signing_bytes().as_ref())
-            .to_bytes();
-        let signature =
-            key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
-
-        SignedMantleTx {
-            ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-            ledger_tx_proof: empty_ledger_signature(&tx_hash),
-            mantle_tx: inscribe_tx,
-        }
-    }
-
-    /// Post a transaction to the node and wait for inclusion
-    async fn post_and_wait(&self, tx: &SignedMantleTx) -> Result<()> {
-        // Post the transaction
-        self.http_client
-            .post_transaction(self.node_url.clone(), tx.clone())
-            .await?;
-
-        debug!("Transaction posted, waiting for inclusion...");
-
-        // Wait for the transaction to be included
-        self.wait_for_inclusion(tx).await?;
-
+        self.state_db.set_last_msg_id(&bytes).await?;
         Ok(())
     }
 
     fn block_contains_inscription(
-        block: &nomos_core::block::Block<SignedMantleTx>,
+        block: &lb_core::block::Block<SignedMantleTx>,
         expected: &InscriptionOp,
         block_id: HeaderId,
     ) -> bool {
@@ -348,65 +284,125 @@ impl Sequencer {
         Err(SequencerError::Timeout)
     }
 
-    /// Process a transfer request - validates, updates DB, adds to queue,
-    /// returns immediately
-    pub async fn process_transfer(&self, request: TransferRequest) -> Result<TransferResponse> {
-        info!(
-            "TRANSFER {} -> {} ({} tokens)",
-            request.from, request.to, request.amount
-        );
-
-        // Validate and update balances in the database first
-        let (from_balance, to_balance) = self
-            .db
-            .transfer(&request.from, &request.to, request.amount)
+    /// Post a transaction to the node and wait for inclusion
+    async fn post_and_wait(&self, tx: &SignedMantleTx) -> Result<()> {
+        // Post the transaction
+        self.http_client
+            .post_transaction(self.node_url.clone(), tx.clone())
             .await?;
 
-        // Generate transaction ID
-        let tx_id = {
-            let mut id_bytes = [0u8; 16];
-            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut id_bytes);
-            hex::encode(id_bytes)
+        debug!("Update posted, waiting for inclusion...");
+
+        // Wait for the transaction to be included
+        self.wait_for_inclusion(tx).await?;
+
+        Ok(())
+    }
+
+    /// Create and sign a transaction for inscribing data
+    fn create_inscribe_tx(&self, data: Vec<u8>, parent: MsgId) -> SignedMantleTx {
+        let verifying_key_bytes = self.signing_key.public_key().to_bytes();
+        let verifying_key =
+            Ed25519PublicKey::from_bytes(&verifying_key_bytes).expect("valid ed25519 public key");
+
+        let inscribe_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription: data,
+            parent,
+            signer: verifying_key,
         };
 
-        // Save transaction immediately with confirmed=false
-        let tx_index = self.db.next_tx_index().await?;
-        let tx = Transaction {
-            id: tx_id.clone(),
-            from: request.from.clone(),
-            to: request.to.clone(),
-            amount: request.amount,
-            confirmed: false,
-            index: tx_index,
-        };
-        let tx_data =
-            serde_json::to_vec(&tx).map_err(|e| SequencerError::Serialization(e.to_string()))?;
-        self.db.save_transaction(&tx_id, &tx_data).await?;
+        let ledger_tx = LedgerTx::new(vec![], vec![]);
 
-        // Create pending transfer and serialize for DB queue
-        let pending = PendingTransfer {
-            tx_id: tx_id.clone(),
-            tx_index,
-            request,
-            from_balance,
-            to_balance,
+        let inscribe_tx = MantleTx {
+            ops: vec![Op::ChannelInscribe(inscribe_op)],
+            ledger_tx,
+            storage_gas_price: 0,
+            execution_gas_price: 0,
         };
 
-        let data = serde_json::to_vec(&pending)
-            .map_err(|e| SequencerError::Serialization(e.to_string()))?;
+        let tx_hash = inscribe_tx.hash();
+        let signature_bytes = self
+            .signing_key
+            .sign_payload(tx_hash.as_signing_bytes().as_ref())
+            .to_bytes();
+        let signature =
+            lb_key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
 
-        // Add to DB queue
-        self.db.queue_push(&tx_id, &data).await?;
+        SignedMantleTx {
+            ops_proofs: vec![OpProof::Ed25519Sig(signature)],
+            ledger_tx_proof: empty_ledger_signature(&tx_hash),
+            mantle_tx: inscribe_tx,
+        }
+    }
 
-        let queue_len = self.db.queue_len().await?;
-        debug!("Queued tx {} (queue size: {})", tx_id, queue_len);
+    async fn create_and_post_block(
+        &self,
+        queries: Vec<String>,
+    ) -> Result<MsgId> {
+        let parent = self.get_last_msg_id().await?;
 
-        // Return success immediately - actual on-chain posting happens in background
-        Ok(TransferResponse {
-            from_balance,
-            to_balance,
-            tx_hash: tx_id,
-        })
+        let tx = self.create_inscribe_tx(
+            queries.join("\n").into_bytes(),
+            parent);
+
+        let new_msg_id = match tx.mantle_tx.ops.first() {
+            Some(Op::ChannelInscribe(inscribe)) => inscribe.id(),
+            _ => panic!("Expected ChannelInscribe op"),
+        };
+
+        self.post_and_wait(&tx).await?;
+
+        Ok(new_msg_id)
+    }
+
+    async fn queue_drain(&self) -> Result<Vec<String>> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.queue_file.clone())?;
+
+        
+        file.lock_exclusive()?;
+
+        let reader = BufReader::new(&file);
+        let mut queue_vec = Vec::new();
+        for query in reader.lines() {
+            queue_vec.push(query?.to_string());
+        }
+
+        file.set_len(0)?;
+
+        return Ok(queue_vec)
+    }
+
+    /// Process all pending queries as a single block
+    async fn process_pending_batch(&self) -> Result<()> {
+        let pending = self.queue_drain().await?;
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let count = pending.len();
+        debug!("Processing batch of {} queries", count);
+
+        match self.create_and_post_block(pending).await {
+            Ok(new_msg_id) => {
+                self.set_last_msg_id(new_msg_id).await?;
+                info!(
+                    "Message confirmed on chain, ID: {}", str::from_utf8(&<[u8; 32]>::from(new_msg_id))?);
+                Ok(())
+            }
+            Err(e) => {return Err(e)}
+        }
+    }
+
+    pub async fn queue_is_empty(&self) -> Result<bool> {
+        match fs::metadata(self.queue_file.clone()) {
+            Ok(meta) => Ok(meta.len() == 0),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Background processing loop - call this in a spawned task
@@ -415,7 +411,7 @@ impl Sequencer {
 
         loop {
             // Check if there are pending transfers
-            let is_empty = match self.db.queue_is_empty().await {
+            let is_empty = match self.queue_is_empty().await {
                 Ok(empty) => empty,
                 Err(e) => {
                     tracing::error!("Failed to check queue: {}", e);
@@ -432,137 +428,6 @@ impl Sequencer {
             // Drain and process all pending transfers
             if let Err(e) = self.process_pending_batch().await {
                 tracing::error!("Batch processing failed: {}", e);
-            }
-        }
-    }
-
-    fn deserialize_pending_transfers(items: &[(String, Vec<u8>)]) -> Vec<PendingTransfer> {
-        let mut pending = Vec::new();
-        for (tx_id, data) in items {
-            match serde_json::from_slice::<PendingTransfer>(data) {
-                Ok(p) => pending.push(p),
-                Err(e) => {
-                    tracing::error!("Failed to deserialize pending transfer {}: {}", tx_id, e);
-                }
-            }
-        }
-        pending
-    }
-
-    async fn revert_transfers(&self, pending: &[PendingTransfer]) {
-        for p in pending {
-            if let Err(revert_err) = self
-                .db
-                .transfer(&p.request.to, &p.request.from, p.request.amount)
-                .await
-            {
-                tracing::error!(
-                    "Failed to revert transfer {} -> {}: {}",
-                    p.request.from,
-                    p.request.to,
-                    revert_err
-                );
-            } else {
-                warn!(
-                    "REVERTED {} -> {} ({} tokens)",
-                    p.request.from, p.request.to, p.request.amount
-                );
-            }
-        }
-    }
-
-    async fn confirm_transactions(&self, pending: &[PendingTransfer]) -> Result<()> {
-        for p in pending {
-            let tx = Transaction {
-                id: p.tx_id.clone(),
-                from: p.request.from.clone(),
-                to: p.request.to.clone(),
-                amount: p.request.amount,
-                confirmed: true,
-                index: p.tx_index,
-            };
-            let tx_data = serde_json::to_vec(&tx)
-                .map_err(|e| SequencerError::Serialization(e.to_string()))?;
-            self.db.save_transaction(&tx.id, &tx_data).await?;
-        }
-        Ok(())
-    }
-
-    async fn create_and_post_block(
-        &self,
-        pending: &[PendingTransfer],
-    ) -> Result<(BlockData, MsgId)> {
-        let (block_id, parent_block_id) = self.db.next_block_id().await?;
-        let transactions: Vec<Transaction> = pending
-            .iter()
-            .map(|p| Transaction {
-                id: p.tx_id.clone(),
-                from: p.request.from.clone(),
-                to: p.request.to.clone(),
-                amount: p.request.amount,
-                confirmed: false,
-                index: p.tx_index,
-            })
-            .collect();
-
-        let block_data = BlockData {
-            block_id,
-            parent_block_id,
-            transactions,
-        };
-
-        let inscription_data = serde_json::to_vec(&block_data)
-            .map_err(|e| SequencerError::Serialization(e.to_string()))?;
-
-        info!(
-            "BLOCK #{} (parent: #{}) posting to chain ({} tx)",
-            block_id,
-            parent_block_id,
-            pending.len()
-        );
-
-        let parent = self.get_last_msg_id().await?;
-        let tx = self.create_inscribe_tx(inscription_data, parent);
-
-        let new_msg_id = match tx.mantle_tx.ops.first() {
-            Some(Op::ChannelInscribe(inscribe)) => inscribe.id(),
-            _ => panic!("Expected ChannelInscribe op"),
-        };
-
-        self.post_and_wait(&tx).await?;
-
-        Ok((block_data, new_msg_id))
-    }
-
-    /// Process all pending transfers as a single block
-    async fn process_pending_batch(&self) -> Result<()> {
-        let items = self.db.queue_drain().await?;
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        let pending = Self::deserialize_pending_transfers(&items);
-        if pending.is_empty() {
-            return Ok(());
-        }
-
-        let count = pending.len();
-        debug!("Processing batch of {} transfers", count);
-
-        match self.create_and_post_block(&pending).await {
-            Ok((block_data, new_msg_id)) => {
-                self.set_last_msg_id(new_msg_id).await?;
-                self.confirm_transactions(&pending).await?;
-                info!(
-                    "BLOCK #{} confirmed on chain ({} tx)",
-                    block_data.block_id, count
-                );
-                Ok(())
-            }
-            Err(e) => {
-                self.revert_transfers(&pending).await;
-                self.delete_transactions(&pending).await;
-                Err(e)
             }
         }
     }

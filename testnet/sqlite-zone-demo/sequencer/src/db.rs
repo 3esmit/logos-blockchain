@@ -111,7 +111,7 @@ impl Menu {
         Ok(db)
     }
 
-    pub async fn insert(&self, name: &str, data: &str) -> Result<(String)> {
+    pub async fn insert(&self, name: &str, data: &str) -> Result<String> {
         let name = name.to_owned();
         let data = data.to_owned();
         let db = self.open_traced_connection()?;
@@ -126,13 +126,16 @@ impl Menu {
             Ok::<(), rusqlite::Error>(())
         });
 
-        Ok((name2))
+        Ok(name2)
     }
 
     pub async fn select(&self, query: String) -> Result<Vec<Dish>> {
         let db = self.open_traced_connection()?;
+        println!("1 {}", query);
 
         let dishes = tokio::task::spawn_blocking(move || -> Result<Vec<Dish>, rusqlite::Error> {
+
+            println!("2 {}", query);
             let mut stmt = db.prepare(&query)?;
             let rows = stmt.query_map([], |row| {
                 Ok(Dish {
@@ -151,10 +154,10 @@ impl Menu {
     }    
 
     fn sqlite_trace_fn(event: TraceEvent<'_>) {
-        if let TraceEvent::Row(row) = event {
+        if let TraceEvent::Stmt(stmt, _) = event {
             if let Ok(mut guard) = TRACE_FILE.lock() {
                 if let Some(file) = guard.as_mut() {
-                    let _ = writeln!(file, "{}", row.sql());
+                    let _ = writeln!(file, "{:?}", stmt.expanded_sql());
                 }
             }
         }

@@ -87,15 +87,16 @@ async fn insert(
     }
 }
 
-/// GET /select?data={}
+/// GET /select
+/// Request body: { "query": "SELECT * FROM menu" }
 #[axum::debug_handler]
 async fn get_select(
     State(appstate): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<SelectQuery>
+    Json(request): Json<SelectQuery>,
 ) -> impl IntoResponse {
-    debug!("API /select?data={}", query.query);
+    debug!("API /select {}", request.query);
 
-    match appstate.menu.select(query.query).await {
+    match appstate.menu.select(request.query).await {
         Ok(dishes) => (StatusCode::OK, Json(SelectResponse{dishes})).into_response(),
         Err(e) => {
             error!("Select failed: {e}");
@@ -126,7 +127,7 @@ pub fn create_router(menu: Arc<Menu>, sequencer: Arc<Sequencer>) -> axum::Router
 
     axum::Router::new()
         .route("/insert", post(insert))
-        .route("/select/:data", get(get_select))
+        .route("/select", get(get_select))
         .route("/health", get(health))
         .with_state(state)
         .layer(cors)

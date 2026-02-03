@@ -28,9 +28,9 @@ impl Default for Config {
         Self {
             listen_addr: "0.0.0.0:8080".parse().expect("valid address"),
             node_endpoint: "http://localhost:18080".to_owned(),
-            db_path: "database.db".to_owned(),
-            state_db_path: "sequencer.db".to_owned(),
-            signing_key_path: "sequencer.key".to_owned(),
+            db_path: "./data/database.db".to_owned(),
+            state_db_path: "./data/sequencer.db".to_owned(),
+            signing_key_path: "./data/sequencer.key".to_owned(),
             channel_id: String::new(),
             node_auth_username: None,
             node_auth_password: None,
@@ -48,11 +48,11 @@ impl Config {
             node_endpoint: std::env::var("SEQUENCER_NODE_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:18080".to_owned()),
             db_path: std::env::var("SEQUENCER_DB_PATH")
-                .unwrap_or_else(|_| "database.db".to_owned()),
+                .unwrap_or_else(|_| "./data/database.db".to_owned()),
             state_db_path: std::env::var("SEQUENCER_STATE_DB_PATH")
-                .unwrap_or_else(|_| "sequencer.db".to_owned()),
+                .unwrap_or_else(|_| "./data/sequencer.db".to_owned()),
             signing_key_path: std::env::var("SEQUENCER_SIGNING_KEY_PATH")
-                .unwrap_or_else(|_| "sequencer.key".to_owned()),
+                .unwrap_or_else(|_| "./data/sequencer.key".to_owned()),
             channel_id: std::env::var("SEQUENCER_CHANNEL_ID")
                 .expect("SEQUENCER_CHANNEL_ID env var is required"),
             node_auth_username: std::env::var("SEQUENCER_NODE_AUTH_USERNAME").ok(),

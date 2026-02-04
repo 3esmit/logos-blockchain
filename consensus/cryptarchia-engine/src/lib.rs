@@ -403,7 +403,19 @@ where
     }
 
     /// Prune all blocks that are included in forks that diverged before
-    /// the `max_div_depth`-th block from the given local chain tip.
+    /// the `max_div_depth`-th block from the current local chain tip.
+    /// It returns the block IDs that were part of the pruned forks.
+    ///
+    /// For example,
+    /// Given a block tree:
+    ///               b6
+    ///             /
+    /// G - b1 - b2 - b3 - b4 - b5 == local chain tip
+    ///                  \
+    ///                    b7
+    /// Calling `prune_forks(2)` will remove `b6` because it is diverged from
+    /// `b2`, which is deeper than the 2nd block `b3` from the local chain tip.
+    /// The `b7` is not removed since it is diverged from `b3`.
     pub fn prune_stale_forks(&mut self, local_chain: &Branch<Id>, max_div_depth: u64) -> Vec<Id> {
         #[expect(
             clippy::needless_collect,

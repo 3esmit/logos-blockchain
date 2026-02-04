@@ -433,7 +433,7 @@ where
     }
 
     /// Update the LIB without pruning.
-    pub fn set_lib(&mut self, new_lib: Id) {
+    pub const fn set_lib(&mut self, new_lib: Id) {
         self.lib = new_lib;
     }
 
@@ -582,7 +582,7 @@ where
 
     /// Get the latest immutable block (LIB) in the chain. No re-orgs past this
     /// point are allowed.
-    pub fn lib(&self) -> Id {
+    pub const fn lib(&self) -> Id {
         self.branches.lib()
     }
 

@@ -396,18 +396,15 @@ where
                 .filter(move |fork_tip| fork_tip.id != local_tip)
                 .filter_map(move |fork| {
                     let lca = self.lca(&local_chain, &fork);
-                    (lca.length < deepest_div_block).then_some(ForkDivergenceInfo { tip: fork, lca })
+                    (lca.length < deepest_div_block)
+                        .then_some(ForkDivergenceInfo { tip: fork, lca })
                 }),
         )
     }
 
     /// Prune all blocks that are included in forks that diverged before
     /// the `max_div_depth`-th block from the given local chain tip.
-    pub fn prune_stale_forks(
-        &mut self,
-        local_chain: &Branch<Id>,
-        max_div_depth: u64,
-    ) -> Vec<Id> {
+    pub fn prune_stale_forks(&mut self, local_chain: &Branch<Id>, max_div_depth: u64) -> Vec<Id> {
         #[expect(
             clippy::needless_collect,
             reason = "We need to collect since we cannot borrow both immutably (in `self.prunable_forks`) and mutably (in `self.prune_fork`) at the same time."
@@ -547,11 +544,7 @@ where
                 .prune_stale_forks(&self.local_chain, self.lib_depth())
                 .into_iter()
                 .collect();
-            let immutable_blocks = self
-                .branches
-                .prune_immutable_blocks()
-                .into_iter()
-                .collect();
+            let immutable_blocks = self.branches.prune_immutable_blocks().into_iter().collect();
             PrunedBlocks {
                 stale_blocks,
                 immutable_blocks,

@@ -374,54 +374,43 @@ where
         removed_blocks
     }
 
-    /// Get an iterator over the prunable forks that diverged before
-    /// the `max_div_depth`-th block from the given local chain tip.
+    /// Get an iterator over the prunable forks that diverged before LIB.
     pub fn prunable_forks(
         &self,
         local_chain: &Branch<Id>,
-        max_div_depth: u64,
     ) -> impl Iterator<Item = ForkDivergenceInfo<Id>> + '_ {
         let local_chain = *local_chain;
-        let Some(deepest_div_block) = local_chain.length.checked_sub(max_div_depth) else {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "No prunable fork, the canonical chain is not longer than the provided depth. Canonical chain length: {}, provided max_div_depth: {}", local_chain.length, max_div_depth
-            );
-            return Box::new(core::iter::empty())
-                as Box<dyn Iterator<Item = ForkDivergenceInfo<Id>>>;
-        };
+        let lib_length = self.lib_branch().length;
         let local_tip = local_chain.id;
         Box::new(
             self.branches()
                 .filter(move |fork_tip| fork_tip.id != local_tip)
                 .filter_map(move |fork| {
                     let lca = self.lca(&local_chain, &fork);
-                    (lca.length < deepest_div_block)
-                        .then_some(ForkDivergenceInfo { tip: fork, lca })
+                    (lca.length < lib_length).then_some(ForkDivergenceInfo { tip: fork, lca })
                 }),
-        )
+        ) as Box<dyn Iterator<Item = ForkDivergenceInfo<Id>>>
     }
 
-    /// Prune all blocks that are included in forks that diverged before
-    /// the `max_div_depth`-th block from the current local chain tip.
+    /// Prune all blocks that are included in forks that diverged before LIB.
     /// It returns the block IDs that were part of the pruned forks.
     ///
     /// For example,
-    /// Given a block tree:
+    /// Given a block tree where LIB is `b2`:
     ///               b6
     ///             /
     /// G - b1 - b2 - b3 - b4 - b5 == local chain tip
     ///                  \
     ///                    b7
-    /// Calling `prune_forks(2)` will remove `b6` because it is diverged from
-    /// `b2`, which is deeper than the 2nd block `b3` from the local chain tip.
-    /// The `b7` is not removed since it is diverged from `b3`.
-    pub fn prune_stale_forks(&mut self, local_chain: &Branch<Id>, max_div_depth: u64) -> Vec<Id> {
+    /// Calling `prune_stale_forks(tip)` will remove `b6` because it is
+    /// diverged from `b2`, which is at or before LIB.
+    /// The `b7` is not removed since it is diverged from `b3` (after LIB).
+    pub fn prune_stale_forks(&mut self, local_chain: &Branch<Id>) -> Vec<Id> {
         #[expect(
             clippy::needless_collect,
             reason = "We need to collect since we cannot borrow both immutably (in `self.prunable_forks`) and mutably (in `self.prune_fork`) at the same time."
         )]
-        let forks: Vec<_> = self.prunable_forks(local_chain, max_div_depth).collect();
+        let forks: Vec<_> = self.prunable_forks(local_chain).collect();
         forks
             .into_iter()
             .flat_map(|info| self.prune_fork(info.tip.id, info.lca.id))
@@ -547,13 +536,13 @@ where
         if self.branches.lib() == new_lib {
             PrunedBlocks::new()
         } else {
-            // Set the new LIB so lib_depth is calculated correctly,
-            // but prune stale forks before pruning immutable blocks
-            // (LCA walks need the ancestor blocks to still be present).
+            // Set the new LIB first, then prune stale forks before
+            // pruning immutable blocks (LCA walks need the ancestor
+            // blocks to still be present).
             self.branches.set_lib(new_lib);
             let stale_blocks = self
                 .branches
-                .prune_stale_forks(&self.local_chain, self.lib_depth())
+                .prune_stale_forks(&self.local_chain)
                 .into_iter()
                 .collect();
             let immutable_blocks = self.branches.prune_immutable_blocks().into_iter().collect();
@@ -604,14 +593,6 @@ where
 
     pub const fn state(&self) -> &State {
         &self.state
-    }
-
-    /// Calculate the depth of LIB from the local chain tip.
-    fn lib_depth(&self) -> u64 {
-        self.tip_branch()
-            .length()
-            .checked_sub(self.lib_branch().length())
-            .expect("Local chain tip height must be >= LIB height.")
     }
 
     pub fn online(self) -> (Self, PrunedBlocks<Id>) {

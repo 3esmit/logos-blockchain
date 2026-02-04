@@ -221,7 +221,7 @@ where
 
     /// Create a new [`Branches`] instance with the updated state.
     #[must_use = "this returns the result of the operation, without modifying the original"]
-    fn apply_header(&self, header: Id, parent: Id, slot: Slot) -> Result<Self, Error<Id>> {
+    pub fn apply_header(&self, header: Id, parent: Id, slot: Slot) -> Result<Self, Error<Id>> {
         let parent_branch = self
             .branches
             .get(&parent)
@@ -292,7 +292,7 @@ where
     }
 
     /// Walk back the chain until the target slot
-    fn walk_back_before(&self, branch: &Branch<Id>, slot: Slot) -> Branch<Id> {
+    pub fn walk_back_before(&self, branch: &Branch<Id>, slot: Slot) -> Branch<Id> {
         let mut current = branch;
         while current.slot > slot {
             current = &self.branches[&current.parent];
@@ -302,7 +302,7 @@ where
 
     /// Walk back the chain and return all blocks in the range
     /// `[branch.id, target_exclusive)`.
-    fn walk_back_to_block<'s>(
+    pub fn walk_back_to_block<'s>(
         &'s self,
         branch: &'s Branch<Id>,
         target_exclusive: Id,
@@ -321,7 +321,7 @@ where
 
     /// Returns the min(n, A)-th ancestor of the provided block, where A is the
     /// number of ancestors of this block.
-    fn nth_ancestor(&self, branch: &Branch<Id>, mut n: u64) -> Branch<Id> {
+    pub fn nth_ancestor(&self, branch: &Branch<Id>, mut n: u64) -> Branch<Id> {
         let mut current = branch;
         while n > 0 {
             n -= 1;
@@ -332,6 +332,123 @@ where
             }
         }
         *current
+    }
+
+    /// Returns the current LIB (last irreversible block).
+    pub const fn lib(&self) -> Id {
+        self.lib
+    }
+
+    /// Returns the LIB branch.
+    pub fn lib_branch(&self) -> &Branch<Id> {
+        &self.branches[&self.lib]
+    }
+}
+
+impl<Id> Branches<Id>
+where
+    Id: Eq + Hash + Copy + Debug,
+{
+    /// Remove all blocks of a fork from `tip` to `lca`, excluding `lca`.
+    pub fn prune_fork(&mut self, tip: Id, lca: Id) -> Vec<Id> {
+        let tip_removed = self.tips.remove(&tip);
+        if !tip_removed {
+            tracing::error!(target: LOG_TARGET, "Fork tip {tip:#?} not found in the set of tips.");
+        }
+
+        let mut current_tip = tip;
+        let mut removed_blocks = vec![];
+        while current_tip != lca {
+            let Some(branch) = self.branches.remove(&current_tip) else {
+                // If tip is not in branch set, it means this tip was sharing part of its
+                // history with another fork that has already been removed.
+                break;
+            };
+            removed_blocks.push(branch.id);
+            current_tip = branch.parent;
+        }
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Pruned {} blocks from {tip:#?} to {current_tip:#?}.", removed_blocks.len()
+        );
+        removed_blocks
+    }
+
+    /// Get an iterator over the prunable forks that diverged before
+    /// the `max_div_depth`-th block from the given local chain tip.
+    pub fn prunable_forks(
+        &self,
+        local_chain: &Branch<Id>,
+        max_div_depth: u64,
+    ) -> impl Iterator<Item = ForkDivergenceInfo<Id>> + '_ {
+        let local_chain = *local_chain;
+        let Some(deepest_div_block) = local_chain.length.checked_sub(max_div_depth) else {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "No prunable fork, the canonical chain is not longer than the provided depth. Canonical chain length: {}, provided max_div_depth: {}", local_chain.length, max_div_depth
+            );
+            return Box::new(core::iter::empty())
+                as Box<dyn Iterator<Item = ForkDivergenceInfo<Id>>>;
+        };
+        let local_tip = local_chain.id;
+        Box::new(
+            self.branches()
+                .filter(move |fork_tip| fork_tip.id != local_tip)
+                .filter_map(move |fork| {
+                    let lca = self.lca(&local_chain, &fork);
+                    (lca.length < deepest_div_block).then_some(ForkDivergenceInfo { tip: fork, lca })
+                }),
+        )
+    }
+
+    /// Prune all blocks that are included in forks that diverged before
+    /// the `max_div_depth`-th block from the given local chain tip.
+    pub fn prune_stale_forks(
+        &mut self,
+        local_chain: &Branch<Id>,
+        max_div_depth: u64,
+    ) -> Vec<Id> {
+        #[expect(
+            clippy::needless_collect,
+            reason = "We need to collect since we cannot borrow both immutably (in `self.prunable_forks`) and mutably (in `self.prune_fork`) at the same time."
+        )]
+        let forks: Vec<_> = self.prunable_forks(local_chain, max_div_depth).collect();
+        forks
+            .into_iter()
+            .flat_map(|info| self.prune_fork(info.tip.id, info.lca.id))
+            .collect()
+    }
+
+    /// Prunes all immutable blocks (excluding LIB) that are deeper than LIB,
+    /// and returns the slots and IDs of the pruned blocks.
+    pub fn prune_immutable_blocks(&mut self) -> Vec<(Slot, Id)> {
+        let mut block = self.lib_branch().parent;
+        let mut pruned = Vec::new();
+        while let Some(branch) = self.branches.remove(&block) {
+            let parent = branch.parent;
+            pruned.push((branch.slot, branch.id));
+            if parent == block {
+                break; // reached the root
+            }
+            block = parent;
+        }
+        pruned
+    }
+
+    /// Update the LIB without pruning.
+    pub fn set_lib(&mut self, new_lib: Id) {
+        self.lib = new_lib;
+    }
+
+    /// Advance the LIB to `new_lib` and prune immutable blocks below it.
+    ///
+    /// Equivalent to `set_lib` followed by `prune_immutable_blocks`.
+    pub fn advance_lib(&mut self, new_lib: Id) -> Vec<(Slot, Id)> {
+        if self.lib == new_lib {
+            return Vec::new();
+        }
+        self.set_lib(new_lib);
+        self.prune_immutable_blocks()
     }
 }
 
@@ -418,15 +535,26 @@ where
     fn update_lib(&mut self) -> PrunedBlocks<Id> {
         let new_lib = State::lib(&*self);
         // Trigger pruning only if the LIB has changed.
-        if self.branches.lib == new_lib {
+        if self.branches.lib() == new_lib {
             PrunedBlocks::new()
         } else {
-            self.branches.lib = new_lib;
+            // Set the new LIB so lib_depth is calculated correctly,
+            // but prune stale forks before pruning immutable blocks
+            // (LCA walks need the ancestor blocks to still be present).
+            self.branches.set_lib(new_lib);
+            let stale_blocks = self
+                .branches
+                .prune_stale_forks(&self.local_chain, self.lib_depth())
+                .into_iter()
+                .collect();
+            let immutable_blocks = self
+                .branches
+                .prune_immutable_blocks()
+                .into_iter()
+                .collect();
             PrunedBlocks {
-                // TODO: Eliminate the need of `lib_depth` by refactoring `prune_stale_forks`,
-                //       similar as `prune_immutable_blocks`.
-                stale_blocks: self.prune_stale_forks(self.lib_depth()).collect(),
-                immutable_blocks: self.prune_immutable_blocks().collect(),
+                stale_blocks,
+                immutable_blocks,
             }
         }
     }
@@ -446,56 +574,6 @@ where
         &self.local_chain
     }
 
-    /// Prune all blocks that are included in forks that diverged before
-    /// the `max_div_depth`-th block from the current local chain tip.
-    /// It returns the block IDs that were part of the pruned forks.
-    ///
-    /// For example,
-    /// Given a block tree:
-    ///               b6
-    ///             /
-    /// G - b1 - b2 - b3 - b4 - b5 == local chain tip
-    ///                  \
-    ///                    b7
-    /// Calling `prune_forks(2)` will remove `b6` because it is diverged from
-    /// `b2`, which is deeper than the 2nd block `b3` from the local chain tip.
-    /// The `b7` is not removed since it is diverged from `b3`.
-    fn prune_stale_forks(&mut self, max_div_depth: u64) -> impl Iterator<Item = Id> + '_ {
-        #[expect(
-            clippy::needless_collect,
-            reason = "We need to collect since we cannot borrow both immutably (in `self.prunable_forks`) and mutably (in `self.prune_fork`) at the same time."
-        )]
-        // Collect prunable forks first to avoid borrowing issues
-        let forks: Vec<_> = self.prunable_forks(max_div_depth).collect();
-        forks
-            .into_iter()
-            .flat_map(move |prunable_fork_info| self.prune_fork(&prunable_fork_info))
-    }
-
-    /// Get an iterator over the prunable forks that diverged before
-    /// the `max_div_depth`-th block from the current local chain tip.
-    fn prunable_forks(
-        &self,
-        max_div_depth: u64,
-    ) -> impl Iterator<Item = ForkDivergenceInfo<Id>> + '_ {
-        let local_chain = self.local_chain;
-        let Some(deepest_div_block) = local_chain.length.checked_sub(max_div_depth) else {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "No prunable fork, the canonical chain is not longer than the provided depth. Canonical chain length: {}, provided max_div_depth: {}", local_chain.length, max_div_depth
-            );
-            return Box::new(core::iter::empty())
-                as Box<dyn Iterator<Item = ForkDivergenceInfo<Id>>>;
-        };
-        Box::new(self.non_canonical_forks().filter_map(move |fork| {
-            // We calculate LCA once and store it in `ForkInfo` so it can be consumed
-            // elsewhere without the need to re-calculate it.
-            let lca = self.branches.lca(&local_chain, &fork);
-            // If the fork is diverged deeper than `deepest_div_block`, it's prunable.
-            (lca.length < deepest_div_block).then_some(ForkDivergenceInfo { tip: fork, lca })
-        }))
-    }
-
     /// Returns all the forks that are not part of the local canonical chain.
     ///
     /// The result contains both prunable and non prunable forks.
@@ -505,55 +583,18 @@ where
             .filter(|fork_tip| fork_tip.id != self.tip())
     }
 
-    /// Remove all blocks of a fork from `tip` to `lca`, excluding `lca`.
-    fn prune_fork(&mut self, &ForkDivergenceInfo { lca, tip }: &ForkDivergenceInfo<Id>) -> Vec<Id> {
-        let tip_removed = self.branches.tips.remove(&tip.id);
-        if !tip_removed {
-            tracing::error!(target: LOG_TARGET, "Fork tip {tip:#?} not found in the set of tips.");
-        }
-
-        let mut current_tip = tip.id;
-        let mut removed_blocks = vec![];
-        while current_tip != lca.id {
-            let Some(branch) = self.branches.branches.remove(&current_tip) else {
-                // If tip is not in branch set, it means this tip was sharing part of its
-                // history with another fork that has already been removed.
-                break;
-            };
-            removed_blocks.push(branch.id);
-            current_tip = branch.parent;
-        }
-        tracing::debug!(
-            target: LOG_TARGET,
-            "Pruned {} blocks from {tip:#?} to {current_tip:#?}.", removed_blocks.len()
-        );
-        removed_blocks
-    }
-
-    /// Prunes all immutable blocks (excluding LIB) that are deeper than LIB,
-    /// and returns the slots and IDs of the pruned blocks.
-    fn prune_immutable_blocks(&mut self) -> impl Iterator<Item = (Slot, Id)> + '_ {
-        let mut block = self.lib_branch().parent;
-        std::iter::from_fn(move || {
-            self.branches.branches.remove(&block).map(|branch| {
-                block = branch.parent;
-                (branch.slot, branch.id)
-            })
-        })
-    }
-
     pub const fn branches(&self) -> &Branches<Id> {
         &self.branches
     }
 
     /// Get the latest immutable block (LIB) in the chain. No re-orgs past this
     /// point are allowed.
-    pub const fn lib(&self) -> Id {
-        self.branches.lib
+    pub fn lib(&self) -> Id {
+        self.branches.lib()
     }
 
     pub fn lib_branch(&self) -> &Branch<Id> {
-        &self.branches.branches[&self.lib()]
+        self.branches.lib_branch()
     }
 
     pub const fn state(&self) -> &State {

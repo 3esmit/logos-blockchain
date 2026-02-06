@@ -30,6 +30,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - ./testnet:/etc/logos-blockchain
+      - ./testnet/deployment.yaml:/deployment.yaml:z
       - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
@@ -50,6 +51,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - ./testnet:/etc/logos-blockchain
+      - ./testnet/deployment.yaml:/deployment.yaml:z
       - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
@@ -70,6 +72,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - ./testnet:/etc/logos-blockchain
+      - ./testnet/deployment.yaml:/deployment.yaml:z
       - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync
@@ -90,6 +93,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - ./testnet:/etc/logos-blockchain
+      - ./testnet/deployment.yaml:/deployment.yaml:z
       - ./tests/kzgrs/kzgrs_test_params:/kzgrs_test_params:z
     depends_on:
       - cfgsync

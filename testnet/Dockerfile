@@ -31,7 +31,7 @@ RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run bu
 WORKDIR /logos-blockchain
 ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 RUN scripts/setup-logos-blockchain-circuits.sh "$VERSION" "$LOGOS_BLOCKCHAIN_CIRCUITS"
-RUN cargo build --locked --release --all-features
+RUN cargo build --locked --features high-active-slot-coefficient --release --all-features
 
 # ===========================
 # NODE IMAGE

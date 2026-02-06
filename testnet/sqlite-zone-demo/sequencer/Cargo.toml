@@ -19,6 +19,7 @@ hex                              = "0.4"
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
+logos-blockchain-zone-sdk        = { path = "../../../zone-sdk" }
 owo-colors                       = { default-features = false, version = "4.2.3" }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json", "rustls-tls"], workspace = true }

@@ -10,8 +10,6 @@ pub struct Config {
     pub node_endpoint: String,
     /// Path to the rusqlite database file
     pub db_path: String,
-    /// Path to the rusqlite state database file
-    pub state_db_path: String,
     /// Path to the signing key file (will be created if it doesn't exist)
     pub signing_key_path: String,
     /// Channel ID for inscriptions (hex string, will be padded/truncated to 32
@@ -29,7 +27,6 @@ impl Default for Config {
             listen_addr: "0.0.0.0:8080".parse().expect("valid address"),
             node_endpoint: "http://localhost:18080".to_owned(),
             db_path: "./data/database.db".to_owned(),
-            state_db_path: "./data/sequencer.db".to_owned(),
             signing_key_path: "./data/sequencer.key".to_owned(),
             channel_id: String::new(),
             node_auth_username: None,
@@ -49,8 +46,6 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:18080".to_owned()),
             db_path: std::env::var("SEQUENCER_DB_PATH")
                 .unwrap_or_else(|_| "./data/database.db".to_owned()),
-            state_db_path: std::env::var("SEQUENCER_STATE_DB_PATH")
-                .unwrap_or_else(|_| "./data/sequencer.db".to_owned()),
             signing_key_path: std::env::var("SEQUENCER_SIGNING_KEY_PATH")
                 .unwrap_or_else(|_| "./data/sequencer.key".to_owned()),
             channel_id: std::env::var("SEQUENCER_CHANNEL_ID")

@@ -5,7 +5,7 @@ mod sequencer;
 
 use std::sync::Arc;
 
-use demo_sqlite_sequencer::db::{Menu, MessageIdTable};
+use demo_sqlite_sequencer::db::Menu;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -30,17 +30,9 @@ async fn main() {
     info!("  HTTP API:                  {}", config.listen_addr);
     info!("  Logos blockchain Node:     {}", config.node_endpoint);
     info!("  Database:                  {}", config.db_path);
-    info!("  State Database:            {}", config.state_db_path);
     info!("  Channel ID:                {}", config.channel_id);
 
-    // Initialize databases
-    let state_db = match MessageIdTable::new(&config.state_db_path) {
-        Ok(state_db) => state_db,
-        Err(e) => {
-            error!("State Database initialization failed: {e}");
-            std::process::exit(1);
-        }
-    };
+    // Initialize database
     let mut db = match Menu::new(&config.db_path) {
         Ok(db) => db,
         Err(e) => {
@@ -48,12 +40,11 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    info!("Databases ready");
+    info!("Database ready");
 
-    // Initialize sequencer
+    // Initialize sequencer (uses Zone SDK for transaction submission and chain inclusion)
     let sequencer = match Sequencer::new(
         &config.db_path,
-        state_db,
         &config.node_endpoint,
         &config.signing_key_path,
         &config.channel_id,
@@ -67,7 +58,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    info!("Sequencer ready");
+    info!("Sequencer ready (using Zone SDK)");
 
     // Setup cancellation token for graceful shutdown
     let cancellation_token = CancellationToken::new();

@@ -43,6 +43,11 @@ if [ -z "$DEVNET_PASSWORD" ]; then
     echo ""
 fi
 
+# Set default config URL if not provided
+if [ -z "$DEVNET_CONFIG_URL" ]; then
+    DEVNET_CONFIG_URL="http://209.38.241.182:18080/cfgsync/generate-config"
+fi
+
 # Detect platform
 detect_platform() {
     local os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -173,9 +178,9 @@ echo ""
 
 # Generate user config
 print_info "Generating user configuration..."
-if ! curl -X POST -L --location-trusted https://devnet.blockchain.logos.co/node/0/cfgsync/generate-config \
-     -u "${DEVNET_USERNAME}:${DEVNET_PASSWORD}" \
+if ! curl -X POST "${DEVNET_CONFIG_URL}" \
      -H "Content-Type: application/json" \
+     -u "${DEVNET_USERNAME}:${DEVNET_PASSWORD}" \
      -d '{
            "ip": "192.168.4.2",
            "identifier": "not-essential-for-local-nodes",
@@ -213,6 +218,54 @@ cat > check-balance.sh <<EOF
 curl http://localhost:8080/wallet/${NODE_KEY}/balance
 EOF
 chmod +x check-balance.sh
+
+# Create a helper script to transfer funds
+print_info "Creating transfer funds script..."
+cat > transfer-funds.sh <<'EOF'
+#!/bin/bash
+
+# Check if required arguments are provided
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 <recipient_public_key> <amount> [change_public_key] [funding_public_key]"
+    echo ""
+    echo "Arguments:"
+    echo "  recipient_public_key  - The public key of the recipient"
+    echo "  amount                - The amount to transfer"
+    echo "  change_public_key     - (Optional) Your public key for change (default: your node key)"
+    echo "  funding_public_key    - (Optional) Your public key for funding (default: your node key)"
+    echo ""
+    echo "Example:"
+    echo "  $0 74e5dffeceaf4c825f9db77bcc7722e08e76a5fd1bd5611351869bed575e1419 2"
+    exit 1
+fi
+
+RECIPIENT_KEY="$1"
+AMOUNT="$2"
+CHANGE_KEY="${3:-NODE_KEY_PLACEHOLDER}"
+FUNDING_KEY="${4:-NODE_KEY_PLACEHOLDER}"
+
+echo "Transferring $AMOUNT tokens to $RECIPIENT_KEY..."
+echo ""
+
+curl -vvv -X POST http://localhost:8080/wallet/transactions/transfer-funds \
+     -H "Content-Type: application/json" \
+     -d "{
+       \"tip\": null,
+       \"change_public_key\": \"$CHANGE_KEY\",
+       \"funding_public_keys\": [
+         \"$FUNDING_KEY\"
+       ],
+       \"recipient_public_key\": \"$RECIPIENT_KEY\",
+       \"amount\": $AMOUNT
+     }"
+
+echo ""
+echo "Transfer request sent!"
+EOF
+
+# Replace the placeholder with actual node key
+sed -i "s/NODE_KEY_PLACEHOLDER/${NODE_KEY}/g" transfer-funds.sh
+chmod +x transfer-funds.sh
 
 # Generate systemd service unit
 print_info "Generating systemd service unit..."
@@ -293,6 +346,11 @@ echo "Check your wallet balance:"
 echo "  cd devnet"
 echo "  ./check-balance.sh"
 echo ""
+echo "Transfer funds:"
+echo "  cd devnet"
+echo "  ./transfer-funds.sh <recipient_public_key> <amount>"
+echo "  Example: ./transfer-funds.sh 74e5dffeceaf4c825f9db77bcc7722e08e76a5fd1bd5611351869bed575e1419 2"
+echo ""
 echo "Configuration files:"
 echo "  - Node binary: devnet/${BINARY_NAME}"
 echo "  - User config: devnet/my_user_config.yaml"
@@ -303,6 +361,7 @@ echo ""
 echo "Helper scripts:"
 echo "  - ./devnet/run-node.sh - Start the node manually"
 echo "  - ./devnet/check-balance.sh - Check wallet balance"
+echo "  - ./devnet/transfer-funds.sh - Transfer funds to another wallet"
 echo ""
 print_warn "Make sure to keep your my_user_config.yaml safe!"
 echo "================================================"

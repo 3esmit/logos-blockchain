@@ -42,7 +42,7 @@ async fn main() {
     };
     info!("Database ready");
 
-    // Initialize sequencer (uses Zone SDK for transaction submission and chain inclusion)
+    // Initialize sequencer
     let sequencer = match Sequencer::new(
         &config.db_path,
         &config.node_endpoint,
@@ -58,7 +58,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    info!("Sequencer ready (using Zone SDK)");
+    info!("Sequencer ready");
 
     // Setup cancellation token for graceful shutdown
     let cancellation_token = CancellationToken::new();
@@ -75,7 +75,7 @@ async fn main() {
     info!("Background processor started");
 
     // Create HTTP router
-    let app = create_router(db.into(), sequencer);
+    let app = create_router(db.into());
 
     // Start HTTP server
     info!("Sqlite Sequencer listening on {}", config.listen_addr);

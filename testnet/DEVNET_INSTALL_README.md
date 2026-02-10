@@ -13,22 +13,22 @@ This directory contains an automated installation script for setting up a Logos 
 
 2. Edit `.env` and add your credentials:
    ```bash
-   DEVNET_USERNAME=your_username
-   DEVNET_PASSWORD=your_password
+   LB_DEVNET_USERNAME=your_username
+   LB_DEVNET_PASSWORD=your_password
    ```
 
 3. Run the installation script:
    ```bash
-   chmod +x install-devnet.sh
-   ./install-devnet.sh
+   chmod +x scripts/install-devnet.sh
+   ./scripts/install-devnet.sh
    ```
 
 ### Option 2: Interactive Installation
 
 Simply run the script and it will prompt you for credentials:
 ```bash
-chmod +x install-devnet.sh
-./install-devnet.sh
+chmod +x scripts/install-devnet.sh
+./scripts/install-devnet.sh
 ```
 
 ## What the Script Does
@@ -52,7 +52,7 @@ After installation, you'll have:
 devnet/
 ├── logos-blockchain-node-<platform>-<version>       # Node binary
 ├── logos-blockchain-circuits-<version>-<platform>.tar.gz  # Circuits archive
-├── my_user_config.yaml                              # Your node configuration
+├── config.yaml                              # Your node configuration
 ├── run-node.sh                                      # Helper script to start node
 ├── check-balance.sh                                 # Helper script to check balance
 ├── transfer-funds.sh                                # Helper script to transfer funds
@@ -76,7 +76,7 @@ cd devnet
 Or manually:
 ```bash
 cd devnet
-./logos-blockchain-node-<platform>-<version> my_user_config.yaml
+./logos-blockchain-node-<platform>-<version> config.yaml
 ```
 
 ### Option B: Run as Systemd Service (Recommended)
@@ -200,12 +200,12 @@ If your balance is zero after funding:
 ## Security Notes
 
 - **Never commit your `.env` file** to version control
-- Keep your `my_user_config.yaml` secure (contains private keys)
+- Keep your `config.yaml` secure (contains private keys)
 - The `.env.devnet.example` file is safe to commit (no credentials)
 
 ## Manual Installation
 
-If you prefer to install manually, follow the steps in the original how-to document or review the [`install-devnet.sh`](install-devnet.sh) script to see each command.
+If you prefer to install manually, follow the steps in the original how-to document or review the [`scripts/install-devnet.sh`](../scripts/install-devnet.sh) script to see each command.
 
 ## Getting Help
 
@@ -216,6 +216,6 @@ For issues or questions:
 
 ## Files
 
-- [`install-devnet.sh`](install-devnet.sh) - Main installation script
+- [`scripts/install-devnet.sh`](../scripts/install-devnet.sh) - Main installation script
 - [`.env.devnet.example`](.env.devnet.example) - Environment variables template
 - `DEVNET_INSTALL_README.md` - This file

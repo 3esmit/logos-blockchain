@@ -34,18 +34,18 @@ if [ -f ".env" ]; then
 fi
 
 # Prompt for credentials if not in environment
-if [ -z "$DEVNET_USERNAME" ]; then
-    read -p "Enter devnet username: " DEVNET_USERNAME
+if [ -z "$LB_DEVNET_USERNAME" ]; then
+    read -p "Enter devnet username: " LB_DEVNET_USERNAME
 fi
 
-if [ -z "$DEVNET_PASSWORD" ]; then
-    read -sp "Enter devnet password: " DEVNET_PASSWORD
+if [ -z "$LB_DEVNET_PASSWORD" ]; then
+    read -sp "Enter devnet password: " LB_DEVNET_PASSWORD
     echo ""
 fi
 
 # Set default config URL if not provided
-if [ -z "$DEVNET_CONFIG_URL" ]; then
-    DEVNET_CONFIG_URL="http://209.38.241.182:18080/cfgsync/generate-config"
+if [ -z "$LB_DEVNET_CONFIG_URL" ]; then
+    LB_DEVNET_CONFIG_URL="https://devnet.blockchain.logos.co/node/0/cfgsync/generate-config"
 fi
 
 # Detect platform
@@ -178,9 +178,9 @@ echo ""
 
 # Generate user config
 print_info "Generating user configuration..."
-if ! curl -X POST "${DEVNET_CONFIG_URL}" \
+if ! curl -X POST "${LB_DEVNET_CONFIG_URL}" \
      -H "Content-Type: application/json" \
-     -u "${DEVNET_USERNAME}:${DEVNET_PASSWORD}" \
+     -u "${LB_DEVNET_USERNAME}:${LB_DEVNET_PASSWORD}" \
      -d '{
            "ip": "192.168.4.2",
            "identifier": "not-essential-for-local-nodes",
@@ -188,7 +188,7 @@ if ! curl -X POST "${DEVNET_CONFIG_URL}" \
            "blend_port": 3400,
            "api_port": 8080
          }' \
-     -o my_user_config.yaml; then
+     -o config.yaml; then
     print_error "Failed to generate user configuration"
     exit 1
 fi
@@ -196,7 +196,7 @@ fi
 # Extract the non-voucher key
 print_info "Extracting node key..."
 ls
-NODE_KEY=$(grep -A4 known_keys my_user_config.yaml | head -2 | tail -1 | awk '{print $2}')
+NODE_KEY=$(grep -A4 known_keys config.yaml | head -2 | tail -1 | awk '{print $2}')
 
 if [ -z "$NODE_KEY" ]; then
     print_error "Failed to extract node key from configuration"
@@ -207,7 +207,7 @@ fi
 print_info "Creating run script..."
 cat > run-node.sh <<EOF
 #!/bin/bash
-./${BINARY_NAME} my_user_config.yaml
+./${BINARY_NAME} config.yaml
 EOF
 chmod +x run-node.sh
 
@@ -283,7 +283,7 @@ Type=simple
 User=${USER}
 WorkingDirectory=${WORKING_DIR}
 Environment="LOGOS_BLOCKCHAIN_CIRCUITS=${HOME}/.logos-blockchain-circuits"
-ExecStart=${WORKING_DIR}/${BINARY_NAME} ${WORKING_DIR}/my_user_config.yaml
+ExecStart=${WORKING_DIR}/${BINARY_NAME} ${WORKING_DIR}/config.yaml
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -339,7 +339,7 @@ echo "     sudo systemctl stop ${SERVICE_NAME}"
 echo ""
 echo "Funding your wallet:"
 echo "  Go to: https://devnet.blockchain.logos.co/node/0/"
-echo "  Username: ${DEVNET_USERNAME}"
+echo "  Username: ${LB_DEVNET_USERNAME}"
 echo "  Enter your node key: ${NODE_KEY}"
 echo ""
 echo "Check your wallet balance:"
@@ -365,3 +365,4 @@ echo "  - ./devnet/transfer-funds.sh - Transfer funds to another wallet"
 echo ""
 print_warn "Make sure to keep your my_user_config.yaml safe!"
 echo "================================================"
+

@@ -1,0 +1,22 @@
+[package]
+categories.workspace  = true
+description.workspace = true
+edition.workspace     = true
+keywords.workspace    = true
+license.workspace     = true
+name                  = "logos-blockchain-chain-visualizer"
+readme.workspace      = true
+repository.workspace  = true
+version.workspace     = true
+
+[dependencies]
+clap                  = { default-features = false, features = ["derive", "std"], version = "4" }
+lb-chain-service      = { workspace = true }
+lb-common-http-client = { workspace = true }
+lb-core               = { workspace = true }
+reqwest               = { workspace = true }
+tokio                 = { default-features = false, features = ["macros", "rt-multi-thread"], version = "1" }
+url                   = { version = "2" }
+
+[lints]
+workspace = true

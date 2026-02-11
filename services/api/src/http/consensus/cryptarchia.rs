@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use lb_chain_service::{ConsensusMsg, CryptarchiaConsensus, CryptarchiaInfo};
+use lb_chain_service::{BranchesInfo, ConsensusMsg, CryptarchiaConsensus, CryptarchiaInfo};
 use lb_core::{header::HeaderId, mantle::SignedMantleTx};
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::ntp::NtpTimeBackend;
@@ -46,6 +46,23 @@ where
             to,
             tx: sender,
         })
+        .await
+        .map_err(|(e, _)| e)?;
+
+    Ok(receiver.await?)
+}
+
+pub async fn cryptarchia_branches<RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<BranchesInfo, DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let relay = handle.relay().await?;
+    let (sender, receiver) = oneshot::channel();
+    relay
+        .send(ConsensusMsg::GetBranches { tx: sender })
         .await
         .map_err(|(e, _)| e)?;
 

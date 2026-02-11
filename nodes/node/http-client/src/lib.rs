@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::BlockInfo;
-use lb_chain_service::{CryptarchiaInfo, Slot};
+use lb_chain_service::{BranchesInfo, CryptarchiaInfo, Slot};
 use lb_core::{
     block::Block,
     header::{ContentId, HeaderId},
@@ -16,7 +16,8 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, STORAGE_BLOCK,
+        BLOCKS_STREAM, CRYPTARCHIA_BRANCHES, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
+        MEMPOOL_ADD_TX, STORAGE_BLOCK,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
 };
@@ -283,5 +284,13 @@ impl CommonHttpClient {
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await
+    }
+
+    /// Get all branches (forks) in the chain for visualization.
+    pub async fn get_branches(&self, base_url: Url) -> Result<BranchesInfo, Error> {
+        let request_url = base_url
+            .join(CRYPTARCHIA_BRANCHES.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), BranchesInfo>(request_url, None).await
     }
 }

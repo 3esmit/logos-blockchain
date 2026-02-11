@@ -41,8 +41,8 @@ use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
-    add_tx, block, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info,
-    cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, wallet,
+    add_tx, block, blocks, blocks_stream, cryptarchia_branches, cryptarchia_headers,
+    cryptarchia_info, cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, wallet,
 };
 use crate::{
     WalletService,
@@ -213,6 +213,10 @@ where
             .route(
                 paths::CRYPTARCHIA_LIB_STREAM,
                 routing::get(cryptarchia_lib_stream::<RuntimeServiceId>),
+            )
+            .route(
+                paths::CRYPTARCHIA_BRANCHES,
+                routing::get(cryptarchia_branches::<RuntimeServiceId>),
             )
             .route(
                 paths::NETWORK_INFO,

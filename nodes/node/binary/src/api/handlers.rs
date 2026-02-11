@@ -230,6 +230,24 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::CRYPTARCHIA_BRANCHES,
+    responses(
+        (status = 200, description = "Query all branches (forks) in the chain", body = lb_chain_service::BranchesInfo),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn cryptarchia_branches<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(consensus::cryptarchia_branches::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
     path = paths::CRYPTARCHIA_LIB_STREAM,
     responses(
         (status = 200, description = "Request a stream for lib blocks"),

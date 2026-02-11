@@ -147,6 +147,8 @@ pub enum ConsensusMsg<Tx> {
     SubscribeChainOnline {
         sender: oneshot::Sender<watch::Receiver<bool>>,
     },
+    /// Get all branches (forks) in the chain.
+    GetBranches { tx: oneshot::Sender<BranchesInfo> },
 }
 
 #[serde_as]
@@ -158,6 +160,29 @@ pub struct CryptarchiaInfo {
     pub slot: Slot,
     pub height: u64,
     pub mode: lb_cryptarchia_engine::State,
+}
+
+/// Information about a branch in the chain
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BranchInfo {
+    pub id: HeaderId,
+    pub parent: HeaderId,
+    pub slot: Slot,
+    pub height: u64,
+}
+
+/// Information about all branches in the chain
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BranchesInfo {
+    pub lib: HeaderId,
+    /// The tip of the honest chain
+    pub tip: HeaderId,
+    /// All branch tips (including honest chain tip and fork tips)
+    pub branch_tips: HashSet<HeaderId>,
+    /// All blocks from LIB to tips, for graph visualization
+    pub branches: HashMap<HeaderId, BranchInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -243,6 +268,54 @@ impl Cryptarchia {
             slot: tip_branch.slot(),
             height: tip_branch.length(),
             mode: *self.consensus.state(),
+        }
+    }
+
+    /// Returns information about all branches (forks) in the chain for
+    /// visualization.
+    #[must_use]
+    pub fn branches_info(&self) -> BranchesInfo {
+        let branches = self.consensus.branches();
+        let tip = self.tip();
+        let lib = self.lib();
+
+        // Collect all branch tips
+        let branch_tips = branches
+            .branches()
+            .map(|branch| branch.id())
+            .collect::<HashSet<_>>();
+
+        // Collect all blocks by traversing from each tip to LIB
+        let mut blocks = HashMap::new();
+        for branch_tip in &branch_tips {
+            let mut current_id = *branch_tip;
+            while let Some(branch) = branches.get(&current_id) {
+                if blocks
+                    .insert(
+                        branch.id(),
+                        BranchInfo {
+                            id: branch.id(),
+                            parent: branch.parent(),
+                            slot: branch.slot(),
+                            height: branch.length(),
+                        },
+                    )
+                    .is_some()
+                {
+                    break; // Already visited this block
+                }
+                if branch.id() == lib || branch.id() == branch.parent() {
+                    break;
+                }
+                current_id = branch.parent();
+            }
+        }
+
+        BranchesInfo {
+            lib,
+            tip,
+            branch_tips,
+            branches: blocks,
         }
     }
 
@@ -829,6 +902,12 @@ where
                     .unwrap_or_else(|_| {
                         error!("Could not subscribe to new block channel");
                     });
+            }
+            ConsensusMsg::GetBranches { tx } => {
+                let branches_info = cryptarchia.branches_info();
+                tx.send(branches_info).unwrap_or_else(|_| {
+                    error!("Could not send branches info through channel");
+                });
             }
         }
     }

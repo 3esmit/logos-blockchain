@@ -4,6 +4,7 @@ pub const MANTLE_SDP_DECLARATIONS: &str = "/mantle/sdp/declarations";
 pub const CRYPTARCHIA_INFO: &str = "/cryptarchia/info";
 pub const CRYPTARCHIA_HEADERS: &str = "/cryptarchia/headers";
 pub const CRYPTARCHIA_LIB_STREAM: &str = "/cryptarchia/lib-stream";
+pub const CRYPTARCHIA_BRANCHES: &str = "/cryptarchia/branches";
 pub const NETWORK_INFO: &str = "/network/info";
 pub const STORAGE_BLOCK: &str = "/storage/block";
 pub const MEMPOOL_ADD_TX: &str = "/mempool/add/tx";

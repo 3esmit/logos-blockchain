@@ -7,9 +7,9 @@ static TRACE_FILE: Mutex<Option<File>> = Mutex::new(None);
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Dish {
-    id: i64,
-    name: String,
-    data: String,
+    pub id: i64,
+    pub name: String,
+    pub data: String,
 }
 
 pub struct Menu {

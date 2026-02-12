@@ -140,9 +140,9 @@ impl Sequencer {
         debug!("Processing batch of {} queries", count);
 
         let data = pending.join("\n").into_bytes();
-        let result = self.zone_sequencer.publish_inscription(data).await?;
+        let result = self.zone_sequencer.publish(data).await?;
 
-        info!("Inscription published with tx_hash: {:?}", result.tx_hash);
+        info!("Inscription published with tx_hash: {:?}", result);
 
         Ok(())
     }

@@ -60,6 +60,7 @@ members = [
   "testnet/cfgsync",
   "testnet/faucet",
   "testnet/l2-sequencer-archival-demo/archiver",
+  "testnet/sqlite-zone-demo/indexer",
   "testnet/sqlite-zone-demo/sequencer",
   "testnet/l2-sequencer-archival-demo/sequencer",
   "tests",

@@ -44,7 +44,6 @@ async fn main() {
 
     // Initialize sequencer
     let sequencer = match Sequencer::new(
-        &config.db_path,
         &config.node_endpoint,
         &config.signing_key_path,
         &config.channel_id,

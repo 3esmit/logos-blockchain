@@ -57,7 +57,7 @@ impl Menu {
         Ok(db)
     }
 
-    pub async fn query(&self, sql: String) -> Result<Option<Vec<Dish>>> {                                                                                                                                     
+    pub async fn query(&self, sql: String) -> Result<Option<Vec<Dish>>> {
         let db = self.open_traced_connection()?;
                                                                                                                                                                                                               
         tokio::task::spawn_blocking(move || {

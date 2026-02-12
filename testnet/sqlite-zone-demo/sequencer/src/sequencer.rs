@@ -78,7 +78,6 @@ fn parse_channel_id(channel_id_str: &str) -> Result<ChannelId> {
 
 impl Sequencer {
     pub fn new(
-        _db_path: &str,
         node_endpoint: &str,
         signing_key_path: &str,
         channel_id_str: &str,

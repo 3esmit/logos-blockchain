@@ -95,7 +95,7 @@ curl -X GET $SEQUENCER_LISTEN_ADDR/health
 ```
 
 ### 4. Using the Indexer API
-Make sure to wait for the 
+Make sure to wait for the "Applied X statement(s)" info message from the Indexer to make sure it received the latest updates before querying.
 
 #### Query (GET)
 

@@ -27,6 +27,8 @@ pub enum SequencerError {
     InvalidKeyFile { expected: usize, actual: usize },
     #[error("{0}")]
     InvalidChannelId(String),
+    #[error("Timeout: {0}")]
+    Timeout(String),
 }
 
 pub type Result<T> = std::result::Result<T, SequencerError>;
@@ -146,23 +148,7 @@ impl Sequencer {
 
         info!("Inscription published with tx_hash: {:?}", result.inscription_id);
 
-        // query status
-        loop {
-            match self.zone_sequencer.status(result.inscription_id).await {
-                Ok(status) => {
-                    debug!("Current status: {:?}", status);
-                    if status == TxStatus::Safe || status == TxStatus::Finalized {
-                        return Ok(());
-                    } else {
-                        sleep(Duration::from_millis(300)).await;
-                        continue;
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Invalid status: {}", e);
-                }
-            };
-        }
+        Ok(())
     }
 
     /// Check if the queue file is empty

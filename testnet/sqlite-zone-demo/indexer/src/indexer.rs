@@ -91,7 +91,6 @@ impl Indexer {
 
             futures::pin_mut!(stream);
             while let Some(zone_block) = stream.next().await {
-                let msg_id = zone_block.id;
                 let sql_text = match String::from_utf8(zone_block.data) {
                     Ok(s) => s,
                     Err(e) => {

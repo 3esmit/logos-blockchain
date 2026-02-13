@@ -6,7 +6,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
 };
 use crate::db::MenuReadOnly;
 use demo_sqlite_sequencer::db::Dish;

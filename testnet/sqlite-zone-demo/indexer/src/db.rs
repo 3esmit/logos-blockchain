@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use rusqlite::{Connection, Result};
 
 use demo_sqlite_sequencer::db::Dish;

@@ -165,13 +165,13 @@ echo ""
 SEQUENCER_BIN="$REPO_ROOT/target/release/demo-sqlite-sequencer"
 INDEXER_BIN="$REPO_ROOT/target/release/demo-sqlite-indexer"
 
-if [[ "$SERVICE" == "sequencer" || "$SERVICE" == "all" ]] && [ ! -f "$SEQUENCER_BIN" ]; then
+if [[ "$SERVICE" == "sequencer" || "$SERVICE" == "all" ]]; then
     echo -e "${YELLOW}Building sequencer...${NC}"
     cd "$REPO_ROOT"
     cargo build --release -p demo-sqlite-sequencer
 fi
 
-if [[ "$SERVICE" == "indexer" || "$SERVICE" == "all" ]] && [ ! -f "$INDEXER_BIN" ]; then
+if [[ "$SERVICE" == "indexer" || "$SERVICE" == "all" ]]; then
     echo -e "${YELLOW}Building indexer...${NC}"
     cd "$REPO_ROOT"
     cargo build --release -p demo-sqlite-indexer
@@ -181,12 +181,12 @@ fi
 case $SERVICE in
     sequencer)
         echo -e "${GREEN}Starting sequencer...${NC}"
-        cd "$REPO_ROOT"
+        cd "$SCRIPT_DIR"
         exec "$SEQUENCER_BIN"
         ;;
     indexer)
         echo -e "${GREEN}Starting indexer...${NC}"
-        cd "$REPO_ROOT"
+        cd "$SCRIPT_DIR"
         exec "$INDEXER_BIN"
         ;;
     all)
@@ -202,7 +202,7 @@ case $SERVICE in
 
         # Start sequencer
         echo -e "${GREEN}Starting sequencer...${NC}"
-        cd "$REPO_ROOT"
+        cd "$SCRIPT_DIR"
         "$SEQUENCER_BIN" &
         SEQUENCER_PID=$!
         sleep 2

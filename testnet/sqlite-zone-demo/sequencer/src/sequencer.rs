@@ -154,7 +154,7 @@ impl Sequencer {
                     if status == TxStatus::Safe || status == TxStatus::Finalized {
                         return Ok(());
                     } else {
-                        sleep(Duration::from_millis(100)).await;
+                        sleep(Duration::from_millis(300)).await;
                         continue;
                     }
                 }

@@ -21,20 +21,6 @@ pub struct Config {
     pub node_auth_password: Option<String>,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            listen_addr: "0.0.0.0:8080".parse().expect("valid address"),
-            node_endpoint: "http://localhost:18080".to_owned(),
-            db_path: "./data/database.db".to_owned(),
-            signing_key_path: "./data/sequencer.key".to_owned(),
-            channel_id: String::new(),
-            node_auth_username: None,
-            node_auth_password: None,
-        }
-    }
-}
-
 impl Config {
     pub fn from_env() -> Self {
         Self {

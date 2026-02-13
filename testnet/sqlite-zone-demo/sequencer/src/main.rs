@@ -1,16 +1,16 @@
-mod api;
 mod config;
 mod ctrl_c;
-mod sequencer;
 
 use std::sync::Arc;
 
+use demo_sqlite_sequencer::api::create_router;
 use demo_sqlite_sequencer::db::Menu;
+use demo_sqlite_sequencer::sequencer::Sequencer;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
-use crate::{api::create_router, config::Config, ctrl_c::listen_for_sigint, sequencer::Sequencer};
+use crate::{config::Config, ctrl_c::listen_for_sigint};
 
 const QUEUE_FILE: &str = "./data/queue.txt";
 

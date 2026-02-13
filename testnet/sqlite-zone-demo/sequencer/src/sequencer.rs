@@ -5,6 +5,7 @@ use lb_common_http_client::BasicAuthCredentials;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::sequencer::{ZoneSequencer, Error as ZoneSequencerError};
+use logos_blockchain_zone_sdk::state::TxStatus;
 use reqwest::Url;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -101,6 +102,7 @@ impl Sequencer {
             signing_key,
             node_url,
             basic_auth,
+            None,
         );
 
         Ok(Self {
@@ -142,9 +144,25 @@ impl Sequencer {
         let data = pending.join("\n").into_bytes();
         let result = self.zone_sequencer.publish(data).await?;
 
-        info!("Inscription published with tx_hash: {:?}", result);
+        info!("Inscription published with tx_hash: {:?}", result.inscription_id);
 
-        Ok(())
+        // query status
+        loop {
+            match self.zone_sequencer.status(result.inscription_id).await {
+                Ok(status) => {
+                    debug!("Current status: {:?}", status);
+                    if status == TxStatus::Safe || status == TxStatus::Finalized {
+                        return Ok(());
+                    } else {
+                        sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Invalid status: {}", e);
+                }
+            };
+        }
     }
 
     /// Check if the queue file is empty

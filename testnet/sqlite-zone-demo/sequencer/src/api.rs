@@ -7,15 +7,11 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use demo_sqlite_sequencer::db::Dish;
+use crate::db::{Dish, Menu};
 use reqwest::{Method, header};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error};
-
-use demo_sqlite_sequencer::db::Menu;
-
-use crate::sequencer::Sequencer;
 
 #[derive(Clone)]
 pub struct AppState {

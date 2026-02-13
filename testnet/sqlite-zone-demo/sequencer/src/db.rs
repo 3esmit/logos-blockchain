@@ -90,7 +90,7 @@ impl Menu {
                 }
                 if let Ok(mut guard) = TRACE_FILE.lock() {
                     if let Some(file) = guard.as_mut() {
-                        let _ = writeln!(file, "{}", sql);
+                        let _unused = writeln!(file, "{}", sql);
                     }
                 }
             }

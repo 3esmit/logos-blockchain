@@ -41,7 +41,7 @@ impl Config {
             listen_addr: std::env::var("SEQUENCER_LISTEN_ADDR")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or_else(|| "0.0.0.0:8080".parse().unwrap()),
+                .unwrap_or_else(|| "0.0.0.0:8082".parse().unwrap()),
             node_endpoint: std::env::var("SEQUENCER_NODE_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:18080".to_owned()),
             db_path: std::env::var("SEQUENCER_DB_PATH")

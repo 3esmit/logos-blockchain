@@ -54,7 +54,7 @@ ENV UV_INSTALL_DIR=/usr/local/bin
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN git clone https://github.com/logos-blockchain/logos-blockchain-block-explorer-template.git /opt/explorer \
     && cd /opt/explorer \
-    && git checkout 46fa934148829a7f880de81b3ec6b76a277ddc14 \
+    && git checkout d4f8b811473befad283718fab5a336035c28a97d \
     && uv venv /opt/explorer/.venv \
     && uv pip compile pyproject.toml -o requirements.txt \
     && uv pip install --python /opt/explorer/.venv/bin/python -r requirements.txt

@@ -18,6 +18,7 @@ services:
     container_name: cfgsync
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
+      - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
     depends_on:
       - grafana

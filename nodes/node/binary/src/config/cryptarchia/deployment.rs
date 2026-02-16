@@ -8,13 +8,14 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Config as ConsensusConfig;
 use lb_pol::slot_activation_coefficient;
+use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Settings {
     pub epoch_config: EpochConfig,
     pub security_param: NonZeroU32,
-    pub learning_rate: f64,
+    pub learning_rate: NonNegativeF64,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_state: GenesisTx,

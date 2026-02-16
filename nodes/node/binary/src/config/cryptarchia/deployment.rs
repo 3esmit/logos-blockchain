@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 pub struct Settings {
     pub epoch_config: EpochConfig,
     pub security_param: NonZeroU32,
+    pub learning_rate: f64,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_state: GenesisTx,
@@ -36,7 +37,11 @@ pub struct EpochConfig {
 impl Settings {
     #[must_use]
     pub const fn consensus_config(&self) -> ConsensusConfig {
-        ConsensusConfig::new(self.security_param, slot_activation_coefficient())
+        ConsensusConfig::new(
+            self.security_param,
+            slot_activation_coefficient(),
+            self.learning_rate,
+        )
     }
 }
 

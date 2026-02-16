@@ -257,7 +257,11 @@ mod tests {
     fn restore_preserves_info() {
         let genesis_header_id: HeaderId = [0; 32].into();
         let security_param: NonZero<u32> = 2.try_into().unwrap();
-        let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(security_param, 1f64);
+        let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
+            security_param,
+            1f64,
+            1f64.try_into().expect("1 > 0"),
+        );
         let ledger_config = lb_ledger::Config {
             epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: 1.try_into().unwrap(),

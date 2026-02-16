@@ -7,7 +7,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./tools:/etc/logos-blockchain
     ports:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_server.sh
@@ -17,7 +17,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./tools:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -33,7 +33,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./tools:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -49,7 +49,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./tools:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -65,7 +65,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:devnet
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./tools:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:

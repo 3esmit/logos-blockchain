@@ -6,7 +6,7 @@ services:
     container_name: prometheus
     image: prom/prometheus:v3.0.1
     volumes:
-      - ./testnet/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:z
+      - ./tools/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:z
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
@@ -24,12 +24,12 @@ services:
       - GF_AUTH_DISABLE_LOGIN_FORM=true
       - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor traceQLStreaming metricsSummary
     env_file:
-      - ./testnet/monitoring/grafana/plugins.env
+      - ./tools/monitoring/grafana/plugins.env
     volumes:
-      - ./testnet/monitoring/grafana/grafana.ini:/etc/grafana/grafana.ini:z
-      - ./testnet/monitoring/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:z
-      - ./testnet/monitoring/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:z
-      - ./testnet/monitoring/grafana/dashboards:/var/lib/grafana/dashboards/:z
+      - ./tools/monitoring/grafana/grafana.ini:/etc/grafana/grafana.ini:z
+      - ./tools/monitoring/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:z
+      - ./tools/monitoring/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:z
+      - ./tools/monitoring/grafana/dashboards:/var/lib/grafana/dashboards/:z
     ports:
       - 9091:3000
     restart: on-failure
@@ -56,7 +56,7 @@ services:
     container_name: tempo
     command: [ "-config.file=/etc/tempo.yaml" ]
     volumes:
-      - ./testnet/monitoring/tempo.yaml:/etc/tempo.yaml:z
+      - ./tools/monitoring/tempo.yaml:/etc/tempo.yaml:z
     ports:
       - "4317:4317"  # otlp grpc
     depends_on:

@@ -4,18 +4,18 @@ services:
     container_name: cfgsync
     build:
       context: .
-      dockerfile: testnet/Dockerfile
+      dockerfile: tools/Dockerfile
     image: logos-blockchain:latest
     volumes:
-      - ./testnet:/etc/logos-blockchain
+      - ./tools:/etc/logos-blockchain
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
   logos-blockchain-node:
     build:
       context: .
-      dockerfile: testnet/Dockerfile
+      dockerfile: tools/Dockerfile
     volumes:
-      - ./testnet:/etc/logos-blockchain
+      - ./tools:/etc/logos-blockchain
     deploy:
       replicas: ${DOCKER_COMPOSE_LIBP2P_REPLICAS:-1}
     depends_on:

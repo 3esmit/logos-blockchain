@@ -82,7 +82,7 @@ pub enum Command {
     #[cfg(feature = "config-gen")]
     Init(InitArgs),
     /// Publish text inscriptions as zone blocks
-    Inscribe(logos_blockchain_tui_zone::InscribeArgs),
+    Inscribe(lb_tui_zone::InscribeArgs),
 }
 
 #[cfg(feature = "config-gen")]

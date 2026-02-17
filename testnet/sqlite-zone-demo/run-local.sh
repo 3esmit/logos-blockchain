@@ -130,11 +130,6 @@ fi
 export CHANNEL_ID
 export SEQUENCER_CHANNEL_ID="$CHANNEL_ID"
 
-# Map shared credentials to what each binary expects
-export SEQUENCER_NODE_AUTH_USERNAME="$TESTNET_USERNAME"
-export SEQUENCER_NODE_AUTH_PASSWORD="$TESTNET_PASSWORD"
-export TESTNET_ENDPOINT="$INDEXER_NODE_ENDPOINT"
-
 # Set defaults for sequencer
 export SEQUENCER_DB_PATH="${SEQUENCER_DB_PATH:-$DATA_DIR/sequencer.db}"
 export SEQUENCER_SIGNING_KEY_PATH="${SEQUENCER_SIGNING_KEY_PATH:-$DATA_DIR/sequencer.key}"

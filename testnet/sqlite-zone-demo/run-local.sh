@@ -146,10 +146,6 @@ export INDEXER_ACCOUNTS_DB_PATH="${INDEXER_ACCOUNTS_DB_PATH:-$DATA_DIR/accounts.
 # Get local IP for sharing
 LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 
-# Set VITE URLs using local IP so they work over network
-export VITE_SEQUENCER_URL="${VITE_SEQUENCER_URL:-http://$LOCAL_IP:8080}"
-export VITE_INDEXER_URL="${VITE_INDEXER_URL:-http://$LOCAL_IP:8090}"
-
 echo -e "${GREEN}======================================${NC}"
 echo -e "${GREEN}  L2 Demo - $SERVICE${NC}"
 echo -e "${GREEN}======================================${NC}"
@@ -217,10 +213,6 @@ case $SERVICE in
         echo -e "${GREEN}======================================${NC}"
         echo -e "${GREEN}  All services running!${NC}"
         echo -e "${GREEN}======================================${NC}"
-        echo ""
-        echo -e "${BLUE}Access points:${NC}"
-        echo "  Sequencer: $VITE_SEQUENCER_URL"
-        echo "  Indexer:  $VITE_INDEXER_URL"
         echo ""
         echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
         echo ""

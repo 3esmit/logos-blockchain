@@ -4,7 +4,9 @@ services:
 
   explorer:
     container_name: explorer
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     depends_on:
       - logos-blockchain-node-0
@@ -17,7 +19,9 @@ services:
 
   cfgsync:
     container_name: cfgsync
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - ./testnet:/etc/logos-blockchain
@@ -29,7 +33,9 @@ services:
 
   logos-blockchain-node-0:
     container_name: logos_blockchain_node_0
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data
@@ -51,7 +57,9 @@ services:
 
   logos-blockchain-node-1:
     container_name: logos_blockchain_node_1
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data
@@ -73,7 +81,9 @@ services:
 
   logos-blockchain-node-2:
     container_name: logos_blockchain_node_2
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data
@@ -95,7 +105,9 @@ services:
 
   logos-blockchain-node-3:
     container_name: logos_blockchain_node_3
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data

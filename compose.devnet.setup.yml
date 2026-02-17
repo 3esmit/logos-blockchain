@@ -4,7 +4,9 @@ services:
 
   cfgsync:
     container_name: cfgsync
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data
@@ -15,7 +17,9 @@ services:
 
   client-0:
     container_name: client_0
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data
@@ -32,7 +36,9 @@ services:
 
   client-1:
     container_name: client_1
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data
@@ -49,7 +55,9 @@ services:
 
   client-2:
     container_name: client_2
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data
@@ -66,7 +74,9 @@ services:
 
   client-3:
     container_name: client_3
-    build: .
+    build:
+      context: .
+      dockerfile: testnet/Dockerfile
     image: logos-blockchain-local:dev
     volumes:
       - node-data:/node-data

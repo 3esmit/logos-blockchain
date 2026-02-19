@@ -8,7 +8,7 @@ use lb_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::indexer::ZoneIndexer;
 use reqwest::Url;
 use thiserror::Error;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Debug, Error)]
 pub enum IndexerError {
@@ -109,7 +109,7 @@ impl Indexer {
                     continue;
                 }
 
-                debug!("Applying {} SQL statement(s)", statements.len());
+                info!("Applying {} SQL statement(s)", statements.len());
 
                 let db = self.db.lock().await;
                 for stmt in &statements {

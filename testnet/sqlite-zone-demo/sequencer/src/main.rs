@@ -3,7 +3,6 @@ mod ctrl_c;
 
 use std::sync::Arc;
 
-use demo_sqlite_sequencer::api::create_router;
 use demo_sqlite_sequencer::db::Menu;
 use demo_sqlite_sequencer::sequencer::Sequencer;
 use tokio_util::sync::CancellationToken;
@@ -27,7 +26,6 @@ async fn main() {
     // Load configuration
     let config = Config::from_env();
     info!("Configuration");
-    info!("  HTTP API:                  {}", config.listen_addr);
     info!("  Logos blockchain Node:     {}", config.node_endpoint);
     info!("  Database:                  {}", config.db_path);
     info!("  Channel ID:                {}", config.channel_id);
@@ -63,7 +61,7 @@ async fn main() {
     let cancellation_token = CancellationToken::new();
     listen_for_sigint(cancellation_token.clone());
 
-    //Write sql traces to file
+    // Write sql traces to file
     db.enable_tracing(QUEUE_FILE);
 
     // Spawn background processing loop
@@ -73,25 +71,58 @@ async fn main() {
     });
     info!("Background processor started");
 
-    // Create HTTP router
-    let app = create_router(db.into());
+    // Start REPL
+    let stdin = tokio::io::stdin();
+    let reader = tokio::io::BufReader::new(stdin);
+    use tokio::io::AsyncBufReadExt;
 
-    // Start HTTP server
-    info!("Sqlite Sequencer listening on {}", config.listen_addr);
-    let listener = match tokio::net::TcpListener::bind(config.listen_addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            error!("Failed to bind: {e}");
-            std::process::exit(1);
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    println!("Type SQL queries followed by ENTER");
+    println!("Type 'q' or CTRL+C then ENTER to exit.");
+    let mut lines = reader.lines();
+    loop {
+        tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                break;
+            }
+            line = lines.next_line() => {
+                match line {
+                    Ok(Some(input)) => {
+                        let input = input.trim().to_string();
+                        if input.is_empty() {
+                            continue;
+                        }
+                        if input.eq_ignore_ascii_case("q") {
+                            cancellation_token.cancel();
+                            continue;
+                        }
+                        match db.query(input).await {
+                            Ok(Some(dishes)) => {
+                                for dish in &dishes {
+                                    println!("ID: {} | Name: {} | Data: {}", dish.id, dish.name, dish.data);
+                                }
+                                println!("({} row(s))", dishes.len());
+                            }
+                            Ok(None) => {
+                                println!("OK");
+                            }
+                            Err(e) => {
+                                eprintln!("Error: {e}");
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // EOF
+                        cancellation_token.cancel();
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("Read error: {e}");
+                        break;
+                    }
+                }
+            }
         }
-    };
-
-    let shutdown_signal = cancellation_token.cancelled_owned();
-    if let Err(e) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await
-    {
-        error!("Server error: {e}");
-        std::process::exit(1);
     }
 }

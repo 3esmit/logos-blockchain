@@ -9,17 +9,14 @@
 # Services:
 #   sequencer  - Run only the sequencer
 #   indexer   - Run only the indexer
-#   all        - Run all services (default)
 #
 # Examples:
-#   ./run-local.sh all --env-file ~/Eng/offsite-sequencer-env/.env-local
 #   ./run-local.sh sequencer --env-file ~/Eng/offsite-sequencer-env/.env-local
 #   ./run-local.sh indexer --env-file ~/Eng/offsite-sequencer-env/.env-local
-#   ./run-local.sh all --env-file ~/Eng/offsite-sequencer-env/.env-local --clean
 #
 # Required env vars:
-#   SEQUENCER_NODE_ENDPOINT      - Nomos node HTTP endpoint for sequencer
-#   INDEXER_NODE_ENDPOINT       - Nomos node HTTP endpoint for indexer
+#   SEQUENCER_NODE_ENDPOINT      - LB node HTTP endpoint for sequencer
+#   INDEXER_NODE_ENDPOINT       - LB node HTTP endpoint for indexer
 
 set -e
 
@@ -35,7 +32,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Parse service argument (first positional arg)
-SERVICE="all"
+SERVICE="sequencer"
 if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
     SERVICE="$1"
     shift
@@ -43,11 +40,11 @@ fi
 
 # Validate service
 case $SERVICE in
-    sequencer|indexer|all)
+    sequencer|indexer)
         ;;
     *)
         echo -e "${RED}Unknown service: $SERVICE${NC}"
-        echo "Valid services: sequencer, indexer, all"
+        echo "Valid services: sequencer, indexer"
         exit 1
         ;;
 esac
@@ -128,15 +125,10 @@ fi
 
 # Set both channel ID vars to the same value
 export CHANNEL_ID
-export SEQUENCER_CHANNEL_ID="$CHANNEL_ID"
 
 # Set defaults for sequencer
-export SEQUENCER_DB_PATH="${SEQUENCER_DB_PATH:-$DATA_DIR/sequencer.db}"
-export SEQUENCER_SIGNING_KEY_PATH="${SEQUENCER_SIGNING_KEY_PATH:-$DATA_DIR/sequencer.key}"
-
-# Set defaults for indexer
-export INDEXER_BLOCKS_DB_PATH="${INDEXER_BLOCKS_DB_PATH:-$DATA_DIR/blocks.database}"
-export INDEXER_ACCOUNTS_DB_PATH="${INDEXER_ACCOUNTS_DB_PATH:-$DATA_DIR/accounts.database}"
+#export SEQUENCER_DB_PATH="${SEQUENCER_DB_PATH:-$DATA_DIR/sequencer.db}"
+#export SEQUENCER_SIGNING_KEY_PATH="${SEQUENCER_SIGNING_KEY_PATH:-$DATA_DIR/sequencer.key}"
 
 # Get local IP for sharing
 LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
@@ -156,13 +148,13 @@ echo ""
 SEQUENCER_BIN="$REPO_ROOT/target/release/demo-sqlite-sequencer"
 INDEXER_BIN="$REPO_ROOT/target/release/demo-sqlite-indexer"
 
-if [[ "$SERVICE" == "sequencer" || "$SERVICE" == "all" ]]; then
+if [[ "$SERVICE" == "sequencer" ]]; then
     echo -e "${YELLOW}Building sequencer...${NC}"
     cd "$REPO_ROOT"
     cargo build --release -p demo-sqlite-sequencer
 fi
 
-if [[ "$SERVICE" == "indexer" || "$SERVICE" == "all" ]]; then
+if [[ "$SERVICE" == "indexer" ]]; then
     echo -e "${YELLOW}Building indexer...${NC}"
     cd "$REPO_ROOT"
     cargo build --release -p demo-sqlite-indexer
@@ -179,40 +171,5 @@ case $SERVICE in
         echo -e "${GREEN}Starting indexer...${NC}"
         cd "$SCRIPT_DIR"
         exec "$INDEXER_BIN"
-        ;;
-    all)
-        # Trap to kill background processes on exit
-        cleanup() {
-            echo ""
-            echo -e "${YELLOW}Shutting down...${NC}"
-            kill $SEQUENCER_PID 2>/dev/null || true
-            kill $INDEXER_PID 2>/dev/null || true
-            exit 0
-        }
-        trap cleanup SIGINT SIGTERM
-
-        # Start sequencer
-        echo -e "${GREEN}Starting sequencer...${NC}"
-        cd "$SCRIPT_DIR"
-        "$SEQUENCER_BIN" &
-        SEQUENCER_PID=$!
-        sleep 2
-
-        # Start indexer
-        echo -e "${GREEN}Starting indexer...${NC}"
-        "$INDEXER_BIN" &
-        INDEXER_PID=$!
-        sleep 2
-
-        echo ""
-        echo -e "${GREEN}======================================${NC}"
-        echo -e "${GREEN}  All services running!${NC}"
-        echo -e "${GREEN}======================================${NC}"
-        echo ""
-        echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
-        echo ""
-
-        # Keep the script alive so the trap can fire on Ctrl+C
-        wait
         ;;
 esac

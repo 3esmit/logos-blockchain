@@ -5,7 +5,6 @@ use lb_common_http_client::BasicAuthCredentials;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::sequencer::{ZoneSequencer, Error as ZoneSequencerError};
-use logos_blockchain_zone_sdk::state::TxStatus;
 use reqwest::Url;
 use thiserror::Error;
 use tokio::time::sleep;

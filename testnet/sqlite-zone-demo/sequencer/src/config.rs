@@ -1,11 +1,7 @@
-use std::net::SocketAddr;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// HTTP server listen address (e.g., "0.0.0.0:8080")
-    pub listen_addr: SocketAddr,
     /// Logos blockchain node HTTP endpoint to submit transactions to (e.g., "<http://localhost:18080>")
     pub node_endpoint: String,
     /// Path to the rusqlite database file
@@ -24,18 +20,14 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Self {
         Self {
-            listen_addr: std::env::var("SEQUENCER_LISTEN_ADDR")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(|| "0.0.0.0:8082".parse().unwrap()),
             node_endpoint: std::env::var("SEQUENCER_NODE_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:18080".to_owned()),
             db_path: std::env::var("SEQUENCER_DB_PATH")
                 .unwrap_or_else(|_| "./data/database.db".to_owned()),
             signing_key_path: std::env::var("SEQUENCER_SIGNING_KEY_PATH")
                 .unwrap_or_else(|_| "./data/sequencer.key".to_owned()),
-            channel_id: std::env::var("SEQUENCER_CHANNEL_ID")
-                .expect("SEQUENCER_CHANNEL_ID env var is required"),
+            channel_id: std::env::var("CHANNEL_ID")
+                .expect("CHANNEL_ID env var is required"),
             node_auth_username: std::env::var("SEQUENCER_NODE_AUTH_USERNAME").ok(),
             node_auth_password: std::env::var("SEQUENCER_NODE_AUTH_PASSWORD").ok(),
         }

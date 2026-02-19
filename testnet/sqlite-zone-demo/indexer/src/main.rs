@@ -3,7 +3,6 @@ mod ctrl_c;
 
 use std::sync::Arc;
 
-use demo_sqlite_indexer::api::create_router;
 use demo_sqlite_indexer::indexer::Indexer;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -22,7 +21,6 @@ async fn main() {
 
     let config = Config::from_env();
     info!("Configuration");
-    info!("  HTTP API:              {}", config.listen_addr);
     info!("  Logos blockchain Node: {}", config.node_endpoint);
     info!("  Database:              {}", config.db_path);
     info!("  Channel ID:            {}", config.channel_id);
@@ -51,23 +49,61 @@ async fn main() {
     });
     info!("Background indexer started");
 
-    let app = create_router(indexer.db());
+    let stdin = tokio::io::stdin();
+    let reader = tokio::io::BufReader::new(stdin);
+    use tokio::io::AsyncBufReadExt;
 
-    info!("Sqlite Indexer listening on {}", config.listen_addr);
-    let listener = match tokio::net::TcpListener::bind(config.listen_addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            error!("Failed to bind: {e}");
-            std::process::exit(1);
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    println!("Type SQL queries followed by ENTER");
+    println!("Type 'q' or CTRL+C then ENTER to exit.");
+
+    let mut lines = reader.lines();
+    loop {
+        tokio::select! {
+            _ = cancellation_token.cancelled() => {
+                break;
+            }
+            line = lines.next_line() => {
+                match line {
+                    Ok(Some(input)) => {
+                        let input = input.trim().to_string();
+                        if input.is_empty() {
+                            continue;
+                        }
+                        if input.eq_ignore_ascii_case("q") {
+                            cancellation_token.cancel();
+                            continue;
+                        }
+                        if !input
+                            .split_whitespace()
+                            .next()
+                            .is_some_and(|first| first.eq_ignore_ascii_case("SELECT")) {
+                            println!("Only SELECT queries permitted");
+                            continue;
+                        }
+                        match indexer.db().lock().await.query(input).await {
+                            Ok(dishes) => {
+                                for dish in &dishes {
+                                    println!("ID: {} | Name: {} | Data: {}", dish.id, dish.name, dish.data);
+                                }
+                                println!("({} row(s))", dishes.len());
+                            }
+                            Err(e) => {
+                                eprintln!("Error: {e}");
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // EOF
+                        cancellation_token.cancel();
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("Read error: {e}");
+                        break;
+                    }
+                }
+            }
         }
-    };
-
-    let shutdown_signal = cancellation_token.cancelled_owned();
-    if let Err(e) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await
-    {
-        error!("Server error: {e}");
-        std::process::exit(1);
     }
 }

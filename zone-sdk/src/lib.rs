@@ -1,6 +1,7 @@
 pub mod indexer;
 pub mod sequencer;
 pub mod state;
+pub mod wal;
 
 use lb_core::mantle::ops::channel::MsgId;
 

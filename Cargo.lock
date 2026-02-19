@@ -4759,6 +4759,7 @@ dependencies = [
  "logos-blockchain-node",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "logos-blockchain-zone-sdk",
  "num-bigint",
  "rand 0.8.5",
  "reqwest",
@@ -4993,12 +4994,15 @@ name = "logos-blockchain-zone-sdk"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "hex",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "reqwest",
  "rpds",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

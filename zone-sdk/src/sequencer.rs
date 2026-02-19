@@ -19,7 +19,10 @@ use reqwest::Url;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 
-use crate::state::{TxState, TxStatus};
+use crate::{
+    state::{TxState, TxStatus},
+    wal::{Wal, WalConfig, WalEvent},
+};
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -59,6 +62,8 @@ pub struct SequencerConfig {
     pub resubmit_interval: Duration,
     pub reconnect_delay: Duration,
     pub publish_channel_capacity: usize,
+    /// Write-ahead log configuration (disabled by default).
+    pub wal: WalConfig,
 }
 
 impl Default for SequencerConfig {
@@ -67,6 +72,7 @@ impl Default for SequencerConfig {
             resubmit_interval: DEFAULT_RESUBMIT_INTERVAL,
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
+            wal: WalConfig::default(),
         }
     }
 }
@@ -76,6 +82,10 @@ impl Default for SequencerConfig {
 pub enum Error {
     #[error("sequencer unavailable: {reason}")]
     Unavailable { reason: &'static str },
+    #[error("WAL configuration error: {0}")]
+    WalConfig(#[from] crate::wal::WalConfigError),
+    #[error("WAL error: {0}")]
+    Wal(#[from] crate::wal::WalError),
 }
 
 enum ActorRequest {
@@ -133,6 +143,23 @@ impl ZoneSequencer {
         config: SequencerConfig,
         checkpoint: Option<SequencerCheckpoint>,
     ) -> Self {
+        Self::try_init_with_config(channel_id, signing_key, node_url, auth, config, checkpoint)
+            .expect("sequencer initialization failed")
+    }
+
+    /// Initialize sequencer with config, returning error on failure.
+    pub fn try_init_with_config(
+        channel_id: ChannelId,
+        signing_key: Ed25519Key,
+        node_url: Url,
+        auth: Option<BasicAuthCredentials>,
+        config: SequencerConfig,
+        checkpoint: Option<SequencerCheckpoint>,
+    ) -> Result<Self, Error> {
+        // Validate and open WAL
+        config.wal.validate()?;
+        let wal = config.wal.open()?;
+
         let http_client = CommonHttpClient::new(auth);
         let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
 
@@ -144,13 +171,14 @@ impl ZoneSequencer {
             http_client.clone(),
             config,
             checkpoint,
+            wal,
         ));
 
-        Self {
+        Ok(Self {
             request_tx,
             node_url,
             http_client,
-        }
+        })
     }
 
     /// Publish an inscription to the zone's channel.
@@ -308,6 +336,10 @@ async fn connect_blocks_stream(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "actor loop needs access to all context"
+)]
 async fn run_loop(
     mut request_rx: mpsc::Receiver<ActorRequest>,
     channel_id: ChannelId,
@@ -316,6 +348,7 @@ async fn run_loop(
     http_client: CommonHttpClient,
     config: SequencerConfig,
     checkpoint: Option<SequencerCheckpoint>,
+    mut wal: Option<Wal>,
 ) {
     let (state, current_tip, lib_slot, last_msg_id) =
         initialize_from_checkpoint(&http_client, &node_url, config.reconnect_delay, checkpoint)
@@ -345,6 +378,7 @@ async fn run_loop(
                         channel_id,
                         &signing_key,
                         &mut last_msg_id,
+                        &mut wal,
                     );
                 }
                 maybe_event = blocks_stream.next() => {
@@ -382,6 +416,10 @@ async fn run_loop(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "request handler needs access to all actor state"
+)]
 fn handle_request(
     request: ActorRequest,
     state: &mut Option<TxState>,
@@ -390,6 +428,7 @@ fn handle_request(
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
     last_msg_id: &mut MsgId,
+    wal: &mut Option<Wal>,
 ) {
     let Some(s) = state else {
         match request {
@@ -417,8 +456,23 @@ fn handle_request(
             let (signed_tx, new_msg_id) =
                 create_inscribe_tx(channel_id, signing_key, data, *last_msg_id);
             let id = signed_tx.mantle_tx.hash();
+            let tx_size = signed_tx.mantle_tx.ops.len(); // Approximate size
 
             s.submit(id, signed_tx.clone());
+
+            // Log to WAL
+            if let Some(w) = wal.as_mut()
+                && let Err(e) = w.append(WalEvent::TxPublished {
+                    channel_id: hex::encode(channel_id.as_ref()),
+                    tx_hash: hex::encode(<[u8; 32]>::from(id)),
+                    msg_id: hex::encode(new_msg_id.as_ref()),
+                    parent_msg_id: hex::encode(last_msg_id.as_ref()),
+                    tx_size,
+                })
+            {
+                warn!("Failed to write to WAL: {e}");
+            }
+
             *last_msg_id = new_msg_id;
 
             let checkpoint = build_checkpoint(s, *last_msg_id, lib_slot);

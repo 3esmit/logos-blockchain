@@ -12,6 +12,7 @@ use logos_blockchain_tests::{
 use logos_blockchain_zone_sdk::{
     indexer::ZoneIndexer,
     sequencer::{SequencerConfig, ZoneSequencer},
+    wal::{ReplayStats, WalConfig, WalEvent, WalReader},
 };
 use rand::{Rng as _, thread_rng};
 use serial_test::serial;
@@ -213,8 +214,16 @@ async fn test_sequencer_checkpoint_resume() {
     let signing_key = Ed25519Key::from_bytes(&key_bytes);
     let channel_id = channel_id_from_key(&signing_key);
 
+    // Create WAL directory for this test
+    let wal_dir = tempfile::tempdir().expect("Failed to create WAL temp dir");
+    let wal_path = wal_dir.path().join("sequencer.wal");
+
     let sequencer_config = SequencerConfig {
         resubmit_interval: Duration::from_secs(3),
+        wal: WalConfig {
+            enabled: true,
+            dir: Some(wal_dir.path().to_path_buf()),
+        },
         ..SequencerConfig::default()
     };
 
@@ -334,4 +343,41 @@ async fn test_sequencer_checkpoint_resume() {
         all_test_data.len(),
         "All messages from both phases should be indexed"
     );
+
+    // Verify WAL entries
+    let stats = ReplayStats::from_file(&wal_path).expect("Failed to read WAL stats");
+    assert_eq!(
+        stats.published_count, 4,
+        "WAL should have 4 TxPublished entries (2 from each phase)"
+    );
+
+    // Read individual entries and verify structure
+    let reader = WalReader::open(&wal_path).expect("Failed to open WAL reader");
+    let entries: Vec<_> = reader
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to read WAL");
+
+    assert_eq!(entries.len(), 4, "WAL should have 4 entries");
+
+    // Verify all entries are TxPublished with correct channel_id
+    let expected_channel_hex = hex::encode(channel_id.as_ref());
+    for entry in &entries {
+        match &entry.event {
+            WalEvent::TxPublished {
+                channel_id: cid, ..
+            } => {
+                assert_eq!(cid, &expected_channel_hex, "Channel ID should match");
+            }
+            _ => panic!("Expected TxPublished event, got {:?}", entry.event),
+        }
+    }
+
+    // Verify sequence numbers are monotonic
+    for (i, entry) in entries.iter().enumerate() {
+        assert_eq!(
+            entry.seq,
+            (i + 1) as u64,
+            "Sequence numbers should be 1-indexed and monotonic"
+        );
+    }
 }

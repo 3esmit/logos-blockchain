@@ -4,6 +4,7 @@ mod kms;
 mod leadership;
 mod mempool;
 mod relays;
+mod tests;
 mod wallet;
 
 use core::fmt::Debug;

@@ -22,7 +22,9 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
+use lb_key_management_system_service::{
+    api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
+};
 use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
@@ -46,7 +48,7 @@ use tracing_futures::Instrument as _;
 pub use crate::wallet::LeaderWalletConfig;
 use crate::{
     blend::BlendAdapter,
-    kms::PreloadKmsService,
+    kms::{KmsAdapter, PreloadKmsService},
     leadership::{PotentialWinningPoLSlotNotifier, build_proof_for},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
@@ -398,70 +400,19 @@ where
         let async_loop = async {
             loop {
                 tokio::select! {
-                    Some(SlotTick { slot, epoch }) = slot_timer.next() => {
-                        info!("Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
-                        let (tip, tip_state) = match Self::get_tip_ledger_state(&cryptarchia_api).await {
-                            Ok(output) => output,
-                            Err(e) => {
-                                error!("Failed to get tip ledger state: {e:?}");
-                                continue;
-                            }
-                        };
-                        let parent = tip;
-
-                        let latest_tree = tip_state.latest_utxos();
-
-                        let epoch_state = match cryptarchia_api.get_epoch_state(slot).await {
-                            Ok(Some(state)) => state,
-                            Ok(None) => {
-                                error!("trying to propose a block for slot {} but epoch state is not available", u64::from(slot));
-                                continue;
-                            }
-                            Err(e) => {
-                                error!("Failed to get epoch state: {:?}", e);
-                                continue;
-                            }
-                        };
-
-                        let eligible_utxos = match wallet_api.get_leader_aged_notes(Some(parent)).await {
-                            Ok(utxos) => utxos,
-                            Err(e) => {
-                                error!("Failed to fetch leader aged notes from wallet: {:?}", e);
-                                continue;
-                            }
-                        };
-
-                        let eligible: Vec<_> = match &ledger_config.faucet_pk {
-                            Some(fpk) => eligible_utxos.response.into_iter()
-                                .filter(|u| u.utxo.note.pk != *fpk).collect(),
-                            None => eligible_utxos.response,
-                        };
-
-                        // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
-                        winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, &kms_api).await;
-
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
-                            // TODO: spawn as a separate task?
-                            match Self::propose_block(
-                                parent,
-                                slot,
-                                proof,
-                                &signing_key,
-                                tx_selector.clone(),
-                                &relays,
-                                tip_state,
-                                &ledger_config,
-                            )
-                            .await
-                            {
-                                Ok(block) => {
-                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
-                                }
-                                Err(e) => {
-                                    error!(target: LOG_TARGET, "{e}");
-                                }
-                            }
-                        }
+                    Some(slot_tick) = slot_timer.next() => {
+                        Self::handle_slot_tick(
+                            slot_tick,
+                            &relays,
+                            &cryptarchia_api,
+                            &chain_network_api,
+                            &blend_adapter,
+                            &wallet_api,
+                            &kms_api,
+                            &mut winning_pol_slot_notifier,
+                            &tx_selector,
+                            &ledger_config,
+                        ).await;
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
@@ -547,6 +498,113 @@ where
     Wallet: lb_wallet_service::api::WalletServiceData,
     RuntimeServiceId: Debug + Display + Sync + Send + 'static + AsServiceId<Wallet>,
 {
+    #[expect(clippy::too_many_arguments, reason = "All needed")]
+    async fn handle_slot_tick(
+        slot_tick: SlotTick,
+        relays: &CryptarchiaConsensusRelays<
+            BlendService,
+            Mempool,
+            MempoolNetAdapter,
+            RuntimeServiceId,
+        >,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
+        blend_adapter: &BlendAdapter<BlendService>,
+        wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
+        kms_api: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
+        winning_pol_slot_notifier: &mut PotentialWinningPoLSlotNotifier<'_>,
+        tx_selector: &TxS,
+        ledger_config: &lb_ledger::Config,
+    ) {
+        let SlotTick { slot, epoch } = slot_tick;
+        info!(
+            "Received SlotTick for slot {}, ep {}",
+            u64::from(slot),
+            u32::from(epoch)
+        );
+        let (tip, tip_state) = match Self::get_tip_ledger_state(cryptarchia_api).await {
+            Ok(output) => output,
+            Err(e) => {
+                error!("Failed to get tip ledger state: {e:?}");
+                return;
+            }
+        };
+        let parent = tip;
+
+        let latest_tree = tip_state.latest_utxos();
+
+        let epoch_state = match cryptarchia_api.get_epoch_state(slot).await {
+            Ok(Some(state)) => state,
+            Ok(None) => {
+                error!(
+                    "trying to propose a block for slot {} but epoch state is not available",
+                    u64::from(slot)
+                );
+                return;
+            }
+            Err(e) => {
+                error!("Failed to get epoch state: {:?}", e);
+                return;
+            }
+        };
+
+        let eligible_utxos = match wallet_api.get_leader_aged_notes(Some(parent)).await {
+            Ok(utxos) => utxos,
+            Err(e) => {
+                error!("Failed to fetch leader aged notes from wallet: {:?}", e);
+                return;
+            }
+        };
+
+        let eligible: Vec<_> = match &ledger_config.faucet_pk {
+            Some(fpk) => eligible_utxos
+                .response
+                .into_iter()
+                .filter(|u| u.utxo.note.pk != *fpk)
+                .collect(),
+            None => eligible_utxos.response,
+        };
+
+        // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
+        winning_pol_slot_notifier
+            .process_epoch(&eligible, latest_tree, &epoch_state, kms_api)
+            .await;
+
+        if let Some((proof, signing_key)) = build_proof_for(
+            &eligible,
+            latest_tree,
+            &epoch_state,
+            slot,
+            winning_pol_slot_notifier,
+            wallet_api,
+            kms_api,
+        )
+        .await
+        {
+            // TODO: spawn as a separate task?
+            match Self::propose_block(
+                parent,
+                slot,
+                proof,
+                &signing_key,
+                tx_selector.clone(),
+                relays,
+                tip_state,
+                ledger_config,
+            )
+            .await
+            {
+                Ok(block) => {
+                    Self::apply_and_publish_block_proposal(block, chain_network_api, blend_adapter)
+                        .await;
+                }
+                Err(e) => {
+                    error!(target: LOG_TARGET, "{e}");
+                }
+            }
+        }
+    }
+
     #[expect(clippy::allow_attributes_without_reason)]
     #[expect(
         clippy::too_many_arguments,

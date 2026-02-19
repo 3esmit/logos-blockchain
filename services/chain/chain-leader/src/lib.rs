@@ -25,7 +25,7 @@ use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_service::{
     api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
 };
-use lb_ledger::LedgerState;
+use lb_ledger::{EpochState, LedgerState, UtxoTree};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
@@ -34,7 +34,10 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
-use lb_wallet_service::api::{WalletApi, WalletApiError};
+use lb_wallet_service::{
+    UtxoWithKeyId,
+    api::{WalletApi, WalletApiError},
+};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
@@ -81,6 +84,8 @@ pub enum Error {
     Mempool(#[source] DynError),
     #[error("Chain service error: {0}")]
     ChainService(#[from] lb_chain_service::api::ApiError),
+    #[error("Chain network service error: {0}")]
+    ChainNetworkService(#[from] lb_chain_network_service::api::ApiError),
     #[error("No claimable voucher found")]
     NoClaimableVoucher,
     #[error("Ledger state not found for {0:?}")]
@@ -570,10 +575,54 @@ where
             .process_epoch(&eligible, latest_tree, &epoch_state, kms_api)
             .await;
 
-        if let Some((proof, signing_key)) = build_proof_for(
+        if let Err(e) = Self::try_build_and_propose_block(
+            parent,
+            slot,
             &eligible,
             latest_tree,
             &epoch_state,
+            winning_pol_slot_notifier,
+            chain_network_api,
+            blend_adapter,
+            wallet_api,
+            kms_api,
+            tx_selector,
+            relays,
+            tip_state.clone(),
+            ledger_config,
+        )
+        .await
+        {
+            error!(target: LOG_TARGET, "Failed to build/propose block: {e}");
+        }
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "TODO: refactor")]
+    async fn try_build_and_propose_block(
+        parent: HeaderId,
+        slot: Slot,
+        eligible: &[UtxoWithKeyId],
+        latest_tree: &UtxoTree,
+        epoch_state: &EpochState,
+        winning_pol_slot_notifier: &PotentialWinningPoLSlotNotifier<'_>,
+        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
+        blend_adapter: &BlendAdapter<BlendService>,
+        wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
+        kms_api: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
+        tx_selector: &TxS,
+        relays: &CryptarchiaConsensusRelays<
+            BlendService,
+            Mempool,
+            MempoolNetAdapter,
+            RuntimeServiceId,
+        >,
+        tip_state: LedgerState,
+        ledger_config: &lb_ledger::Config,
+    ) -> Result<bool, Error> {
+        if let Some((proof, signing_key)) = build_proof_for(
+            eligible,
+            latest_tree,
+            epoch_state,
             slot,
             winning_pol_slot_notifier,
             wallet_api,
@@ -582,7 +631,7 @@ where
         .await
         {
             // TODO: spawn as a separate task?
-            match Self::propose_block(
+            let block = Self::propose_block(
                 parent,
                 slot,
                 proof,
@@ -592,16 +641,11 @@ where
                 tip_state,
                 ledger_config,
             )
-            .await
-            {
-                Ok(block) => {
-                    Self::apply_and_publish_block_proposal(block, chain_network_api, blend_adapter)
-                        .await;
-                }
-                Err(e) => {
-                    error!(target: LOG_TARGET, "{e}");
-                }
-            }
+            .await?;
+            Self::apply_and_publish_block_proposal(block, chain_network_api, blend_adapter).await?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -698,17 +742,14 @@ where
         block: Block<Mempool::Item>,
         chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
         blend_adapter: &BlendAdapter<BlendService>,
-    ) {
-        if let Err(e) = chain_network_api
+    ) -> Result<(), Error> {
+        chain_network_api
             .apply_block_and_reconcile_mempool(block.clone())
-            .await
-        {
-            error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
-            return;
-        }
+            .await?;
         debug!(target: LOG_TARGET, "Successfully applied our own proposed block. Publishing it to the blend network: {:?}", block.header().id());
 
         blend_adapter.publish_proposal(block.to_proposal()).await;
+        Ok(())
     }
 
     async fn handle_inbound_message(

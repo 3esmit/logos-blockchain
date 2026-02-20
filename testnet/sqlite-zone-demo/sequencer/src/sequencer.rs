@@ -4,7 +4,7 @@ use fs2::FileExt;
 use lb_common_http_client::BasicAuthCredentials;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::sequencer::{ZoneSequencer, Error as ZoneSequencerError};
+use logos_blockchain_zone_sdk::sequencer::{ZoneSequencer, Error as ZoneSequencerError, SequencerCheckpoint};
 use reqwest::Url;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -36,6 +36,7 @@ pub type Result<T> = std::result::Result<T, SequencerError>;
 pub struct Sequencer {
     zone_sequencer: ZoneSequencer,
     queue_file: String,
+    checkpoint_path: String,
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist
@@ -61,31 +62,27 @@ fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     }
 }
 
-/// Parse channel ID from hex string
-fn parse_channel_id(channel_id_str: &str) -> Result<ChannelId> {
-    let decoded = hex::decode(channel_id_str).map_err(|_| {
-        SequencerError::InvalidChannelId(format!(
-            "SEQUENCER_CHANNEL_ID must be a valid hex string, got: '{channel_id_str}'"
-        ))
-    })?;
-    let channel_bytes: [u8; 32] = decoded.try_into().map_err(|v: Vec<u8>| {
-        SequencerError::InvalidChannelId(format!(
-            "SEQUENCER_CHANNEL_ID must be exactly 64 hex characters (32 bytes), got {} characters ({} bytes)",
-            v.len() * 2,
-            v.len()
-        ))
-    })?;
-    Ok(ChannelId::from(channel_bytes))
+fn save_checkpoint(path: &Path, checkpoint: &SequencerCheckpoint) {
+    let data = serde_json::to_vec(checkpoint).expect("failed to serialize checkpoint");
+    fs::write(path, data).expect("failed to write checkpoint file");
+}
+
+fn load_checkpoint(path: &Path) -> Option<SequencerCheckpoint> {
+    if !path.exists() {
+        return None;
+    }
+    let data = fs::read(path).expect("failed to read checkpoint file");
+    Some(serde_json::from_slice(&data).expect("failed to deserialize checkpoint"))
 }
 
 impl Sequencer {
     pub fn new(
         node_endpoint: &str,
         signing_key_path: &str,
-        channel_id_str: &str,
         node_auth_username: Option<String>,
         node_auth_password: Option<String>,
         queue_file: &str,
+        checkpoint_path: &str,
     ) -> Result<Self> {
         let node_url = Url::parse(node_endpoint).map_err(|e| SequencerError::Url(e.to_string()))?;
 
@@ -93,22 +90,28 @@ impl Sequencer {
             BasicAuthCredentials::new(username, node_auth_password)
         });
 
-        let signing_key = load_or_create_signing_key(Path::new(signing_key_path))?;
-        let channel_id = parse_channel_id(channel_id_str)?;
+        let checkpoint = load_checkpoint(Path::new(&checkpoint_path));
+        if checkpoint.is_some() {
+            println!("  Restored checkpoint from {}", checkpoint_path);
+        }
 
-        info!("Channel ID: {}", hex::encode(channel_id.as_ref()));
+        let signing_key = load_or_create_signing_key(Path::new(signing_key_path))?;
+        let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
+
+        println!("Channel ID: {}", hex::encode(channel_id.as_ref()));
 
         let zone_sequencer = ZoneSequencer::init(
             channel_id,
             signing_key,
             node_url,
             basic_auth,
-            None,
+            checkpoint,
         );
 
         Ok(Self {
             zone_sequencer,
             queue_file: queue_file.to_string(),
+            checkpoint_path: checkpoint_path.to_string(),
         })
     }
 
@@ -146,6 +149,8 @@ impl Sequencer {
         let result = self.zone_sequencer.publish(data).await?;
 
         info!("Inscription published with tx_hash: {:?}", result.inscription_id);
+
+        save_checkpoint(Path::new(&self.checkpoint_path), &result.checkpoint);
 
         Ok(())
     }

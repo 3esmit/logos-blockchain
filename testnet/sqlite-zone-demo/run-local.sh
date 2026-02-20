@@ -106,43 +106,8 @@ fi
 # Create data directory (needed for channel ID file)
 mkdir -p "$DATA_DIR"
 
-# Handle CHANNEL_ID - check env, then data file, then generate new
-CHANNEL_ID_FILE="$DATA_DIR/channel_id"
-if [ -n "$CHANNEL_ID" ]; then
-    # Use env var and save it
-    echo "$CHANNEL_ID" > "$CHANNEL_ID_FILE"
-    echo -e "${BLUE}Using CHANNEL_ID from environment${NC}"
-elif [ -f "$CHANNEL_ID_FILE" ]; then
-    # Read from saved file
-    CHANNEL_ID=$(cat "$CHANNEL_ID_FILE")
-    echo -e "${BLUE}Using saved CHANNEL_ID from $CHANNEL_ID_FILE${NC}"
-else
-    # Generate new random one
-    CHANNEL_ID=$(openssl rand -hex 32)
-    echo "$CHANNEL_ID" > "$CHANNEL_ID_FILE"
-    echo -e "${YELLOW}Generated new CHANNEL_ID: ${CHANNEL_ID}${NC}"
-fi
-
-# Set both channel ID vars to the same value
-export CHANNEL_ID
-
-# Set defaults for sequencer
-#export SEQUENCER_DB_PATH="${SEQUENCER_DB_PATH:-$DATA_DIR/sequencer.db}"
-#export SEQUENCER_SIGNING_KEY_PATH="${SEQUENCER_SIGNING_KEY_PATH:-$DATA_DIR/sequencer.key}"
-
 # Get local IP for sharing
 LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
-
-echo -e "${GREEN}======================================${NC}"
-echo -e "${GREEN}  L2 Demo - $SERVICE${NC}"
-echo -e "${GREEN}======================================${NC}"
-echo ""
-echo -e "${BLUE}Configuration:${NC}"
-echo "  Sequencer endpoint: $SEQUENCER_NODE_ENDPOINT"
-echo "  Indexer endpoint:  $INDEXER_NODE_ENDPOINT"
-echo "  Channel ID:         $CHANNEL_ID"
-echo "  Data directory:     $DATA_DIR"
-echo ""
 
 # Check if binaries exist, if not build them
 SEQUENCER_BIN="$REPO_ROOT/target/release/demo-sqlite-sequencer"

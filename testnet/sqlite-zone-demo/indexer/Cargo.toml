@@ -13,6 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
+clap                      = { features = ["derive", "env", "std"], version = "4" }
 futures                   = { default-features = false, version = "0.3" }
 hex                       = "0.4"
 lb-common-http-client     = { workspace = true }

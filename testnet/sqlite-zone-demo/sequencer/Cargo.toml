@@ -13,6 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
+clap                             = { features = ["derive", "env", "std"], version = "4" }
 rusqlite                         = { version = "0.38.0", features = ["bundled", "trace"] }
 hex                              = "0.4"
 lb-common-http-client            = { workspace = true }
@@ -29,3 +30,4 @@ tokio-util                       = { version = "0.7" }
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter"], version = "0.3" }
 fs2                              = "0.4"
+serde_json.workspace = true

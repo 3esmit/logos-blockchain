@@ -237,6 +237,10 @@ where
 {
     type Item = NetAdapter::Block;
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "state machine logic kept in one place for readability; refactor can follow separately"
+    )]
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.waker = Some(cx.waker().clone());
 

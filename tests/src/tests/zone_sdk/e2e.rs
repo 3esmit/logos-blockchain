@@ -12,7 +12,7 @@ use logos_blockchain_tests::{
 use logos_blockchain_zone_sdk::{
     indexer::ZoneIndexer,
     sequencer::{SequencerConfig, ZoneSequencer},
-    wal::{ReplayStats, WalConfig, WalEvent, WalReader},
+    wal::{WalConfig, WalEvent, WalReader},
 };
 use rand::{Rng as _, thread_rng};
 use serial_test::serial;
@@ -345,13 +345,6 @@ async fn test_sequencer_checkpoint_resume() {
     );
 
     // Verify WAL entries
-    let stats = ReplayStats::from_file(&wal_path).expect("Failed to read WAL stats");
-    assert_eq!(
-        stats.published_count, 4,
-        "WAL should have 4 TxPublished entries (2 from each phase)"
-    );
-
-    // Read individual entries and verify structure
     let reader = WalReader::open(&wal_path).expect("Failed to open WAL reader");
     let entries: Vec<_> = reader
         .collect::<Result<Vec<_>, _>>()
@@ -368,7 +361,9 @@ async fn test_sequencer_checkpoint_resume() {
             } => {
                 assert_eq!(cid, &expected_channel_hex, "Channel ID should match");
             }
-            _ => panic!("Expected TxPublished event, got {:?}", entry.event),
+            WalEvent::TxFinalized { .. } => {
+                panic!("Expected TxPublished event, got {:?}", entry.event)
+            }
         }
     }
 

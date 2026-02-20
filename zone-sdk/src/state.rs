@@ -52,14 +52,14 @@ impl TxState {
         self.pending.insert(tx_hash, signed_tx);
     }
 
-    /// Process a new block.
+    /// Process a new block. Returns newly finalized tx hashes.
     pub fn process_block(
         &mut self,
         block_id: HeaderId,
         parent_id: HeaderId,
         lib: HeaderId,
         our_txs: impl IntoIterator<Item = TxHash>,
-    ) {
+    ) -> Vec<TxHash> {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
 
@@ -81,6 +81,8 @@ impl TxState {
         }
         self.block_states.insert(block_id, safe_set);
 
+        let mut newly_finalized = Vec::new();
+
         // When lib advances: finalize txs and prune
         if lib != self.current_lib {
             // Finalize txs in all blocks from new lib back to old lib (inclusive).
@@ -92,6 +94,7 @@ impl TxState {
                     for tx_hash in block_safe.iter() {
                         if self.pending.remove(tx_hash).is_some() {
                             self.finalized.insert(*tx_hash);
+                            newly_finalized.push(*tx_hash);
                         }
                     }
                 }
@@ -113,6 +116,8 @@ impl TxState {
             self.prune_orphans(lib);
             self.current_lib = lib;
         }
+
+        newly_finalized
     }
 
     /// Remove orphaned blocks whose parent was pruned.

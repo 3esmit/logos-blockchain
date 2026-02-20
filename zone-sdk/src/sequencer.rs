@@ -6,6 +6,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
+        encoding::encode_signed_mantle_tx,
         ledger::Tx as LedgerTx,
         ops::{
             Op, OpProof,
@@ -391,6 +392,7 @@ async fn run_loop(
                             channel_id,
                             &http_client,
                             &node_url,
+                            &mut wal,
                         )
                         .await;
                     } else {
@@ -456,7 +458,7 @@ fn handle_request(
             let (signed_tx, new_msg_id) =
                 create_inscribe_tx(channel_id, signing_key, data, *last_msg_id);
             let id = signed_tx.mantle_tx.hash();
-            let tx_size = signed_tx.mantle_tx.ops.len(); // Approximate size
+            let tx_size = encode_signed_mantle_tx(&signed_tx).len();
 
             s.submit(id, signed_tx.clone());
 
@@ -510,6 +512,10 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "event handler needs access to all actor state"
+)]
 async fn handle_block_event(
     event: &ProcessedBlockEvent,
     state: &mut Option<TxState>,
@@ -518,6 +524,7 @@ async fn handle_block_event(
     channel_id: ChannelId,
     http_client: &CommonHttpClient,
     node_url: &Url,
+    wal: &mut Option<Wal>,
 ) {
     let block_id = event.block.header.id;
     let parent_id = event.block.header.parent_block;
@@ -567,8 +574,21 @@ async fn handle_block_event(
 
     // Process the actual event block with real lib (triggers finalization if lib
     // advanced)
-    s.process_block(block_id, parent_id, lib, our_txs);
+    let finalized = s.process_block(block_id, parent_id, lib, our_txs);
     *current_tip = Some(tip);
+
+    // Log finalized transactions to WAL
+    if let Some(w) = wal.as_mut() {
+        for tx_hash in finalized {
+            if let Err(e) = w.append(WalEvent::TxFinalized {
+                tx_hash: hex::encode(<[u8; 32]>::from(tx_hash)),
+                l1_block_id: hex::encode(<[u8; 32]>::from(lib)),
+                l1_slot: (*lib_slot).into(),
+            }) {
+                warn!("Failed to write TxFinalized to WAL: {e}");
+            }
+        }
+    }
 }
 
 fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {

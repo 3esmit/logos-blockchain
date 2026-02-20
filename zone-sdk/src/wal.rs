@@ -1,40 +1,12 @@
 //! Write-Ahead Log (WAL) for sequencer event history.
 //!
 //! This module provides an append-only event log for audit, debugging, and
-//! replay purposes. Uses NDJSON (newline-delimited JSON) format for:
-//! - Easy debugging (`tail -f`, `grep`)
-//! - Loki/Grafana ingestion
-//! - Schema evolution (add fields safely)
-//! - Corruption isolation (only affects last line)
-//!
-//! Note: WAL is for audit/replay, not recovery. Use checkpoints for recovery.
-//!
-//! # Configuration
-//!
-//! WAL is disabled by default. To enable, set `enabled: true` and provide a
-//! `dir`:
-//!
-//! ```yaml
-//! wal:
-//!   enabled: true
-//!   dir: "/var/lib/sequencer/wal"
-//! ```
-//!
-//! # Usage
-//!
-//! ```ignore
-//! // At startup - validate config (fails fast if invalid)
-//! config.wal.validate()?;
-//!
-//! // Open WAL (returns None if disabled)
-//! let wal = config.wal.open()?;
-//! ```
+//! replay purposes. Uses NDJSON (newline-delimited JSON) format.
 
 use std::{
     fs::{File, OpenOptions},
-    io::{self, BufRead as _, BufReader, Write as _},
+    io::{self, BufRead as _, BufReader, BufWriter, Write as _},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -138,8 +110,8 @@ pub enum WalEvent {
 
 /// WAL writer for appending events.
 pub struct Wal {
-    file: File,
-    seq: AtomicU64,
+    writer: BufWriter<File>,
+    seq: u64,
 }
 
 /// Error type for WAL operations.
@@ -163,7 +135,7 @@ impl Wal {
 
         // Determine starting sequence number by reading existing entries
         let starting_seq = if path.exists() {
-            Self::find_last_seq(path)?.map_or(0, |s| s)
+            Self::find_last_seq(path)?.unwrap_or(0)
         } else {
             0
         };
@@ -171,8 +143,8 @@ impl Wal {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
 
         Ok(Self {
-            file,
-            seq: AtomicU64::new(starting_seq + 1),
+            writer: BufWriter::new(file),
+            seq: starting_seq + 1,
         })
     }
 
@@ -204,8 +176,12 @@ impl Wal {
     }
 
     /// Append an event to the WAL.
+    ///
+    /// Note: Data is buffered. Call `flush()` to ensure it's written to disk.
     pub fn append(&mut self, event: WalEvent) -> Result<u64, WalError> {
-        let seq = self.seq.fetch_add(1, Ordering::SeqCst);
+        let seq = self.seq;
+        self.seq += 1;
+
         let entry = WalEntry {
             v: WAL_VERSION,
             seq,
@@ -214,10 +190,15 @@ impl Wal {
         };
 
         let json = serde_json::to_string(&entry)?;
-        writeln!(self.file, "{json}")?;
-        self.file.flush()?;
+        writeln!(self.writer, "{json}")?;
 
         Ok(seq)
+    }
+
+    /// Flush buffered data to the OS.
+    pub fn flush(&mut self) -> Result<(), WalError> {
+        self.writer.flush()?;
+        Ok(())
     }
 
     /// Log a published transaction.
@@ -252,15 +233,24 @@ impl Wal {
         })
     }
 
-    /// Sync the WAL to disk.
+    /// Sync the WAL to disk (flush buffer + fsync).
     pub fn sync(&mut self) -> Result<(), WalError> {
-        self.file.sync_all()?;
+        self.writer.flush()?;
+        self.writer.get_ref().sync_all()?;
         Ok(())
     }
 
     /// Get the next sequence number that will be used.
-    pub fn next_seq(&self) -> u64 {
-        self.seq.load(Ordering::SeqCst)
+    #[must_use]
+    pub const fn next_seq(&self) -> u64 {
+        self.seq
+    }
+}
+
+impl Drop for Wal {
+    fn drop(&mut self) {
+        // Best-effort flush on drop
+        drop(self.writer.flush());
     }
 }
 
@@ -317,45 +307,6 @@ impl Iterator for WalReader {
     }
 }
 
-/// Replay statistics.
-#[derive(Debug, Default)]
-pub struct ReplayStats {
-    pub total_entries: usize,
-    pub published_count: usize,
-    pub finalized_count: usize,
-    pub first_seq: Option<u64>,
-    pub last_seq: Option<u64>,
-    pub first_ts: Option<u64>,
-    pub last_ts: Option<u64>,
-}
-
-impl ReplayStats {
-    /// Compute stats from a WAL file.
-    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, WalError> {
-        let reader = WalReader::open(path)?;
-        let mut stats = Self::default();
-
-        for entry in reader {
-            let entry = entry?;
-            stats.total_entries += 1;
-
-            match &entry.event {
-                WalEvent::TxPublished { .. } => stats.published_count += 1,
-                WalEvent::TxFinalized { .. } => stats.finalized_count += 1,
-            }
-
-            if stats.first_seq.is_none() {
-                stats.first_seq = Some(entry.seq);
-                stats.first_ts = Some(entry.ts);
-            }
-            stats.last_seq = Some(entry.seq);
-            stats.last_ts = Some(entry.ts);
-        }
-
-        Ok(stats)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -368,14 +319,13 @@ mod tests {
         let path = dir.path().join("test.wal");
 
         // Write some entries
-        {
-            let mut wal = Wal::open(&path).unwrap();
-            wal.log_published(b"chan1", b"tx1", b"msg1", b"parent1", 100)
-                .unwrap();
-            wal.log_published(b"chan1", b"tx2", b"msg2", b"msg1", 150)
-                .unwrap();
-            wal.log_finalized(b"tx1", b"block1", 12345).unwrap();
-        }
+        let mut wal = Wal::open(&path).unwrap();
+        wal.log_published(b"chan1", b"tx1", b"msg1", b"parent1", 100)
+            .unwrap();
+        wal.log_published(b"chan1", b"tx2", b"msg2", b"msg1", 150)
+            .unwrap();
+        wal.log_finalized(b"tx1", b"block1", 12345).unwrap();
+        drop(wal);
 
         // Read them back
         let reader = WalReader::open(&path).unwrap();
@@ -390,14 +340,14 @@ mod tests {
             WalEvent::TxPublished { tx_hash, .. } => {
                 assert_eq!(tx_hash, &hex::encode(b"tx1"));
             }
-            _ => panic!("expected TxPublished"),
+            WalEvent::TxFinalized { .. } => panic!("expected TxPublished"),
         }
 
         match &entries[2].event {
             WalEvent::TxFinalized { l1_slot, .. } => {
                 assert_eq!(*l1_slot, 12345);
             }
-            _ => panic!("expected TxFinalized"),
+            WalEvent::TxPublished { .. } => panic!("expected TxFinalized"),
         }
     }
 
@@ -407,23 +357,21 @@ mod tests {
         let path = dir.path().join("test.wal");
 
         // Write first batch
-        {
-            let mut wal = Wal::open(&path).unwrap();
-            wal.log_published(b"chan", b"tx1", b"msg1", b"p", 100)
-                .unwrap();
-            wal.log_published(b"chan", b"tx2", b"msg2", b"msg1", 100)
-                .unwrap();
-            assert_eq!(wal.next_seq(), 3);
-        }
+        let mut wal = Wal::open(&path).unwrap();
+        wal.log_published(b"chan", b"tx1", b"msg1", b"p", 100)
+            .unwrap();
+        wal.log_published(b"chan", b"tx2", b"msg2", b"msg1", 100)
+            .unwrap();
+        assert_eq!(wal.next_seq(), 3);
+        drop(wal);
 
         // Reopen and continue
-        {
-            let mut wal = Wal::open(&path).unwrap();
-            assert_eq!(wal.next_seq(), 3);
-            wal.log_published(b"chan", b"tx3", b"msg3", b"msg2", 100)
-                .unwrap();
-            assert_eq!(wal.next_seq(), 4);
-        }
+        let mut wal = Wal::open(&path).unwrap();
+        assert_eq!(wal.next_seq(), 3);
+        wal.log_published(b"chan", b"tx3", b"msg3", b"msg2", 100)
+            .unwrap();
+        assert_eq!(wal.next_seq(), 4);
+        drop(wal);
 
         // Verify all entries
         let reader = WalReader::open(&path).unwrap();
@@ -459,37 +407,14 @@ mod tests {
     }
 
     #[test]
-    fn test_replay_stats() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test.wal");
-
-        {
-            let mut wal = Wal::open(&path).unwrap();
-            wal.log_published(b"c", b"tx1", b"m1", b"p", 100).unwrap();
-            wal.log_published(b"c", b"tx2", b"m2", b"m1", 100).unwrap();
-            wal.log_finalized(b"tx1", b"b1", 100).unwrap();
-            wal.log_published(b"c", b"tx3", b"m3", b"m2", 100).unwrap();
-            wal.log_finalized(b"tx2", b"b2", 200).unwrap();
-        }
-
-        let stats = ReplayStats::from_file(&path).unwrap();
-        assert_eq!(stats.total_entries, 5);
-        assert_eq!(stats.published_count, 3);
-        assert_eq!(stats.finalized_count, 2);
-        assert_eq!(stats.first_seq, Some(1));
-        assert_eq!(stats.last_seq, Some(5));
-    }
-
-    #[test]
     fn test_json_format() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.wal");
 
-        {
-            let mut wal = Wal::open(&path).unwrap();
-            wal.log_published(b"\x01\x02", b"\xaa\xbb", b"\xcc\xdd", b"\xee\xff", 42)
-                .unwrap();
-        }
+        let mut wal = Wal::open(&path).unwrap();
+        wal.log_published(b"\x01\x02", b"\xaa\xbb", b"\xcc\xdd", b"\xee\xff", 42)
+            .unwrap();
+        drop(wal);
 
         // Read raw file and verify JSON structure
         let content = std::fs::read_to_string(&path).unwrap();

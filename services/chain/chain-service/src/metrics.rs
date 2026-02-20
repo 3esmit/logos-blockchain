@@ -1,14 +1,16 @@
-use crate::Cryptarchia;
+use lb_cryptarchia_engine::Cryptarchia;
+use lb_cryptarchia_sync::HeaderId;
+use lb_ledger::Ledger;
 
-pub fn emit_consensus_metrics(cryptarchia: &Cryptarchia) {
-    let tip_branch = *cryptarchia.consensus.tip_branch();
-    let lib_branch = *cryptarchia.consensus.lib_branch();
+pub fn emit_consensus_metrics(consensus: &Cryptarchia<HeaderId>, ledger: &Ledger<HeaderId>) {
+    let tip_branch = *consensus.tip_branch();
+    let lib_branch = *consensus.lib_branch();
 
     let height = tip_branch.length();
     let finalized_height = lib_branch.length();
     let current_slot = tip_branch.slot();
-    let current_epoch = cryptarchia.ledger.config().epoch(current_slot);
-    let forks_count = cryptarchia.consensus.branches().branches().count();
+    let current_epoch = ledger.config().epoch(current_slot);
+    let forks_count = consensus.branches().branches().count();
 
     lb_tracing::metric_gauge_u64!(consensus_tip_height, height as usize);
     lb_tracing::metric_gauge_u64!(consensus_finalized_height, finalized_height as usize);

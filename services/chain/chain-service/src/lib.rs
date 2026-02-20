@@ -1,7 +1,7 @@
 pub mod api;
 mod bootstrap;
-mod notifier;
 mod metrics;
+mod notifier;
 mod relays;
 mod states;
 pub mod storage;
@@ -323,7 +323,7 @@ impl Cryptarchia {
         // Prune the ledger states of all the pruned blocks.
         self.prune_ledger_states(pruned_blocks.all());
 
-        metrics::emit_consensus_metrics(&cryptarchia);
+        metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
         Ok((pruned_blocks, reorged_blocks))
     }

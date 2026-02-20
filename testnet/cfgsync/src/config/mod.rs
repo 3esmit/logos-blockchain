@@ -48,18 +48,14 @@ pub fn host_to_id(identifier: &str) -> HostId {
 pub fn create_node_configs(
     faucet_settings: &FaucetSettings,
     tracing_settings: &TracingConfig,
-    hosts: Vec<Host>,
+    mut hosts: Vec<Host>,
 ) -> (HashMap<Host, GeneralConfig>, GenesisTx, Option<ZkPublicKey>) {
+    hosts.sort();
     let mut ids = Vec::with_capacity(hosts.len());
 
     for host in &hosts {
         ids.push(host_to_id(&host.identifier));
     }
-
-    // Clippy in 1.93.0:
-    // > an unstable sort typically performs faster without any
-    // > observable difference for this data type. [stable_sort_primitive]
-    ids.sort_unstable();
 
     let (consensus_configs, faucet_info, genesis_tx) =
         create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, faucet_settings);
@@ -274,12 +270,15 @@ mod cfgsync_tests {
     use std::{net::Ipv4Addr, str::FromStr as _};
 
     use ::tracing::Level;
-    use lb_libp2p::{Multiaddr, Protocol};
+    use lb_libp2p::{Multiaddr, Protocol, ed25519};
     use lb_node::config::{TracingConfig, tracing::serde as tracing};
     use lb_tests::common::kms::key_id_for_preload_backend;
 
     use super::{Host, create_node_configs};
-    use crate::{FaucetSettings, config::create_node_config_from_template};
+    use crate::{
+        FaucetSettings,
+        config::{create_node_config_from_template, host_to_id},
+    };
 
     fn tracing_none() -> TracingConfig {
         TracingConfig {
@@ -369,7 +368,7 @@ mod cfgsync_tests {
     }
 
     #[test]
-    fn test_faucet_keys_distribution() {
+    fn test_keys_distribution() {
         let faucet_settings = FaucetSettings { enabled: true };
 
         let hosts = vec![
@@ -381,6 +380,16 @@ mod cfgsync_tests {
             Host {
                 ip: Ipv4Addr::LOCALHOST,
                 identifier: "node_2".into(),
+                ..Default::default()
+            },
+            Host {
+                ip: Ipv4Addr::LOCALHOST,
+                identifier: "node_3".into(),
+                ..Default::default()
+            },
+            Host {
+                ip: Ipv4Addr::LOCALHOST,
+                identifier: "node_4".into(),
                 ..Default::default()
             },
         ];
@@ -409,6 +418,13 @@ mod cfgsync_tests {
                 kms_keys.contains_key(&faucet_key_id),
                 "Faucet key should be in node's KMS"
             );
+
+            // Node network key should be generated from host identifier.
+            let expected_network_key =
+                ed25519::SecretKey::try_from_bytes(&mut host_to_id(&host.identifier))
+                    .expect("Failed to generate secret key from bytes");
+            let assigned_network_key = config.network_config.backend.swarm.node_key.clone();
+            assert_eq!(assigned_network_key.as_ref(), expected_network_key.as_ref());
         }
     }
 }

@@ -12,7 +12,7 @@ const DEFAULT_LIBP2P_NETWORK_PORT: u16 = 3000;
 const DEFAULT_BLEND_PORT: u16 = 3400;
 const DEFAULT_API_PORT: u16 = 18080;
 
-#[derive(Eq, PartialEq, Hash, Clone)]
+#[derive(Eq, PartialEq, PartialOrd, Ord, Hash, Clone)]
 pub struct Host {
     pub ip: Ipv4Addr,
     pub identifier: String,

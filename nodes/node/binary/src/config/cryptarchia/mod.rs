@@ -155,6 +155,7 @@ impl ServiceConfig {
                     max_orphan_cache_size: self.user.network.sync.orphan.max_orphan_cache_size,
                 },
             },
+            future_slot_margin: self.user.network.future_slot_margin,
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
             blend_broadcast_settings: Libp2pBroadcastSettings {

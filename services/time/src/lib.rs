@@ -42,6 +42,9 @@ pub enum TimeServiceMessage {
     CurrentSlot {
         sender: oneshot::Sender<SlotTick>,
     },
+    SlotConfig {
+        sender: oneshot::Sender<SlotConfig>,
+    },
 }
 
 impl Debug for TimeServiceMessage {
@@ -49,6 +52,7 @@ impl Debug for TimeServiceMessage {
         match self {
             Self::Subscribe { .. } => f.write_str("Subscribe"),
             Self::CurrentSlot { .. } => f.write_str("CurrentSlot"),
+            Self::SlotConfig { .. } => f.write_str("SlotConfig"),
         }
     }
 }
@@ -70,6 +74,7 @@ where
     Backend: TimeBackend,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
+    slot_config: SlotConfig,
     backend: Backend,
 }
 
@@ -99,9 +104,11 @@ where
             .settings_handle
             .notifier()
             .get_updated_settings();
+        let slot_config = settings.slot_config;
         let backend = Backend::init(settings);
         Ok(Self {
             service_resources_handle,
+            slot_config,
             backend,
         })
     }
@@ -112,6 +119,7 @@ where
 
         let Self {
             service_resources_handle,
+            slot_config,
             backend,
         } = self;
         let mut inbound_relay = service_resources_handle.inbound_relay;
@@ -128,7 +136,7 @@ where
         loop {
             tokio::select! {
                 Some(service_message) = inbound_relay.recv() => {
-                    handle_service_message(service_message, &broadcast_receiver, &current_slot_tick);
+                    handle_service_message(service_message, &broadcast_receiver, &current_slot_tick, &slot_config);
                 }
                 Some(slot_tick) = tick_stream.next() => {
                     current_slot_tick = slot_tick;
@@ -145,6 +153,7 @@ fn handle_service_message(
     message: TimeServiceMessage,
     broadcast_receiver: &broadcast::Receiver<SlotTick>,
     current_slot_tick: &SlotTick,
+    slot_config: &SlotConfig,
 ) {
     match message {
         TimeServiceMessage::Subscribe { sender } => {
@@ -170,6 +179,11 @@ fn handle_service_message(
         TimeServiceMessage::CurrentSlot { sender } => {
             if sender.send(*current_slot_tick).is_err() {
                 error!("Couldn't send back a CurrentSlot response");
+            }
+        }
+        TimeServiceMessage::SlotConfig { sender } => {
+            if sender.send(*slot_config).is_err() {
+                error!("Couldn't send back a SlotConfig response");
             }
         }
     }

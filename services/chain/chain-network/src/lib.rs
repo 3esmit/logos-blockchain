@@ -1,5 +1,6 @@
 pub mod api;
 mod bootstrap;
+mod future;
 mod mempool;
 pub mod network;
 mod relays;
@@ -10,19 +11,22 @@ use std::{fmt::Display, hash::Hash, time::Duration};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::api::{
+    ApiError as ChainApiError, CryptarchiaServiceApi, CryptarchiaServiceData,
+};
 use lb_core::{
     block::{Block, Proposal},
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash, genesis_tx::GenesisTx},
     sdp::ServiceType,
 };
+use lb_cryptarchia_engine::time::SlotConfig;
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
-use lb_time_service::TimeService;
+use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
@@ -37,7 +41,8 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
@@ -47,8 +52,9 @@ pub use crate::{
 };
 use crate::{
     bootstrap::ibd::InitialBlockDownload,
+    future::FutureProposalDelayer,
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
-    relays::ChainNetworkRelays,
+    relays::{ChainNetworkRelays, TimeRelay},
     sync::orphan_handler::OrphanBlocksDownloader,
 };
 
@@ -59,7 +65,7 @@ pub(crate) const LOG_TARGET: &str = "chain-network::service";
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    Cryptarchia(#[from] lb_chain_service::api::ApiError),
+    Cryptarchia(#[from] ChainApiError),
     #[error("Serialization error: {0}")]
     Serialisation(#[from] lb_core::codec::Error),
     #[error("Invalid block: {0}")]
@@ -88,6 +94,7 @@ where
     pub network_adapter_settings: NetworkAdapterSettings,
     pub bootstrap: BootstrapConfig<NodeId>,
     pub sync: SyncConfig,
+    pub future_slot_margin: Slot,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -161,6 +168,8 @@ where
     type StateOperator = NoOperator<Self::State>;
     type Message = Message<Mempool::Item>;
 }
+
+const CHANNEL_SIZE: usize = 64;
 
 #[async_trait::async_trait]
 impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
@@ -243,6 +252,7 @@ where
             network_adapter_settings,
             bootstrap: bootstrap_config,
             sync: sync_config,
+            future_slot_margin,
         } = self
             .service_resources_handle
             .settings_handle
@@ -252,7 +262,13 @@ where
         let network_adapter =
             NetAdapter::new(network_adapter_settings, relays.network_relay().clone()).await;
 
-        let mut incoming_proposals = network_adapter.proposals_stream().await?;
+        let incoming_proposals = network_adapter.proposals_stream().await?;
+        let (delayed_proposal_sender, delayed_proposal_receiver) = mpsc::channel(CHANNEL_SIZE);
+        let mut proposal_stream = tokio_stream::StreamExt::merge(
+            incoming_proposals,
+            ReceiverStream::new(delayed_proposal_receiver),
+        );
+
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
@@ -269,6 +285,12 @@ where
             TimeService<_, _>
         )
         .await?;
+
+        let future_proposal_delayer = FutureProposalDelayer::new(
+            future_slot_margin,
+            get_slot_config(relays.time_relay()).await?.slot_duration,
+            delayed_proposal_sender,
+        );
 
         let initial_block_download = InitialBlockDownload::new(
             ChainNetworkIbdBlockProcessor::<_, Mempool, _> {
@@ -311,10 +333,11 @@ where
         let async_loop = async {
             loop {
                 tokio::select! {
-                    Some(proposal) = incoming_proposals.next() => {
-                        self.handle_incoming_proposal(
+                    Some(proposal) = proposal_stream.next() => {
+                        self.handle_proposal(
                             proposal,
                             orphan_downloader.as_mut().get_mut(),
+                            &future_proposal_delayer,
                             &relays,
                         )
                         .await;
@@ -414,10 +437,11 @@ where
         );
     }
 
-    async fn handle_incoming_proposal(
+    async fn handle_proposal(
         &self,
         proposal: Proposal,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+        future_proposal_delayer: &FutureProposalDelayer<Proposal>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
             Mempool,
@@ -429,73 +453,20 @@ where
         RuntimeServiceId: Send + Sync + 'static,
     {
         let block_id = proposal.header().id();
-
         if !should_process_block(relays.cryptarchia(), block_id).await {
-            info!(
-                target: LOG_TARGET,
-                "Block {block_id:?} already processed, ignoring"            );
+            info!(target: LOG_TARGET, "Block {block_id:?} already processed, ignoring");
             return;
         }
 
-        let block = match reconstruct_block_from_proposal(proposal, relays.mempool_adapter()).await
+        let block = match reconstruct_block_from_proposal(&proposal, relays.mempool_adapter()).await
         {
             Ok(block) => block,
             Err(e) => {
-                error!(
-                    target: LOG_TARGET,
-                    "Failed to reconstruct block from proposal: {:?}",
-                    e
-                );
+                error!(target: LOG_TARGET, "Failed to reconstruct block from proposal: {e:?}");
                 return;
             }
         };
-
-        self.apply_reconstructed_block(block, orphan_downloader, relays)
-            .await;
-    }
-
-    fn handle_proposal_processing_error(
-        err: Error,
-        block_id: HeaderId,
-        orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
-    ) where
-        RuntimeServiceId: Send + Sync + 'static,
-    {
-        match err {
-            Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
-                orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
-
-                error!(
-                    target: LOG_TARGET, ?block_id, ?parent,
-                    "Parent block missing, enqueued block for orphan processing",
-                );
-            }
-            err => {
-                error!(
-                    target: LOG_TARGET, %err, ?block_id,
-                    "Error processing reconstructed block",
-                );
-            }
-        }
-    }
-
-    async fn apply_reconstructed_block(
-        &self,
-        block: Block<Mempool::Item>,
-        orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
-        relays: &ChainNetworkRelays<
-            Cryptarchia,
-            Mempool,
-            MempoolNetAdapter,
-            NetAdapter,
-            RuntimeServiceId,
-        >,
-    ) where
-        RuntimeServiceId: Send + Sync + 'static,
-    {
         Self::log_received_block(&block);
-
-        let block_id = block.header().id();
 
         match apply_block_and_reconcile_mempool::<_, Mempool, _>(
             block,
@@ -509,7 +480,46 @@ where
                 trace!(counter.consensus_processed_blocks = 1);
             }
             Err(err) => {
-                Self::handle_proposal_processing_error(err, block_id, orphan_downloader);
+                Self::handle_proposal_processing_error(
+                    err,
+                    proposal,
+                    orphan_downloader,
+                    future_proposal_delayer,
+                );
+            }
+        }
+    }
+
+    fn handle_proposal_processing_error(
+        err: Error,
+        proposal: Proposal,
+        orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+        future_proposal_delayer: &FutureProposalDelayer<Proposal>,
+    ) where
+        RuntimeServiceId: Send + Sync + 'static,
+    {
+        let block_id = proposal.header().id();
+
+        match err {
+            Error::Cryptarchia(ChainApiError::ParentMissing { parent, info }) => {
+                orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
+
+                error!(
+                    target: LOG_TARGET, ?block_id, ?parent,
+                    "Parent block missing, enqueued block for orphan processing",
+                );
+            }
+            Error::Cryptarchia(ChainApiError::FutureBlock {
+                block_slot,
+                current_slot,
+            }) => {
+                future_proposal_delayer.try_delay(proposal, block_slot, current_slot);
+            }
+            err => {
+                error!(
+                    target: LOG_TARGET, %err, ?block_id,
+                    "Error processing reconstructed block",
+                );
             }
         }
     }
@@ -559,6 +569,15 @@ where
             }
         }
     }
+}
+
+async fn get_slot_config(time_relay: &TimeRelay) -> Result<SlotConfig, DynError> {
+    let (sender, receiver) = oneshot::channel();
+    time_relay
+        .send(TimeServiceMessage::SlotConfig { sender })
+        .await
+        .map_err(|(e, _)| e)?;
+    Ok(receiver.await?)
 }
 
 async fn should_process_block<Cryptarchia, RuntimeServiceId>(
@@ -642,7 +661,7 @@ where
 
 /// Reconstruct a Block from a Proposal by looking up transactions from mempool
 async fn reconstruct_block_from_proposal<Item>(
-    proposal: Proposal,
+    proposal: &Proposal,
     mempool: &MempoolAdapter<Item>,
 ) -> Result<Block<Item>, Error>
 where

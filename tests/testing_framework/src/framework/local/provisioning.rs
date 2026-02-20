@@ -504,6 +504,7 @@ fn build_cryptarchia_user_config(
                         .expect("max orphan cache size must be non-zero"),
                 },
             },
+            future_slot_margin: 0.into(),
         },
         service: ServiceConfig {
             bootstrap: service::BootstrapConfig {

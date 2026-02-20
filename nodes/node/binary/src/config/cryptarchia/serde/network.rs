@@ -1,6 +1,7 @@
 use core::{num::NonZeroUsize, time::Duration};
 use std::collections::HashSet;
 
+use lb_chain_service::Slot;
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -10,6 +11,8 @@ use serde_with::serde_as;
 pub struct Config {
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
+    #[serde(default = "default_future_slot_margin")]
+    pub future_slot_margin: Slot,
 }
 
 #[serde_as]
@@ -57,4 +60,8 @@ impl Default for OrphanConfig {
             max_orphan_cache_size: NonZeroUsize::new(5).unwrap(),
         }
     }
+}
+
+fn default_future_slot_margin() -> Slot {
+    1.into()
 }

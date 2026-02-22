@@ -21,8 +21,8 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::{
+    append_log::{AppendLog, AppendLogEvent, JournalConfig},
     state::{TxState, TxStatus},
-    wal::{Wal, WalConfig, WalEvent},
 };
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
@@ -63,8 +63,8 @@ pub struct SequencerConfig {
     pub resubmit_interval: Duration,
     pub reconnect_delay: Duration,
     pub publish_channel_capacity: usize,
-    /// Write-ahead log configuration (disabled by default).
-    pub wal: WalConfig,
+    /// Journal configuration. None = disabled (default).
+    pub journal: Option<JournalConfig>,
 }
 
 impl Default for SequencerConfig {
@@ -73,7 +73,7 @@ impl Default for SequencerConfig {
             resubmit_interval: DEFAULT_RESUBMIT_INTERVAL,
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
-            wal: WalConfig::default(),
+            journal: None,
         }
     }
 }
@@ -83,10 +83,8 @@ impl Default for SequencerConfig {
 pub enum Error {
     #[error("sequencer unavailable: {reason}")]
     Unavailable { reason: &'static str },
-    #[error("WAL configuration error: {0}")]
-    WalConfig(#[from] crate::wal::WalConfigError),
-    #[error("WAL error: {0}")]
-    Wal(#[from] crate::wal::WalError),
+    #[error("journal error: {0}")]
+    Journal(#[from] crate::append_log::AppendLogError),
 }
 
 enum ActorRequest {
@@ -157,9 +155,11 @@ impl ZoneSequencer {
         config: SequencerConfig,
         checkpoint: Option<SequencerCheckpoint>,
     ) -> Result<Self, Error> {
-        // Validate and open WAL
-        config.wal.validate()?;
-        let wal = config.wal.open()?;
+        let journal = config
+            .journal
+            .as_ref()
+            .map(JournalConfig::open)
+            .transpose()?;
 
         let http_client = CommonHttpClient::new(auth);
         let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
@@ -172,7 +172,7 @@ impl ZoneSequencer {
             http_client.clone(),
             config,
             checkpoint,
-            wal,
+            journal,
         ));
 
         Ok(Self {
@@ -349,7 +349,7 @@ async fn run_loop(
     http_client: CommonHttpClient,
     config: SequencerConfig,
     checkpoint: Option<SequencerCheckpoint>,
-    mut wal: Option<Wal>,
+    mut journal: Option<AppendLog>,
 ) {
     let (state, current_tip, lib_slot, last_msg_id) =
         initialize_from_checkpoint(&http_client, &node_url, config.reconnect_delay, checkpoint)
@@ -379,7 +379,7 @@ async fn run_loop(
                         channel_id,
                         &signing_key,
                         &mut last_msg_id,
-                        &mut wal,
+                        &mut journal,
                     );
                 }
                 maybe_event = blocks_stream.next() => {
@@ -392,7 +392,7 @@ async fn run_loop(
                             channel_id,
                             &http_client,
                             &node_url,
-                            &mut wal,
+                            &mut journal,
                         )
                         .await;
                     } else {
@@ -430,7 +430,7 @@ fn handle_request(
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
     last_msg_id: &mut MsgId,
-    wal: &mut Option<Wal>,
+    journal: &mut Option<AppendLog>,
 ) {
     let Some(s) = state else {
         match request {
@@ -462,9 +462,9 @@ fn handle_request(
 
             s.submit(id, signed_tx.clone());
 
-            // Log to WAL
-            if let Some(w) = wal.as_mut()
-                && let Err(e) = w.append(WalEvent::TxPublished {
+            // Log to journal
+            if let Some(w) = journal.as_mut()
+                && let Err(e) = w.append(AppendLogEvent::TxPublished {
                     channel_id: hex::encode(channel_id.as_ref()),
                     tx_hash: hex::encode(<[u8; 32]>::from(id)),
                     msg_id: hex::encode(new_msg_id.as_ref()),
@@ -472,7 +472,7 @@ fn handle_request(
                     tx_size,
                 })
             {
-                warn!("Failed to write to WAL: {e}");
+                warn!("Failed to write to journal: {e}");
             }
 
             *last_msg_id = new_msg_id;
@@ -524,7 +524,7 @@ async fn handle_block_event(
     channel_id: ChannelId,
     http_client: &CommonHttpClient,
     node_url: &Url,
-    wal: &mut Option<Wal>,
+    journal: &mut Option<AppendLog>,
 ) {
     let block_id = event.block.header.id;
     let parent_id = event.block.header.parent_block;
@@ -577,15 +577,15 @@ async fn handle_block_event(
     let finalized = s.process_block(block_id, parent_id, lib, our_txs);
     *current_tip = Some(tip);
 
-    // Log finalized transactions to WAL
-    if let Some(w) = wal.as_mut() {
+    // Log finalized transactions to journal
+    if let Some(w) = journal.as_mut() {
         for tx_hash in finalized {
-            if let Err(e) = w.append(WalEvent::TxFinalized {
+            if let Err(e) = w.append(AppendLogEvent::TxFinalized {
                 tx_hash: hex::encode(<[u8; 32]>::from(tx_hash)),
                 l1_block_id: hex::encode(<[u8; 32]>::from(lib)),
                 l1_slot: (*lib_slot).into(),
             }) {
-                warn!("Failed to write TxFinalized to WAL: {e}");
+                warn!("Failed to write TxFinalized to journal: {e}");
             }
         }
     }

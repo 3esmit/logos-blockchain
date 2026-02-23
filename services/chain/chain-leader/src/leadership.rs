@@ -309,12 +309,12 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
     ) {
         // If we are trying to notify about the first winning slot that we already
         // pre-computed, ignore it.
-        if let Some((_, Some(first_epoch_winning_slot))) =
+        if let Some((last_processed_epoch, Some(first_epoch_winning_slot))) =
             self.last_processed_epoch_and_found_first_winning_slot
-            && first_epoch_winning_slot == slot
+            && last_processed_epoch == epoch
         {
             tracing::warn!(
-                "Skipping notifying about winning slot {slot:?} because it was already processed"
+                "Skipping notifying about winning slot {slot:?} in epoch {epoch:?} because it was already processed"
             );
             return;
         }
@@ -324,8 +324,7 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
                 "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
             );
         } else {
-            self.last_processed_epoch_and_found_first_winning_slot =
-                Some((epoch, Some(slot.into())));
+            self.last_processed_epoch_and_found_first_winning_slot = Some((epoch, Some(slot)));
         }
     }
 }

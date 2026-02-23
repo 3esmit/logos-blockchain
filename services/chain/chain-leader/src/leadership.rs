@@ -27,7 +27,7 @@ pub async fn build_proof_for<Wallet, RuntimeServiceId>(
     latest_tree: &UtxoTree,
     epoch_state: &EpochState,
     slot: Slot,
-    winning_pol_info_notifier: &PotentialWinningPoLSlotNotifier<'_>,
+    winning_pol_info_notifier: &mut PotentialWinningPoLSlotNotifier<'_>,
     wallet: &WalletApi<Wallet, RuntimeServiceId>,
     kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
 ) -> Option<(Groth16LeaderProof, Ed25519Key)>
@@ -241,7 +241,6 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             .starting_slot(&epoch_state.epoch, self.ledger_config.base_period_length())
             .into();
 
-        let mut first_winning_slot: Option<Slot> = None;
         for UtxoWithKeyId { utxo, key_id } in utxos {
             for offset in 0..slots_per_epoch {
                 let slot = epoch_starting_slot
@@ -290,20 +289,20 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
                 } else {
                     // We stop the iteration as soon as the first winning slot for this epoch is
                     // found and was successfully communicated to consumers.
-                    first_winning_slot = Some(slot.into());
-                    break;
+                    self.last_processed_epoch_and_found_first_winning_slot =
+                        Some((epoch_state.epoch, Some(slot.into())));
+                    return;
                 }
             }
         }
-        self.last_processed_epoch_and_found_first_winning_slot =
-            Some((epoch_state.epoch, first_winning_slot));
+        self.last_processed_epoch_and_found_first_winning_slot = Some((epoch_state.epoch, None));
     }
 
     /// Send the information about a winning slot to consumers.
     ///
     /// No check is performed on whether the slot is actually a winning one.
     pub(super) fn notify_about_winning_slot(
-        &self,
+        &mut self,
         private_inputs: LeaderPrivate,
         epoch: Epoch,
         slot: Slot,
@@ -324,6 +323,9 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             tracing::debug!(
                 "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
             );
+        } else {
+            self.last_processed_epoch_and_found_first_winning_slot =
+                Some((epoch, Some(slot.into())));
         }
     }
 }
@@ -395,7 +397,7 @@ mod pol_tests {
 
         // Create notifier channel (not used in this test)
         let (sender, _receiver) = watch::channel(None);
-        let notifier = PotentialWinningPoLSlotNotifier::new(&config, &sender);
+        let mut notifier = PotentialWinningPoLSlotNotifier::new(&config, &sender);
 
         // Create dummy wallet service
         let wallet = DummyWallet::spawn();
@@ -406,7 +408,7 @@ mod pol_tests {
             UtxoWithKeyId { utxo, key_id },
             &epoch_state,
             &latest_tree,
-            &notifier,
+            &mut notifier,
             &wallet,
             &kms,
         )
@@ -435,7 +437,7 @@ mod pol_tests {
         utxo: UtxoWithKeyId,
         epoch_state: &EpochState,
         latest_tree: &UtxoTree,
-        notifier: &PotentialWinningPoLSlotNotifier<'_>,
+        notifier: &mut PotentialWinningPoLSlotNotifier<'_>,
         wallet: &WalletApi<DummyWallet, TestRuntimeServiceId>,
         kms: &(impl KmsAdapter<TestRuntimeServiceId, KeyId = KeyId> + Sync),
     ) -> Option<(Groth16LeaderProof, Slot)> {

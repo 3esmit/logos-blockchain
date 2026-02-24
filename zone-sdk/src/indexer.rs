@@ -47,7 +47,11 @@ pub struct ZoneIndexer {
 
 const BATCH_SIZE: u64 = 100;
 
-/// Extract zone blocks from a processed block event.
+/// Extract zone blocks from a processed block event (live stream).
+///
+/// All blocks from the live stream are marked as `Safe` since they are
+/// above the LIB (Last Irreversible Block). Finalized status is only
+/// assigned during backfill where we read from the finalized chain.
 fn extract_zone_blocks(
     channel_id: ChannelId,
     event: &ProcessedBlockEvent,
@@ -55,15 +59,11 @@ fn extract_zone_blocks(
     let block_id = event.block.header.id;
     let block_slot: u64 = event.block.header.slot.into();
 
-    // Determine status: finalized if block is at or below LIB
-    let status = if block_id == event.lib {
-        BlockStatus::Finalized
-    } else {
-        BlockStatus::Safe
-    };
+    // Live stream blocks are always Safe (above LIB).
+    // Finalized status is only set during backfill.
+    let status = BlockStatus::Safe;
 
     let mut zone_blocks = Vec::new();
-    let mut last_msg_id = None;
 
     for tx in &event.block.transactions {
         for op in &tx.mantle_tx.ops {
@@ -71,7 +71,6 @@ fn extract_zone_blocks(
                 && inscribe.channel_id == channel_id
             {
                 let msg_id = inscribe.id();
-                last_msg_id = Some(msg_id);
                 zone_blocks.push(ZoneBlockWithStatus {
                     block: ZoneBlock {
                         id: msg_id,
@@ -86,20 +85,6 @@ fn extract_zone_blocks(
                 });
             }
         }
-    }
-
-    // If no messages but we have zone_blocks from previous iterations,
-    // we don't need to do anything special here since we're processing per-block
-    if zone_blocks.is_empty() {
-        // No messages in this block, but we still want to advance the cursor
-        // The caller should track the latest cursor separately if needed
-    } else if let Some(last) = zone_blocks.last_mut() {
-        // Update the last message's cursor - could use None for last_id
-        // to indicate the block is fully processed
-        last.cursor = Cursor {
-            slot: block_slot,
-            last_id: last_msg_id,
-        };
     }
 
     zone_blocks
@@ -167,14 +152,39 @@ impl ZoneIndexer {
     /// Subscribe to zone messages with automatic backfill from cursor.
     ///
     /// This unified API handles both historical backfill and live streaming:
-    /// 1. If `cursor` is provided, backfills from that point to current tip
+    /// 1. If `cursor` is provided, backfills from that point to current LIB
     /// 2. Then switches to live streaming via the processed block stream
     /// 3. Each message includes a cursor that can be persisted for resumption
     ///
-    /// Messages are emitted as soon as they appear on the canonical chain
-    /// (safe), not waiting for finalization (LIB). Duplicate messages may
-    /// occur during reorgs - callers should deduplicate by `MsgId` if
-    /// needed.
+    /// # Status semantics
+    ///
+    /// - **Backfill** (cursor..LIB): Messages are marked `Finalized` since they
+    ///   are at or below the Last Irreversible Block.
+    /// - **Live stream** (above LIB): Messages are marked `Safe` since they are
+    ///   on the canonical chain but not yet finalized.
+    ///
+    /// # Cursor semantics
+    ///
+    /// Each message includes a cursor representing its position. The cursor is
+    /// meant for checkpointing - persist the cursor from the last processed
+    /// message to resume from that point after restart.
+    ///
+    /// # Reorg handling
+    ///
+    /// During chain reorganizations, the same inscription may appear in
+    /// different blocks. Since `MsgId` is deterministic (derived from
+    /// inscription content), callers should deduplicate by `msg.block.id`
+    /// (the `MsgId`) to handle reorgs:
+    ///
+    /// ```ignore
+    /// let mut seen: HashSet<MsgId> = HashSet::new();
+    /// while let Some(msg) = stream.next().await {
+    ///     if seen.insert(msg.block.id) {
+    ///         process(&msg.block); // First time seeing this inscription
+    ///     }
+    ///     save_checkpoint(msg.cursor); // Always update cursor
+    /// }
+    /// ```
     ///
     /// # Example
     /// ```ignore
@@ -189,16 +199,8 @@ impl ZoneIndexer {
         &self,
         cursor: Option<Cursor>,
     ) -> Result<impl Stream<Item = ZoneBlockWithStatus> + '_, Error> {
-        // Get current tip slot for backfill boundary
-        let info = self
-            .http_client
-            .consensus_info(self.node_url.clone())
-            .await?;
-        let tip_slot = self
-            .http_client
-            .get_block(self.node_url.clone(), info.tip)
-            .await?
-            .map_or(0, |block| block.header().slot().into());
+        // Get current LIB slot for backfill boundary (finalized blocks only)
+        let lib_slot = self.lib_slot().await?;
 
         // Subscribe to live stream first (so we don't miss blocks during backfill)
         let blocks_stream = self
@@ -206,8 +208,8 @@ impl ZoneIndexer {
             .get_blocks_stream(self.node_url.clone())
             .await?;
 
-        // Backfill from cursor to tip
-        let backfill = self.backfill(cursor, tip_slot).await?;
+        // Backfill from cursor to LIB (all finalized)
+        let backfill = self.backfill(cursor, lib_slot).await?;
 
         // Track seen block IDs to deduplicate overlap between backfill and stream
         let mut seen_blocks: HashSet<HeaderId> = backfill.iter().map(|m| m.block_id).collect();
@@ -230,7 +232,10 @@ impl ZoneIndexer {
         Ok(stream::iter(backfill).chain(live_stream.flatten()))
     }
 
-    /// Backfill messages from cursor to target slot.
+    /// Backfill finalized messages from cursor to target slot (LIB).
+    ///
+    /// All messages returned are marked `Finalized` since they are at or
+    /// below the Last Irreversible Block.
     async fn backfill(
         &self,
         cursor: Option<Cursor>,
@@ -269,7 +274,6 @@ impl ZoneIndexer {
                     skip_until = None;
                 }
 
-                let mut last_msg_id = None;
                 for tx in &block.transactions {
                     for op in &tx.mantle_tx.ops {
                         if let Op::ChannelInscribe(inscribe) = op
@@ -285,32 +289,21 @@ impl ZoneIndexer {
                                 continue;
                             }
 
-                            last_msg_id = Some(msg_id);
                             result.push(ZoneBlockWithStatus {
                                 block: ZoneBlock {
                                     id: msg_id,
                                     data: inscribe.inscription.clone(),
                                 },
-                                // Backfill is always finalized (we're reading from canonical chain)
+                                // Backfill reads from finalized chain (at or below LIB)
                                 status: BlockStatus::Finalized,
                                 block_id,
+                                // Cursor for this specific message
                                 cursor: Cursor {
                                     slot: block_slot,
                                     last_id: Some(msg_id),
                                 },
                             });
                         }
-                    }
-                }
-
-                // Update cursor even for blocks with no messages
-                if last_msg_id.is_none() && result.last().is_some() {
-                    // Update the last message's cursor to include this empty block
-                    if let Some(last) = result.last_mut() {
-                        last.cursor = Cursor {
-                            slot: block_slot,
-                            last_id: None,
-                        };
                     }
                 }
             }
@@ -603,11 +596,12 @@ mod tests {
     }
 
     #[test]
-    fn extract_zone_blocks_sets_finalized_status_when_at_lib() {
+    fn extract_zone_blocks_always_returns_safe_for_live_stream() {
         let channel = channel_id(1);
         let tx = make_inscribe_tx(channel, vec![1, 2, 3]);
 
-        // Block is at lib (same as block_id)
+        // Even when block_id == lib, live stream returns Safe
+        // (Finalized is only set during backfill)
         let event = make_block_event(
             header_id(5),
             50,
@@ -619,7 +613,8 @@ mod tests {
         let blocks = extract_zone_blocks(channel, &event);
 
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].status, BlockStatus::Finalized);
+        // Live stream always returns Safe - Finalized is only for backfill
+        assert_eq!(blocks[0].status, BlockStatus::Safe);
     }
 
     #[test]

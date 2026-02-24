@@ -62,6 +62,55 @@ while [[ $# -gt 0 ]]; do
             CLEAN_START=true
             shift
             ;;
+        --sequencer-node-endpoint)
+            SEQUENCER_NODE_ENDPOINT="$2"
+            shift 2
+            ;;
+        --sequencer-node-auth-username)
+            SEQUENCER_NODE_AUTH_USERNAME="$2"
+            shift 2
+            ;;
+        --sequencer-node-auth-password)
+            SEQUENCER_NODE_AUTH_PASSWORD="$2"
+            shift 2
+            ;;
+        --sequencer-db-path)
+            SEQUENCER_DB_PATH="$2"
+            shift 2
+            ;;
+        --sequencer-signing-key-path)
+            SEQUENCER_SIGNING_KEY_PATH="$2"
+            shift 2
+            ;;
+        --queue-file)
+            QUEUE_FILE="$2"
+            shift 2
+            ;;
+        --checkpoint-path)
+            CHECKPOINT_PATH="$2"
+            shift 2
+            ;;
+        --sequencer-node-endpoint)
+            INDEXER_NODE_ENDPOINT="$2"
+            shift 2
+            ;;
+        --indexer-node-auth-username)
+            INDEXER_NODE_AUTH_USERNAME="$2"
+            shift 2
+            ;;
+        --indexer-node-auth-password)
+            INDEXER_NODE_AUTH_PASSWORD="$2"
+            shift 2
+            ;;
+        --channel-id)
+            export CHANNEL_ID="$2"
+            echo "hi"
+            shift 2
+            ;;
+        --indexer-db-path)
+            INDEXER_DB_PATH=="$2"
+            shift 2
+            ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
             exit 1

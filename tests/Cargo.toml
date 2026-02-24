@@ -35,6 +35,7 @@ lb-node                          = { default-features = false, features = ["test
 lb-testing-framework             = { workspace = true }
 lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
 lb-utils                         = { workspace = true }
+lb-zone-sdk                      = { workspace = true }
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
@@ -87,6 +88,10 @@ path = "src/tests/mempool/api.rs"
 [[test]]
 name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
+
+[[test]]
+name = "test_zone_sdk_e2e"
+path = "src/tests/zone_sdk/e2e.rs"
 
 [[test]]
 name              = "test_testing_framework_smoke_local"

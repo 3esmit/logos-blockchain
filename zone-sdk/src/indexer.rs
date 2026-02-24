@@ -100,8 +100,11 @@ impl ZoneIndexer {
         }
     }
 
-    /// Subscribe to live zone messages as they finalize.
-    pub async fn follow(
+    /// Subscribe to live zone messages as they finalize (LIB stream only).
+    ///
+    /// This is a simpler API that only emits finalized messages. For the full
+    /// Safe → Finalized lifecycle, use [`follow`] instead.
+    pub async fn follow_lib(
         &self,
     ) -> Result<impl Stream<Item = ZoneBlock> + '_, lb_common_http_client::Error> {
         let lib_stream = self
@@ -149,19 +152,26 @@ impl ZoneIndexer {
         Ok(stream.flatten())
     }
 
-    /// Subscribe to zone messages with automatic backfill from cursor.
+    /// Subscribe to zone messages with optional backfill from cursor.
     ///
-    /// This unified API handles both historical backfill and live streaming:
-    /// 1. If `cursor` is provided, backfills from that point to current LIB
-    /// 2. Then switches to live streaming via the processed block stream
-    /// 3. Each message includes a cursor that can be persisted for resumption
+    /// - `cursor = None`: Start fresh from now, no backfill, just live stream
+    /// - `cursor = Some(...)`: Backfill from cursor to current LIB, then live
+    ///   stream
     ///
-    /// # Status semantics
+    /// Each message includes a cursor that can be persisted for resumption.
     ///
-    /// - **Backfill** (cursor..LIB): Messages are marked `Finalized` since they
-    ///   are at or below the Last Irreversible Block.
-    /// - **Live stream** (above LIB): Messages are marked `Safe` since they are
-    ///   on the canonical chain but not yet finalized.
+    /// # Status lifecycle
+    ///
+    /// Messages follow a Safe → Finalized lifecycle:
+    /// - When a block first arrives (above LIB): emitted as `Safe`
+    /// - When LIB advances past that block: emitted again as `Finalized`
+    ///
+    /// The same message may be emitted multiple times:
+    /// - Multiple `Safe` events during reorgs (message appears in different
+    ///   blocks)
+    /// - One `Finalized` event when LIB advances past the block
+    ///
+    /// Callers should track by `MsgId` to correlate these events.
     ///
     /// # Cursor semantics
     ///
@@ -169,67 +179,131 @@ impl ZoneIndexer {
     /// meant for checkpointing - persist the cursor from the last processed
     /// message to resume from that point after restart.
     ///
-    /// # Reorg handling
-    ///
-    /// During chain reorganizations, the same inscription may appear in
-    /// different blocks. Since `MsgId` is deterministic (derived from
-    /// inscription content), callers should deduplicate by `msg.block.id`
-    /// (the `MsgId`) to handle reorgs:
-    ///
-    /// ```ignore
-    /// let mut seen: HashSet<MsgId> = HashSet::new();
-    /// while let Some(msg) = stream.next().await {
-    ///     if seen.insert(msg.block.id) {
-    ///         process(&msg.block); // First time seeing this inscription
-    ///     }
-    ///     save_checkpoint(msg.cursor); // Always update cursor
-    /// }
-    /// ```
-    ///
     /// # Example
     /// ```ignore
     /// let cursor = load_checkpoint(); // or None to start from beginning
-    /// let stream = indexer.follow_safe(cursor).await?;
+    /// let stream = indexer.follow(cursor).await?;
     /// while let Some(msg) = stream.next().await {
-    ///     process(msg.block);
-    ///     save_checkpoint(msg.cursor); // persist for resumption
+    ///     match msg.status {
+    ///         BlockStatus::Safe => println!("New message (not yet finalized)"),
+    ///         BlockStatus::Finalized => println!("Message is now permanent"),
+    ///     }
+    ///     save_checkpoint(msg.cursor);
     /// }
     /// ```
-    pub async fn follow_safe(
+    pub async fn follow(
         &self,
         cursor: Option<Cursor>,
     ) -> Result<impl Stream<Item = ZoneBlockWithStatus> + '_, Error> {
-        // Get current LIB slot for backfill boundary (finalized blocks only)
-        let lib_slot = self.lib_slot().await?;
+        // Get current LIB info
+        let info = self
+            .http_client
+            .consensus_info(self.node_url.clone())
+            .await?;
+        let current_lib = info.lib;
+        let current_lib_slot = self
+            .http_client
+            .get_block(self.node_url.clone(), current_lib)
+            .await?
+            .map_or(0, |block| block.header().slot().into());
 
         // Subscribe to live stream first (so we don't miss blocks during backfill)
-        let blocks_stream = self
-            .http_client
-            .get_blocks_stream(self.node_url.clone())
-            .await?;
+        let blocks_stream = Box::pin(
+            self.http_client
+                .get_blocks_stream(self.node_url.clone())
+                .await?,
+        );
 
-        // Backfill from cursor to LIB (all finalized)
-        let backfill = self.backfill(cursor, lib_slot).await?;
-
-        // Track seen block IDs to deduplicate overlap between backfill and stream
-        let mut seen_blocks: HashSet<HeaderId> = backfill.iter().map(|m| m.block_id).collect();
+        // Backfill only if cursor is provided (resuming from checkpoint).
+        // If cursor is None, start fresh from now - no backfill.
+        let (backfill, seen_blocks) = if let Some(c) = cursor {
+            let backfill = self.backfill(Some(c), current_lib_slot).await?;
+            let seen: HashSet<HeaderId> = backfill.iter().map(|m| m.block_id).collect();
+            (backfill, seen)
+        } else {
+            (Vec::new(), HashSet::new())
+        };
 
         let channel_id = self.channel_id;
-        let live_stream = blocks_stream.filter_map(move |event| {
-            let block_id = event.block.header.id;
+        let http_client = self.http_client.clone();
+        let node_url = self.node_url.clone();
 
-            // Skip blocks we already emitted during backfill
-            if seen_blocks.contains(&block_id) {
-                return std::future::ready(None);
-            }
-            seen_blocks.insert(block_id);
+        // Use unfold to maintain state (current_lib, current_lib_slot) across
+        // iterations
+        let live_stream = stream::unfold(
+            (blocks_stream, current_lib, current_lib_slot, seen_blocks),
+            move |(mut blocks_stream, mut lib_id, mut lib_slot, mut seen)| {
+                let http_client = http_client.clone();
+                let node_url = node_url.clone();
 
-            let zone_blocks = extract_zone_blocks(channel_id, &event);
-            std::future::ready(Some(stream::iter(zone_blocks)))
-        });
+                async move {
+                    let event = blocks_stream.next().await?;
+                    let mut results = Vec::new();
+
+                    // Check if LIB advanced - emit Finalized for newly finalized blocks
+                    if event.lib != lib_id {
+                        // Fetch new LIB block to get its slot
+                        if let Ok(Some(lib_block)) =
+                            http_client.get_block(node_url.clone(), event.lib).await
+                        {
+                            let new_lib_slot: u64 = lib_block.header().slot().into();
+
+                            // Fetch and emit blocks between old_lib and new_lib as Finalized
+                            if new_lib_slot > lib_slot
+                                && let Ok(blocks) = http_client
+                                    .get_blocks(node_url.clone(), lib_slot + 1, new_lib_slot)
+                                    .await
+                            {
+                                for block in blocks {
+                                    let block_id = block.header.id;
+                                    let block_slot: u64 = block.header.slot.into();
+
+                                    for tx in &block.transactions {
+                                        for op in &tx.mantle_tx.ops {
+                                            if let Op::ChannelInscribe(inscribe) = op
+                                                && inscribe.channel_id == channel_id
+                                            {
+                                                let msg_id = inscribe.id();
+                                                results.push(ZoneBlockWithStatus {
+                                                    block: ZoneBlock {
+                                                        id: msg_id,
+                                                        data: inscribe.inscription.clone(),
+                                                    },
+                                                    status: BlockStatus::Finalized,
+                                                    block_id,
+                                                    cursor: Cursor {
+                                                        slot: block_slot,
+                                                        last_id: Some(msg_id),
+                                                    },
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            lib_slot = new_lib_slot;
+                        }
+                        lib_id = event.lib;
+                    }
+
+                    // Emit current block as Safe (skip if already in backfill)
+                    let block_id = event.block.header.id;
+                    if seen.insert(block_id) {
+                        results.extend(extract_zone_blocks(channel_id, &event));
+                    }
+
+                    Some((
+                        stream::iter(results),
+                        (blocks_stream, lib_id, lib_slot, seen),
+                    ))
+                }
+            },
+        )
+        .flatten();
 
         // Chain backfill + live stream
-        Ok(stream::iter(backfill).chain(live_stream.flatten()))
+        Ok(stream::iter(backfill).chain(live_stream))
     }
 
     /// Backfill finalized messages from cursor to target slot (LIB).

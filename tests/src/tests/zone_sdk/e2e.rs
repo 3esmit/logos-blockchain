@@ -1,17 +1,18 @@
-use std::{collections::HashSet, num::NonZero, time::Duration};
+use std::{collections::HashMap, num::NonZero, pin::pin, time::Duration};
 
-use futures::future::join_all;
+use futures::{StreamExt as _, future::join_all};
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::Ed25519Key;
+use lb_zone_sdk::{
+    BlockStatus,
+    indexer::{Cursor, ZoneIndexer},
+    sequencer::{SequencerConfig, ZoneSequencer},
+};
 use logos_blockchain_tests::{
     nodes::{Validator, create_validator_config},
     topology::configs::{
         create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
     },
-};
-use logos_blockchain_zone_sdk::{
-    indexer::ZoneIndexer,
-    sequencer::{SequencerConfig, ZoneSequencer},
 };
 use rand::{Rng as _, thread_rng};
 use serial_test::serial;
@@ -81,6 +82,14 @@ async fn test_sequencer_publish_and_indexer_read() {
     let signing_key = Ed25519Key::from_bytes(&key_bytes);
     let channel_id = channel_id_from_key(&signing_key);
 
+    // Create indexer BEFORE publishing so we can catch messages as Safe
+    let indexer = ZoneIndexer::new(channel_id, node_url.clone(), None);
+
+    // Start follow() stream BEFORE publishing - this way we'll see messages
+    // arrive as Safe (from live stream) rather than Finalized (from backfill)
+    let stream = indexer.follow(None).await.expect("follow should succeed");
+    let mut stream = pin!(stream);
+
     // Use short resubmit interval matching fast block production (1s slots).
     // Default 30s is too slow - if a tx gets orphaned, we miss many opportunities.
     let sequencer_config = SequencerConfig {
@@ -123,52 +132,127 @@ async fn test_sequencer_publish_and_indexer_read() {
         }
     }
 
-    // Poll indexer until all expected payloads are seen.
-    // Messages need to be included in a block and then finalized (k=5
-    // confirmations). With 1s slot time, this should be relatively fast.
-    let indexer = ZoneIndexer::new(channel_id, node_url, None);
-
-    let expected: HashSet<Vec<u8>> = test_data.iter().cloned().collect();
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut seen_ordered: Vec<Vec<u8>> = Vec::new();
-    let mut cursor = None;
+    // === Receive messages via follow() stream ===
+    // Messages follow Safe → Finalized lifecycle:
+    // 1. Arrive as Safe (above LIB) - may happen multiple times during reorgs
+    // 2. Later arrive as Finalized (when LIB advances past them)
+    //
+    // Track: have we seen at least one Safe? have we seen Finalized?
+    let mut seen_safe: HashMap<Vec<u8>, bool> = HashMap::new();
+    let mut seen_finalized: HashMap<Vec<u8>, bool> = HashMap::new();
+    let mut last_cursor = None;
 
     let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(180);
+    let stream_timeout = Duration::from_secs(180);
 
-    loop {
-        assert!(
-            start.elapsed() <= timeout,
-            "Timeout waiting for indexer to return all messages"
-        );
-
-        let result = indexer
-            .next_messages(cursor, 100)
-            .await
-            .expect("next_messages should succeed");
-
-        for msg in &result.messages {
-            if expected.contains(&msg.data) && !seen.contains(&msg.data) {
-                seen.insert(msg.data.clone());
-                seen_ordered.push(msg.data.clone());
-            }
-        }
-
-        cursor = Some(result.cursor);
-
-        if seen == expected {
+    // Wait until all messages are Finalized
+    while start.elapsed() < stream_timeout {
+        let all_finalized = test_data
+            .iter()
+            .all(|data| seen_finalized.get(data) == Some(&true));
+        if all_finalized {
             break;
         }
 
-        sleep(Duration::from_millis(500)).await;
+        match timeout(Duration::from_millis(500), stream.next()).await {
+            Ok(Some(msg)) => {
+                last_cursor = Some(msg.cursor);
+
+                if test_data.contains(&msg.block.data) {
+                    match msg.status {
+                        BlockStatus::Safe => {
+                            // Safe can arrive multiple times (reorgs) - that's OK
+                            seen_safe.insert(msg.block.data.clone(), true);
+                        }
+                        BlockStatus::Finalized => {
+                            // Should have seen Safe at least once before Finalized
+                            assert_eq!(
+                                seen_safe.get(&msg.block.data),
+                                Some(&true),
+                                "Message should be Safe before Finalized: {:?}",
+                                String::from_utf8_lossy(&msg.block.data)
+                            );
+                            seen_finalized.insert(msg.block.data.clone(), true);
+                        }
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {} // Timeout on stream.next(), keep trying
+        }
     }
 
-    // Verify ordering: messages should appear in the order they were published
-    assert_eq!(seen_ordered.len(), test_data.len());
-
-    for (i, expected_data) in test_data.iter().enumerate() {
-        assert_eq!(&seen_ordered[i], expected_data);
+    // Verify all messages went through Safe → Finalized
+    for data in &test_data {
+        assert_eq!(
+            seen_safe.get(data),
+            Some(&true),
+            "Message should have been Safe: {:?}",
+            String::from_utf8_lossy(data)
+        );
+        assert_eq!(
+            seen_finalized.get(data),
+            Some(&true),
+            "Message should be Finalized: {:?}",
+            String::from_utf8_lossy(data)
+        );
     }
+
+    // === Test cursor resumption ===
+    // Save cursor and resume - verify we receive new messages
+    let saved_cursor = last_cursor.expect("Should have cursor after receiving messages");
+    // Stream goes out of scope here (pin! creates a local binding)
+
+    // Publish one more message
+    let new_msg = b"Fourth message after cursor".to_vec();
+    loop {
+        match sequencer.publish(new_msg.clone()).await {
+            Ok(_) => break,
+            Err(_) => sleep(Duration::from_millis(500)).await,
+        }
+    }
+
+    // Resume from saved cursor
+    let resumed_stream = indexer
+        .follow(Some(saved_cursor))
+        .await
+        .expect("follow with cursor should succeed");
+    let mut resumed_stream = pin!(resumed_stream);
+
+    let mut found_new_msg_safe = false;
+    let mut found_new_msg_finalized = false;
+    let resume_timeout = Duration::from_secs(180);
+    let resume_start = std::time::Instant::now();
+
+    // Wait for the new message to go through Safe → Finalized
+    while resume_start.elapsed() < resume_timeout && !found_new_msg_finalized {
+        match timeout(Duration::from_millis(500), resumed_stream.next()).await {
+            Ok(Some(msg)) => {
+                if msg.block.data == new_msg {
+                    match msg.status {
+                        BlockStatus::Safe => {
+                            assert!(
+                                !found_new_msg_safe,
+                                "Should not see Safe twice for same message"
+                            );
+                            found_new_msg_safe = true;
+                        }
+                        BlockStatus::Finalized => {
+                            assert!(found_new_msg_safe, "Should see Safe before Finalized");
+                            found_new_msg_finalized = true;
+                        }
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {}
+        }
+    }
+
+    assert!(
+        found_new_msg_finalized,
+        "New message should reach Finalized status after cursor resume"
+    );
 }
 
 #[tokio::test]
@@ -232,6 +316,7 @@ async fn test_sequencer_checkpoint_resume() {
 
     let publish_timeout = Duration::from_secs(30);
     let publish_start = std::time::Instant::now();
+    let mut first_checkpoint = None;
     let mut last_checkpoint = None;
 
     for data in &test_data_phase1 {
@@ -243,7 +328,10 @@ async fn test_sequencer_checkpoint_resume() {
 
             match sequencer.publish(data.clone()).await {
                 Ok(result) => {
-                    // Save checkpoint from publish result
+                    // Save first checkpoint for indexer cursor
+                    if first_checkpoint.is_none() {
+                        first_checkpoint = Some(result.checkpoint.clone());
+                    }
                     last_checkpoint = Some(result.checkpoint);
                     break;
                 }
@@ -254,8 +342,22 @@ async fn test_sequencer_checkpoint_resume() {
         }
     }
 
-    // Get checkpoint before "stopping" the sequencer
+    // Get checkpoints
+    let first_checkpoint = first_checkpoint.expect("Should have checkpoint after first publish");
     let checkpoint = last_checkpoint.expect("Should have checkpoint after publishing");
+
+    // Start indexer with cursor from first publish's checkpoint.
+    // This tests both: sequencer checkpoint resume AND indexer cursor backfill.
+    let indexer_cursor = Cursor {
+        slot: first_checkpoint.lib_slot.into(),
+        last_id: None, // Start from beginning of this slot
+    };
+    let indexer = ZoneIndexer::new(channel_id, node_url.clone(), None);
+    let stream = indexer
+        .follow(Some(indexer_cursor))
+        .await
+        .expect("follow should succeed");
+    let mut stream = pin!(stream);
 
     // Drop the old sequencer (simulating stop)
     drop(sequencer);
@@ -289,49 +391,70 @@ async fn test_sequencer_checkpoint_resume() {
         }
     }
 
-    // Verify all messages (from both phases) are indexed
-    let indexer = ZoneIndexer::new(channel_id, node_url, None);
-
+    // Collect all test data
     let all_test_data: Vec<Vec<u8>> = test_data_phase1
         .into_iter()
         .chain(test_data_phase2)
         .collect();
-    let expected: HashSet<Vec<u8>> = all_test_data.iter().cloned().collect();
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut cursor = None;
+
+    // Track Safe and Finalized status for each message
+    let mut seen_safe: HashMap<Vec<u8>, bool> = HashMap::new();
+    let mut seen_finalized: HashMap<Vec<u8>, bool> = HashMap::new();
 
     let start = std::time::Instant::now();
-    let timeout = Duration::from_secs(180);
+    let stream_timeout = Duration::from_secs(180);
 
-    loop {
-        assert!(
-            start.elapsed() <= timeout,
-            "Timeout waiting for indexer to return all messages"
-        );
-
-        let result = indexer
-            .next_messages(cursor, 100)
-            .await
-            .expect("next_messages should succeed");
-
-        for msg in &result.messages {
-            if expected.contains(&msg.data) {
-                seen.insert(msg.data.clone());
-            }
-        }
-
-        cursor = Some(result.cursor);
-
-        if seen == expected {
+    // Wait for all messages to be Finalized
+    while start.elapsed() < stream_timeout {
+        let all_finalized = all_test_data
+            .iter()
+            .all(|data| seen_finalized.get(data) == Some(&true));
+        if all_finalized {
             break;
         }
 
-        sleep(Duration::from_millis(500)).await;
+        match timeout(Duration::from_millis(500), stream.next()).await {
+            Ok(Some(msg)) => {
+                if all_test_data.contains(&msg.block.data) {
+                    println!(
+                        "[checkpoint_resume] Received {:?} as {:?}",
+                        String::from_utf8_lossy(&msg.block.data),
+                        msg.status
+                    );
+                    match msg.status {
+                        BlockStatus::Safe => {
+                            seen_safe.insert(msg.block.data.clone(), true);
+                        }
+                        BlockStatus::Finalized => {
+                            seen_finalized.insert(msg.block.data.clone(), true);
+                        }
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {}
+        }
     }
 
-    assert_eq!(
-        seen.len(),
-        all_test_data.len(),
-        "All messages from both phases should be indexed"
+    println!(
+        "[checkpoint_resume] Safe: {}, Finalized: {}",
+        seen_safe.len(),
+        seen_finalized.len()
     );
+
+    // All messages should have been Safe first, then Finalized
+    for data in &all_test_data {
+        assert_eq!(
+            seen_safe.get(data),
+            Some(&true),
+            "Message should have been Safe first: {:?}",
+            String::from_utf8_lossy(data)
+        );
+        assert_eq!(
+            seen_finalized.get(data),
+            Some(&true),
+            "Message should be Finalized: {:?}",
+            String::from_utf8_lossy(data)
+        );
+    }
 }

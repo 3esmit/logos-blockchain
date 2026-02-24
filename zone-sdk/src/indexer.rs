@@ -1,13 +1,18 @@
-use futures::{Stream, StreamExt as _};
-use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient};
-use lb_core::mantle::ops::{
-    Op,
-    channel::{ChannelId, MsgId},
+use std::collections::HashSet;
+
+use futures::{Stream, StreamExt as _, stream};
+use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient, ProcessedBlockEvent};
+use lb_core::{
+    header::HeaderId,
+    mantle::ops::{
+        Op,
+        channel::{ChannelId, MsgId},
+    },
 };
 use reqwest::Url;
 use tracing::warn;
 
-use crate::ZoneBlock;
+use crate::{BlockStatus, ZoneBlock, ZoneBlockWithStatus};
 
 /// Indexer errors.
 #[derive(Debug, thiserror::Error)]
@@ -16,11 +21,13 @@ pub enum Error {
     Http(#[from] lb_common_http_client::Error),
 }
 
-/// Opaque cursor for pagination. Pass to `next_messages` to resume.
+/// Cursor for resuming message streaming. Persist this with your checkpoint.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Cursor {
-    slot: u64,
-    last_id: Option<MsgId>,
+    /// Slot of the last processed block.
+    pub slot: u64,
+    /// Last message ID within the slot (for mid-slot resumption).
+    pub last_id: Option<MsgId>,
 }
 
 /// Result of polling for messages.
@@ -39,6 +46,64 @@ pub struct ZoneIndexer {
 }
 
 const BATCH_SIZE: u64 = 100;
+
+/// Extract zone blocks from a processed block event.
+fn extract_zone_blocks(
+    channel_id: ChannelId,
+    event: &ProcessedBlockEvent,
+) -> Vec<ZoneBlockWithStatus> {
+    let block_id = event.block.header.id;
+    let block_slot: u64 = event.block.header.slot.into();
+
+    // Determine status: finalized if block is at or below LIB
+    let status = if block_id == event.lib {
+        BlockStatus::Finalized
+    } else {
+        BlockStatus::Safe
+    };
+
+    let mut zone_blocks = Vec::new();
+    let mut last_msg_id = None;
+
+    for tx in &event.block.transactions {
+        for op in &tx.mantle_tx.ops {
+            if let Op::ChannelInscribe(inscribe) = op
+                && inscribe.channel_id == channel_id
+            {
+                let msg_id = inscribe.id();
+                last_msg_id = Some(msg_id);
+                zone_blocks.push(ZoneBlockWithStatus {
+                    block: ZoneBlock {
+                        id: msg_id,
+                        data: inscribe.inscription.clone(),
+                    },
+                    status,
+                    block_id,
+                    cursor: Cursor {
+                        slot: block_slot,
+                        last_id: Some(msg_id),
+                    },
+                });
+            }
+        }
+    }
+
+    // If no messages but we have zone_blocks from previous iterations,
+    // we don't need to do anything special here since we're processing per-block
+    if zone_blocks.is_empty() {
+        // No messages in this block, but we still want to advance the cursor
+        // The caller should track the latest cursor separately if needed
+    } else if let Some(last) = zone_blocks.last_mut() {
+        // Update the last message's cursor - could use None for last_id
+        // to indicate the block is fully processed
+        last.cursor = Cursor {
+            slot: block_slot,
+            last_id: last_msg_id,
+        };
+    }
+
+    zone_blocks
+}
 
 impl ZoneIndexer {
     #[must_use]
@@ -92,11 +157,168 @@ impl ZoneIndexer {
                     })
                     .collect();
 
-                Some(futures::stream::iter(zone_blocks))
+                Some(stream::iter(zone_blocks))
             }
         });
 
         Ok(stream.flatten())
+    }
+
+    /// Subscribe to zone messages with automatic backfill from cursor.
+    ///
+    /// This unified API handles both historical backfill and live streaming:
+    /// 1. If `cursor` is provided, backfills from that point to current tip
+    /// 2. Then switches to live streaming via the processed block stream
+    /// 3. Each message includes a cursor that can be persisted for resumption
+    ///
+    /// Messages are emitted as soon as they appear on the canonical chain
+    /// (safe), not waiting for finalization (LIB). Duplicate messages may
+    /// occur during reorgs - callers should deduplicate by `MsgId` if
+    /// needed.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let cursor = load_checkpoint(); // or None to start from beginning
+    /// let stream = indexer.follow_safe(cursor).await?;
+    /// while let Some(msg) = stream.next().await {
+    ///     process(msg.block);
+    ///     save_checkpoint(msg.cursor); // persist for resumption
+    /// }
+    /// ```
+    pub async fn follow_safe(
+        &self,
+        cursor: Option<Cursor>,
+    ) -> Result<impl Stream<Item = ZoneBlockWithStatus> + '_, Error> {
+        // Get current tip slot for backfill boundary
+        let info = self
+            .http_client
+            .consensus_info(self.node_url.clone())
+            .await?;
+        let tip_slot = self
+            .http_client
+            .get_block(self.node_url.clone(), info.tip)
+            .await?
+            .map_or(0, |block| block.header().slot().into());
+
+        // Subscribe to live stream first (so we don't miss blocks during backfill)
+        let blocks_stream = self
+            .http_client
+            .get_blocks_stream(self.node_url.clone())
+            .await?;
+
+        // Backfill from cursor to tip
+        let backfill = self.backfill(cursor, tip_slot).await?;
+
+        // Track seen block IDs to deduplicate overlap between backfill and stream
+        let mut seen_blocks: HashSet<HeaderId> = backfill.iter().map(|m| m.block_id).collect();
+
+        let channel_id = self.channel_id;
+        let live_stream = blocks_stream.filter_map(move |event| {
+            let block_id = event.block.header.id;
+
+            // Skip blocks we already emitted during backfill
+            if seen_blocks.contains(&block_id) {
+                return std::future::ready(None);
+            }
+            seen_blocks.insert(block_id);
+
+            let zone_blocks = extract_zone_blocks(channel_id, &event);
+            std::future::ready(Some(stream::iter(zone_blocks)))
+        });
+
+        // Chain backfill + live stream
+        Ok(stream::iter(backfill).chain(live_stream.flatten()))
+    }
+
+    /// Backfill messages from cursor to target slot.
+    async fn backfill(
+        &self,
+        cursor: Option<Cursor>,
+        target_slot: u64,
+    ) -> Result<Vec<ZoneBlockWithStatus>, Error> {
+        let mut result = Vec::new();
+
+        let (mut current_slot, skip_until) = cursor.map_or((0, None), |c| {
+            let start = if c.last_id.is_some() {
+                c.slot
+            } else {
+                c.slot.saturating_add(1)
+            };
+            (start, c.last_id)
+        });
+
+        if current_slot > target_slot {
+            return Ok(result);
+        }
+
+        let mut skip_until = skip_until;
+
+        while current_slot <= target_slot {
+            let end_slot = (current_slot + BATCH_SIZE - 1).min(target_slot);
+            let blocks = self
+                .http_client
+                .get_blocks(self.node_url.clone(), current_slot, end_slot)
+                .await?;
+
+            for block in blocks {
+                let block_slot: u64 = block.header.slot.into();
+                let block_id = block.header.id;
+
+                // Once we move past cursor slot, skipping is irrelevant
+                if block_slot > cursor.map_or(0, |c| c.slot) {
+                    skip_until = None;
+                }
+
+                let mut last_msg_id = None;
+                for tx in &block.transactions {
+                    for op in &tx.mantle_tx.ops {
+                        if let Op::ChannelInscribe(inscribe) = op
+                            && inscribe.channel_id == self.channel_id
+                        {
+                            let msg_id = inscribe.id();
+
+                            // Skip up to (and including) last_id
+                            if let Some(skip_id) = skip_until {
+                                if msg_id == skip_id {
+                                    skip_until = None;
+                                }
+                                continue;
+                            }
+
+                            last_msg_id = Some(msg_id);
+                            result.push(ZoneBlockWithStatus {
+                                block: ZoneBlock {
+                                    id: msg_id,
+                                    data: inscribe.inscription.clone(),
+                                },
+                                // Backfill is always finalized (we're reading from canonical chain)
+                                status: BlockStatus::Finalized,
+                                block_id,
+                                cursor: Cursor {
+                                    slot: block_slot,
+                                    last_id: Some(msg_id),
+                                },
+                            });
+                        }
+                    }
+                }
+
+                // Update cursor even for blocks with no messages
+                if last_msg_id.is_none() && result.last().is_some() {
+                    // Update the last message's cursor to include this empty block
+                    if let Some(last) = result.last_mut() {
+                        last.cursor = Cursor {
+                            slot: block_slot,
+                            last_id: None,
+                        };
+                    }
+                }
+            }
+
+            current_slot = end_slot + 1;
+        }
+
+        Ok(result)
     }
 
     /// Fetch the LIB slot.
@@ -248,6 +470,15 @@ impl ScanState {
 
 #[cfg(test)]
 mod tests {
+    use lb_common_http_client::ApiHeader;
+    use lb_core::{
+        mantle::{
+            MantleTx, SignedMantleTx, Transaction as _, ledger::Tx as LedgerTx,
+            ops::channel::inscribe::InscriptionOp,
+        },
+        proofs::leader_proof::Groth16LeaderProof,
+    };
+
     use super::*;
 
     fn msg_id(n: u8) -> MsgId {
@@ -255,6 +486,170 @@ mod tests {
         bytes[0] = n;
         MsgId::from(bytes)
     }
+
+    fn header_id(n: u8) -> HeaderId {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        HeaderId::from(bytes)
+    }
+
+    fn channel_id(n: u8) -> ChannelId {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        ChannelId::from(bytes)
+    }
+
+    fn content_id(n: u8) -> lb_core::header::ContentId {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        lb_core::header::ContentId::from(bytes)
+    }
+
+    fn make_inscribe_tx(channel: ChannelId, data: Vec<u8>) -> SignedMantleTx {
+        // Create a deterministic signer for tests
+        let secret_bytes = [42u8; 32];
+        let signing_key =
+            lb_key_management_system_service::keys::Ed25519Key::from_bytes(&secret_bytes);
+        let signer = signing_key.public_key();
+
+        let inscribe_op = InscriptionOp {
+            channel_id: channel,
+            inscription: data,
+            parent: MsgId::root(),
+            signer,
+        };
+        let ledger_tx = LedgerTx::new(vec![], vec![]);
+        let mantle_tx = MantleTx {
+            ops: vec![Op::ChannelInscribe(inscribe_op)],
+            ledger_tx,
+            storage_gas_price: 0,
+            execution_gas_price: 0,
+        };
+        SignedMantleTx {
+            ops_proofs: vec![],
+            ledger_tx_proof: lb_key_management_system_service::keys::ZkKey::multi_sign(
+                &[],
+                mantle_tx.hash().as_ref(),
+            )
+            .expect("empty multi-sign"),
+            mantle_tx,
+        }
+    }
+
+    fn make_block_event(
+        block_id: HeaderId,
+        slot: u64,
+        tip: HeaderId,
+        lib: HeaderId,
+        txs: Vec<SignedMantleTx>,
+    ) -> ProcessedBlockEvent {
+        use lb_common_http_client::ApiBlock;
+
+        ProcessedBlockEvent {
+            block: ApiBlock {
+                header: ApiHeader {
+                    id: block_id,
+                    parent_block: header_id(0),
+                    slot: slot.into(),
+                    block_root: content_id(0),
+                    proof_of_leadership: Groth16LeaderProof::genesis(),
+                },
+                transactions: txs,
+            },
+            tip,
+            lib,
+        }
+    }
+
+    // --- Tests for extract_zone_blocks ---
+
+    #[test]
+    fn extract_zone_blocks_filters_by_channel() {
+        let target_channel = channel_id(1);
+        let other_channel = channel_id(2);
+
+        let tx1 = make_inscribe_tx(target_channel, vec![1, 2, 3]);
+        let tx2 = make_inscribe_tx(other_channel, vec![4, 5, 6]);
+        let tx3 = make_inscribe_tx(target_channel, vec![7, 8, 9]);
+
+        let event = make_block_event(
+            header_id(1),
+            10,
+            header_id(1),
+            header_id(0),
+            vec![tx1, tx2, tx3],
+        );
+
+        let blocks = extract_zone_blocks(target_channel, &event);
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].block.data, vec![1, 2, 3]);
+        assert_eq!(blocks[1].block.data, vec![7, 8, 9]);
+    }
+
+    #[test]
+    fn extract_zone_blocks_sets_safe_status_when_above_lib() {
+        let channel = channel_id(1);
+        let tx = make_inscribe_tx(channel, vec![1, 2, 3]);
+
+        // Block is at tip (header_id(5)), lib is behind at header_id(3)
+        let event = make_block_event(header_id(5), 50, header_id(5), header_id(3), vec![tx]);
+
+        let blocks = extract_zone_blocks(channel, &event);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].status, BlockStatus::Safe);
+        assert_eq!(blocks[0].block_id, header_id(5));
+    }
+
+    #[test]
+    fn extract_zone_blocks_sets_finalized_status_when_at_lib() {
+        let channel = channel_id(1);
+        let tx = make_inscribe_tx(channel, vec![1, 2, 3]);
+
+        // Block is at lib (same as block_id)
+        let event = make_block_event(
+            header_id(5),
+            50,
+            header_id(6),
+            header_id(5), // lib == block_id
+            vec![tx],
+        );
+
+        let blocks = extract_zone_blocks(channel, &event);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].status, BlockStatus::Finalized);
+    }
+
+    #[test]
+    fn extract_zone_blocks_includes_cursor() {
+        let channel = channel_id(1);
+        let tx = make_inscribe_tx(channel, vec![1, 2, 3]);
+
+        let event = make_block_event(header_id(1), 42, header_id(1), header_id(0), vec![tx]);
+
+        let blocks = extract_zone_blocks(channel, &event);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].cursor.slot, 42);
+        assert!(blocks[0].cursor.last_id.is_some());
+    }
+
+    #[test]
+    fn extract_zone_blocks_empty_when_no_matching_channel() {
+        let target_channel = channel_id(1);
+        let other_channel = channel_id(2);
+
+        let tx = make_inscribe_tx(other_channel, vec![1, 2, 3]);
+
+        let event = make_block_event(header_id(1), 10, header_id(1), header_id(0), vec![tx]);
+
+        let blocks = extract_zone_blocks(target_channel, &event);
+        assert!(blocks.is_empty());
+    }
+
+    // --- Tests for ScanState (cursor logic) ---
 
     #[test]
     fn resume_within_slot_skip() {

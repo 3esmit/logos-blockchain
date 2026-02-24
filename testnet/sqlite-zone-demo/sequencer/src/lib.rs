@@ -11,7 +11,6 @@ use sequencer::Sequencer;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
-use lb_core::mantle::ops::channel::ChannelId;
 
 #[derive(Parser, Debug)]
 #[command(about = "SQLite zone sequencer")]

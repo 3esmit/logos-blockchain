@@ -91,7 +91,8 @@ impl CurrentSessionTracker {
         if last_active_session_state.declarations.size()
             < settings.minimum_network_size.get() as usize
         {
-            debug!(target: LOG_TARGET, "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetSession mode",
+            println!(
+                "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetSession mode",
                 last_active_session_state.declarations.size(),
                 settings.minimum_network_size.get()
             );

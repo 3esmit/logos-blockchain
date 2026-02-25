@@ -1,6 +1,7 @@
 use core::{
     fmt::{self, Display, Formatter},
     str::FromStr,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -60,6 +61,13 @@ impl From<WellKnownDeployment> for DeploymentSettings {
             )
             .expect("Devnet deployment config is valid."),
         }
+    }
+}
+
+impl DeploymentSettings {
+    #[must_use]
+    pub const fn blend_round_duration(&self) -> Duration {
+        self.blend.round_duration(&self.time.slot_duration)
     }
 }
 

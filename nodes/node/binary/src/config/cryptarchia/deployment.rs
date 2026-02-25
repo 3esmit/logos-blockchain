@@ -24,6 +24,42 @@ pub struct Settings {
     pub faucet_pk: Option<ZkPublicKey>,
 }
 
+impl Settings {
+    #[must_use]
+    pub const fn slots_per_epoch(&self) -> u64 {
+        (self.blocks_per_epoch() as f64 / self.slot_activation_coeff.as_f64()).ceil() as u64
+    }
+
+    // Session duration is given by epoch schedule * `k` (security parameter).
+    #[must_use]
+    pub const fn blocks_per_epoch(&self) -> u64 {
+        self.epoch_schedule() * self.security_param.get() as u64
+    }
+
+    #[must_use]
+    pub const fn average_slots_per_block(&self) -> u64 {
+        (self.slot_activation_coeff.denominator.get() * self.slot_activation_coeff.numerator) as u64
+    }
+
+    const fn epoch_schedule(&self) -> u64 {
+        (self.epoch_config.epoch_period_nonce_buffer.get()
+            + self.epoch_config.epoch_period_nonce_stabilization.get()
+            + self
+                .epoch_config
+                .epoch_stake_distribution_stabilization
+                .get()) as u64
+    }
+
+    #[must_use]
+    pub fn consensus_config(&self) -> ConsensusConfig {
+        ConsensusConfig::new(
+            self.security_param,
+            self.slot_activation_coeff,
+            self.learning_rate,
+        )
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
@@ -36,17 +72,6 @@ pub struct EpochConfig {
     // This parameter controls how many slots we wait for the nonce snapshot to be considered
     // stabilized
     pub epoch_period_nonce_stabilization: NonZero<u8>,
-}
-
-impl Settings {
-    #[must_use]
-    pub fn consensus_config(&self) -> ConsensusConfig {
-        ConsensusConfig::new(
-            self.security_param,
-            self.slot_activation_coeff,
-            self.learning_rate,
-        )
-    }
 }
 
 // The same as `lb_ledger::mantle::sdp::Config`, minus the

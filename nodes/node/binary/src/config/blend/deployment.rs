@@ -2,7 +2,7 @@ use core::{num::NonZeroU64, time::Duration};
 
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_libp2p::protocol_name::StreamProtocol;
-use lb_utils::math::{NonNegativeF64, PositiveF64};
+use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
@@ -107,7 +107,6 @@ pub struct CommonSettings {
     pub minimum_network_size: NonZeroU64,
     pub protocol_name: StreamProtocol,
     pub data_replication_factor: u64,
-    pub dissemination_delay: PositiveF64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -136,6 +135,65 @@ pub struct CoverTrafficSettings {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MessageDelayerSettings {
-    /// ∆max: maximal delay time between two release rounds
+    /// ∆max: maximal delay time between two release rounds.
     pub maximum_release_delay_in_rounds: NonZeroU64,
+}
+
+#[cfg(test)]
+mod tests {
+    use core::{num::NonZeroU64, time::Duration};
+
+    use crate::config::{DeploymentSettings, WellKnownDeployment};
+
+    #[test]
+    fn blend_devnet() {
+        const EXPECTED_ROUND_DURATION: Duration = Duration::from_secs(1);
+        const EXPECTED_ROUNDS_PER_SESSION: NonZeroU64 = NonZeroU64::new(6_000).unwrap();
+        const EXPECTED_ROUNDS_PER_INTERVAL: NonZeroU64 = NonZeroU64::new(20).unwrap();
+        const EXPECTED_ROUNDS_PER_OBSERVATION_WINDOW: NonZeroU64 = NonZeroU64::new(10).unwrap();
+        const EXPECTED_ROUNDS_PER_SESSION_TRANSITION_PERIOD: NonZeroU64 =
+            NonZeroU64::new(20).unwrap();
+        const EXPECTED_SLOTS_PER_EPOCH_TRANSITION_PERIOD: NonZeroU64 = NonZeroU64::new(20).unwrap();
+
+        let deployment: DeploymentSettings = WellKnownDeployment::Devnet.into();
+
+        let slots_per_epoch = deployment.cryptarchia.slots_per_epoch();
+        let slots_per_block = deployment.cryptarchia.average_slots_per_block();
+        let slot_duration = deployment.time.slot_duration;
+
+        assert_eq!(deployment.blend_round_duration(), EXPECTED_ROUND_DURATION);
+
+        assert_eq!(
+            deployment
+                .blend
+                .rounds_per_session(slots_per_epoch, &slot_duration),
+            EXPECTED_ROUNDS_PER_SESSION
+        );
+
+        assert_eq!(
+            deployment
+                .blend
+                .rounds_per_interval(slots_per_block, &slot_duration),
+            EXPECTED_ROUNDS_PER_INTERVAL
+        );
+
+        assert_eq!(
+            deployment.blend.rounds_per_observation_window(),
+            EXPECTED_ROUNDS_PER_OBSERVATION_WINDOW
+        );
+
+        assert_eq!(
+            deployment
+                .blend
+                .rounds_per_session_transition_period(slots_per_block, &slot_duration),
+            EXPECTED_ROUNDS_PER_SESSION_TRANSITION_PERIOD
+        );
+
+        assert_eq!(
+            deployment
+                .blend
+                .slots_per_epoch_transition_period(slots_per_block, &slot_duration),
+            EXPECTED_SLOTS_PER_EPOCH_TRANSITION_PERIOD
+        );
+    }
 }

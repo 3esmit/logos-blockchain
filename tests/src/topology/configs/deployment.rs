@@ -46,9 +46,6 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                     .expect("Number of blend layers cannot be zero."),
                 protocol_name: StreamProtocol::new("/blend/integration-tests"),
                 data_replication_factor: 0,
-                dissemination_delay: 0.5
-                    .try_into()
-                    .expect("Dissemination delay must be positive."),
             },
             core: BlendCoreSettings {
                 minimum_messages_coefficient: NonZeroU64::try_from(1)

@@ -151,3 +151,9 @@ impl ServiceConfig {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn conversion_into_blend_services_settings() {}
+}

@@ -23,28 +23,36 @@ impl Settings {
         *slot_duration
     }
 
+    /// Number of rounds per session, calculated as the number of slots per
+    /// epoch, correctly scaled to account for the slot/round ratio.
     #[must_use]
     pub fn rounds_per_session(&self, slots_per_epoch: u64, slot_duration: &Duration) -> NonZeroU64 {
-        // (Slots/epoch * slot duration) / round duration
         ((slots_per_epoch * slot_duration.as_secs()) / self.round_duration(slot_duration).as_secs())
             .try_into()
             .expect("There must be at least one round per session.")
     }
 
+    /// Number of rounds per interval, calculated as the average number of slots
+    /// per block (slot activation threshold), correctly scaled to account for
+    /// the slot/round ratio.
     #[must_use]
     pub fn rounds_per_interval(
         &self,
         slots_per_block: u64,
         slot_duration: &Duration,
     ) -> NonZeroU64 {
-        // (Slots/block * slot duration) / round duration
         ((slots_per_block * slot_duration.as_secs()) / self.round_duration(slot_duration).as_secs())
             .try_into()
             .expect("There must be at least one round per interval.")
     }
 
+    /// Number of rounds per observation window.
+    ///
+    /// The Blend spec defines this as `10 * ∆max`, where `∆max` is the maximal
+    /// delay time between two release rounds.
     #[must_use]
     pub const fn rounds_per_observation_window(&self) -> NonZeroU64 {
+        // TODO: Is `10` fixed or can it be derived from some other value?
         NonZeroU64::new(
             10 * self
                 .core
@@ -56,6 +64,10 @@ impl Settings {
         .unwrap()
     }
 
+    /// Number of rounds per session transition period.
+    ///
+    /// The Blend spec defines this as roughly the same time it takes to propose
+    /// a new block.
     #[must_use]
     pub fn rounds_per_session_transition_period(
         &self,
@@ -65,6 +77,10 @@ impl Settings {
         self.rounds_per_interval(slots_per_block, slot_duration)
     }
 
+    /// Number of rounds per session transition period.
+    ///
+    /// The Blend spec defines this as roughly the same time it takes to propose
+    /// a new block.
     #[must_use]
     pub fn slots_per_epoch_transition_period(
         &self,

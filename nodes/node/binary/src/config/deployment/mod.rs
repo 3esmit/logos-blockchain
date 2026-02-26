@@ -4,6 +4,7 @@ use core::{
     time::Duration,
 };
 
+use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
@@ -68,6 +69,11 @@ impl DeploymentSettings {
     #[must_use]
     pub const fn blend_round_duration(&self) -> Duration {
         self.blend.round_duration(&self.time.slot_duration)
+    }
+
+    #[must_use]
+    pub fn blend_reward_params(&self) -> RewardsParameters {
+        self.blend.rewards_params(&self.cryptarchia, &self.time)
     }
 }
 

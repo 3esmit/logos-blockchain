@@ -138,10 +138,7 @@ pub struct LogosBlockchain {
 }
 
 pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServiceId>, DynError> {
-    let blend_rewards_params = config
-        .deployment
-        .blend
-        .rewards_params(&config.deployment.cryptarchia, &config.deployment.time);
+    let blend_rewards_params = config.deployment.blend_reward_params();
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,

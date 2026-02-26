@@ -70,9 +70,7 @@ fn common_recovery_folder() {
 
     let deployment_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
 
-    let blend_rewards_params = deployment_settings
-        .blend
-        .rewards_params(&deployment_settings.cryptarchia, &deployment_settings.time);
+    let blend_rewards_params = deployment_settings.blend_reward_params();
 
     let (blend_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),

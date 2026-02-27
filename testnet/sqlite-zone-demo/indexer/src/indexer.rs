@@ -1,44 +1,32 @@
-use std::sync::Arc;
+use std::{fs, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::db::MenuReadOnly;
 use futures::StreamExt as _;
 use lb_common_http_client::BasicAuthCredentials;
 use lb_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::indexer::ZoneIndexer;
 use reqwest::Url;
-use thiserror::Error;
 use tracing::{error, info};
 
-#[derive(Debug, Error)]
-pub enum IndexerError {
-    #[error("Zone indexer error: {0}")]
-    ZoneIndexer(#[from] logos_blockchain_zone_sdk::indexer::Error),
-    #[error("HTTP client error: {0}")]
-    HttpClient(#[from] lb_common_http_client::Error),
-    #[error("URL parse error: {0}")]
-    Url(String),
-    #[error("SQLite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
-    #[error("{0}")]
-    InvalidChannelId(String),
-}
 
-pub type Result<T> = std::result::Result<T, IndexerError>;
+
+use crate::{db::DatabaseReadOnly, error::Error};
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct Indexer {
     zone_indexer: ZoneIndexer,
-    db: Arc<Mutex<MenuReadOnly>>,
+    db: Arc<Mutex<DatabaseReadOnly>>,
 }
 
 fn parse_channel_id(channel_id_str: &str) -> Result<ChannelId> {
     let decoded = hex::decode(channel_id_str).map_err(|_| {
-        IndexerError::InvalidChannelId(format!(
+        Error::InvalidChannelId(format!(
             "INDEXER_CHANNEL_ID must be a valid hex string, got: '{channel_id_str}'"
         ))
     })?;
     let channel_bytes: [u8; 32] = decoded.try_into().map_err(|v: Vec<u8>| {
-        IndexerError::InvalidChannelId(format!(
+        Error::InvalidChannelId(format!(
             "INDEXER_CHANNEL_ID must be exactly 64 hex characters (32 bytes), got {} characters ({} bytes)",
             v.len() * 2,
             v.len()
@@ -51,28 +39,31 @@ impl Indexer {
     pub fn new(
         db_path: &str,
         node_endpoint: &str,
-        channel_id_str: &str,
+        channel_path: &str,
         node_auth_username: Option<String>,
         node_auth_password: Option<String>,
     ) -> Result<Self> {
-        let node_url = Url::parse(node_endpoint).map_err(|e| IndexerError::Url(e.to_string()))?;
+        let node_url = Url::parse(node_endpoint).map_err(|e| Error::Url(e.to_string()))?;
 
         let basic_auth = node_auth_username
             .map(|username| BasicAuthCredentials::new(username, node_auth_password));
 
-        let channel_id = parse_channel_id(channel_id_str)?;
+        let channel_id_str = fs::read_to_string(channel_path).map_err(|e| {
+            Error::InvalidChannelId(format!("Failed to read channel path '{channel_path}': {e}"))
+        })?;
+        let channel_id = parse_channel_id(channel_id_str.trim())?;
 
         info!("Channel ID: {}", hex::encode(channel_id.as_ref()));
 
         let zone_indexer = ZoneIndexer::new(channel_id, node_url, basic_auth);
 
-        let menu = MenuReadOnly::new(db_path)?;
-        let db = Arc::new(Mutex::new(menu));
+        let database = DatabaseReadOnly::open(db_path)?;
+        let db = Arc::new(Mutex::new(database));
 
         Ok(Self { zone_indexer, db })
     }
 
-    pub fn db(&self) -> Arc<Mutex<MenuReadOnly>> {
+    pub fn db(&self) -> Arc<Mutex<DatabaseReadOnly>> {
         Arc::clone(&self.db)
     }
 
@@ -101,8 +92,8 @@ impl Indexer {
 
                 let statements: Vec<&str> = sql_text
                     .lines()
-                    .map(str::trim)
-                    .filter(|l| !l.is_empty())
+                    .map(|l| l.trim().trim_end_matches(';').trim())
+                    .filter(|s| !s.is_empty())
                     .collect();
 
                 if statements.is_empty() {

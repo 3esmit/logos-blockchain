@@ -1,16 +1,18 @@
+#![forbid(unsafe_code)]
+
 pub mod db;
 pub mod sequencer;
+pub use demo_sqlite_common::{config, crypto, error, screen};
 
-mod ctrl_c;
+mod tui;
 
 use std::sync::Arc;
 
 use clap::Parser;
-use db::Menu;
 use sequencer::Sequencer;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
+use demo_sqlite_common::logging::RawModeWriter;
 
 #[derive(Parser, Debug)]
 #[command(about = "SQLite zone sequencer")]
@@ -42,27 +44,55 @@ pub struct SequencerArgs {
     /// Path to the checkpoint file for crash recovery
     #[arg(long, default_value = "./data/sequencer.checkpoint", env = "CHECKPOINT_PATH")]
     checkpoint_path: String,
+
+    /// Path to the channel ID file
+    #[arg(long, default_value = "./data/channel.txt", env = "CHANNEL_PATH")]
+    channel_path: String,
 }
 
-pub async fn run(args: SequencerArgs) {
+use crate::{
+    config::Config,
+    db::Database,
+    tui::State,
+    screen::ScreenGuard,
+    error::Result,
+};
+
+#[derive(Debug)]
+struct App {
+    screen: ScreenGuard,
+    state: State,
+}
+
+impl App {
+    fn new(state: State) -> Result<Self> {
+        Ok(App {
+            screen: ScreenGuard::open()?,
+            state,
+        })
+    }
+
+    /// The main run loop.
+    fn run_app(mut self) -> Result<()> {
+        while self.state.is_running() {
+            self.screen.draw(|frame| self.state.draw(frame))?;
+            self.state.handle_events();
+        }
+
+        Ok(())
+    }
+}
+
+pub async fn run(args: SequencerArgs) -> Result<()> {
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(RawModeWriter))
         .init();
 
     info!("Sqlite Sequencer starting up...");
-    info!("Configuration");
     info!("  Logos blockchain Node: {}", args.node_url);
-    info!("  Database:              {}", args.db_path);
 
-    let mut db = match Menu::new(&args.db_path) {
-        Ok(db) => db,
-        Err(e) => {
-            error!("Database initialization failed: {e}");
-            std::process::exit(1);
-        }
-    };
-    info!("Database ready");
+    let db = Database::open(&args.db_path, &args.queue_file)?;
 
     let sequencer = match Sequencer::new(
         &args.node_url,
@@ -71,6 +101,7 @@ pub async fn run(args: SequencerArgs) {
         args.node_auth_password,
         &args.queue_file,
         &args.checkpoint_path,
+        &args.channel_path,
     ) {
         Ok(s) => Arc::new(s),
         Err(e) => {
@@ -80,66 +111,15 @@ pub async fn run(args: SequencerArgs) {
     };
     info!("Sequencer ready");
 
-    let cancellation_token = CancellationToken::new();
-    ctrl_c::listen_for_sigint(cancellation_token.clone());
-
-    db.enable_tracing(&args.queue_file);
-
     let sequencer_clone = Arc::clone(&sequencer);
     tokio::spawn(async move {
         sequencer_clone.run_processing_loop().await;
     });
     info!("Background processor started");
 
-    println!("Type SQL queries followed by ENTER");
-    println!("Type 'q' or CTRL+C then ENTER to exit.");
+    let config = Config::from_rc_file()?;
+    let state = State::new(db, config.theme)?;
+    let app = App::new(state)?;
 
-    let stdin = tokio::io::stdin();
-    let reader = tokio::io::BufReader::new(stdin);
-    use tokio::io::AsyncBufReadExt;
-
-    let mut lines = reader.lines();
-    loop {
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                break;
-            }
-            line = lines.next_line() => {
-                match line {
-                    Ok(Some(input)) => {
-                        let input = input.trim().to_string();
-                        if input.is_empty() {
-                            continue;
-                        }
-                        if input.eq_ignore_ascii_case("q") {
-                            cancellation_token.cancel();
-                            continue;
-                        }
-                        match db.query(input).await {
-                            Ok(Some(dishes)) => {
-                                for dish in &dishes {
-                                    println!("ID: {} | Name: {} | Data: {}", dish.id, dish.name, dish.data);
-                                }
-                                println!("({} row(s))", dishes.len());
-                            }
-                            Ok(None) => {
-                                println!("OK");
-                            }
-                            Err(e) => {
-                                eprintln!("Error: {e}");
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        cancellation_token.cancel();
-                        continue;
-                    }
-                    Err(e) => {
-                        eprintln!("Read error: {e}");
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    app.run_app()
 }

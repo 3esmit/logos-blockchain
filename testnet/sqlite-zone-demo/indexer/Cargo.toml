@@ -13,19 +13,36 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-clap                      = { features = ["derive", "env", "std"], version = "4" }
-futures                   = { default-features = false, version = "0.3" }
-hex                       = "0.4"
-lb-common-http-client     = { workspace = true }
-lb-core                   = { workspace = true }
-logos-blockchain-zone-sdk = { path = "../../../zone-sdk" }
-demo-sqlite-sequencer     = { path = "../sequencer" }
-owo-colors                = { default-features = false, version = "4.2.3" }
-reqwest                   = { features = ["json", "rustls-tls"], workspace = true }
-rusqlite                  = { version = "0.38.0", features = ["bundled"] }
-serde                     = { features = ["derive"], workspace = true }
-thiserror                 = { workspace = true }
-tokio                     = { default-features = false, features = ["io-std", "io-util", "macros", "rt-multi-thread", "signal", "sync"], version = "1" }
-tokio-util                = { version = "0.7" }
-tracing                   = { workspace = true }
-tracing-subscriber        = { features = ["env-filter"], version = "0.3" }
+demo-sqlite-common               = { workspace = true }
+arboard                          = "3.4.1"
+argon2                           = { version = "0.5", features = ["zeroize", "std"] }
+block-padding                    = { version = "0.3", features = ["std"] }
+chacha20poly1305                 = { version = "0.10", features = ["std"] }
+chrono                           = { version = "0.4", features = ["serde"] }
+clap                             = { features = ["derive", "env", "std"], version = "4" }
+crypto-common                    = { version = "0.1.6", features = ["std"] }
+directories                      = "6.0"
+fs2                              = "0.4"
+futures                          = { default-features = false, version = "0.3" }
+hex                              = "0.4"
+lb-common-http-client            = { workspace = true }
+lb-core                          = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+logos-blockchain-zone-sdk        = { path = "../../../zone-sdk" }
+nanosql                          = { version = "0.10.0", features = ["chrono"] }
+owo-colors                       = { default-features = false, version = "4.2.3" }
+rand                             = { version = "0.9" }
+ratatui                          = { version = "0.29", features = ["serde"] }
+reqwest                          = { features = ["json", "rustls-tls"], workspace = true }
+rpassword                        = "7"
+rusqlite                         = { version = "0.33.0", features = ["bundled", "trace"] }
+serde                            = { features = ["derive"], workspace = true }
+serde_json                       = { workspace = true }
+thiserror                        = { workspace = true }
+tokio                            = { default-features = false, features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"], version = "1" }
+tokio-util                       = { version = "0.7" }
+tracing                          = { workspace = true }
+tracing-subscriber               = { features = ["env-filter"], version = "0.3" }
+tui-textarea                     = "0.7"
+zeroize                          = { workspace = true, features = ["alloc"] }
+

@@ -4,5 +4,5 @@ use demo_sqlite_indexer::{IndexerArgs, run};
 #[tokio::main]
 async fn main() {
     let args = IndexerArgs::parse();
-    run(args).await;
+    drop(run(args).await);
 }

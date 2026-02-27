@@ -1,15 +1,18 @@
+#![forbid(unsafe_code)]
+
 pub mod db;
 pub mod indexer;
+pub use demo_sqlite_common::{config, crypto, error, screen};
 
-mod ctrl_c;
+mod tui;
 
 use std::sync::Arc;
 
 use clap::Parser;
 use indexer::Indexer;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
+use demo_sqlite_common::logging::RawModeWriter;
 
 #[derive(Parser, Debug)]
 #[command(about = "SQLite zone indexer - replay zone blocks into a local SQLite database")]
@@ -22,9 +25,9 @@ pub struct IndexerArgs {
     #[arg(long, default_value = "./data/indexer.db", env = "INDEXER_DB_PATH")]
     pub db_path: String,
 
-    /// Channel ID to index (64 hex characters / 32 bytes)
-    #[arg(long, env = "CHANNEL_ID")]
-    pub channel_id: String,
+    /// Path to the channel ID file
+    #[arg(long, default_value = "./data/channel.txt")]
+    channel_path: String,
 
     /// Basic auth username for node endpoint
     #[arg(long, env = "INDEXER_NODE_AUTH_USERNAME")]
@@ -35,22 +38,54 @@ pub struct IndexerArgs {
     pub node_auth_password: Option<String>,
 }
 
-pub async fn run(args: IndexerArgs) {
+use crate::{
+    config::Config,
+    db::DatabaseReadOnly,
+    tui::State,
+    screen::ScreenGuard,
+    error::Result,
+};
+
+#[derive(Debug)]
+struct App {
+    screen: ScreenGuard,
+    state: State,
+}
+
+impl App {
+    fn new(state: State) -> Result<Self> {
+        Ok(App {
+            screen: ScreenGuard::open()?,
+            state,
+        })
+    }
+
+    /// The main run loop.
+    fn run_app(mut self) -> Result<()> {
+        while self.state.is_running() {
+            self.screen.draw(|frame| self.state.draw(frame))?;
+            self.state.handle_events();
+        }
+
+        Ok(())
+    }
+}
+
+pub async fn run(args: IndexerArgs) -> Result<()> {
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(RawModeWriter))
         .init();
 
     info!("Sqlite Indexer starting up...");
-    info!("Configuration");
     info!("  Logos blockchain Node: {}", args.node_url);
-    info!("  Database:              {}", args.db_path);
-    info!("  Channel ID:            {}", args.channel_id);
+
+    let db = DatabaseReadOnly::open(&args.db_path)?;
 
     let indexer = match Indexer::new(
         &args.db_path,
         &args.node_url,
-        &args.channel_id,
+        &args.channel_path,
         args.node_auth_username,
         args.node_auth_password,
     ) {
@@ -62,70 +97,15 @@ pub async fn run(args: IndexerArgs) {
     };
     info!("Indexer ready");
 
-    let cancellation_token = CancellationToken::new();
-    ctrl_c::listen_for_sigint(cancellation_token.clone());
-
     let indexer_clone = Arc::clone(&indexer);
     tokio::spawn(async move {
         indexer_clone.run().await;
     });
     info!("Background indexer started");
 
-    let stdin = tokio::io::stdin();
-    let reader = tokio::io::BufReader::new(stdin);
-    use tokio::io::AsyncBufReadExt;
+    let config = Config::from_rc_file()?;
+    let state = State::new(db, config.theme)?;
+    let app = App::new(state)?;
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    println!("Type SQL queries followed by ENTER");
-    println!("Type 'q' or CTRL+C then ENTER to exit.");
-
-    let mut lines = reader.lines();
-    loop {
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                break;
-            }
-            line = lines.next_line() => {
-                match line {
-                    Ok(Some(input)) => {
-                        let input = input.trim().to_string();
-                        if input.is_empty() {
-                            continue;
-                        }
-                        if input.eq_ignore_ascii_case("q") {
-                            cancellation_token.cancel();
-                            continue;
-                        }
-                        if !input
-                            .split_whitespace()
-                            .next()
-                            .is_some_and(|first| first.eq_ignore_ascii_case("SELECT"))
-                        {
-                            println!("Only SELECT queries permitted");
-                            continue;
-                        }
-                        match indexer.db().lock().await.query(input).await {
-                            Ok(dishes) => {
-                                for dish in &dishes {
-                                    println!("ID: {} | Name: {} | Data: {}", dish.id, dish.name, dish.data);
-                                }
-                                println!("({} row(s))", dishes.len());
-                            }
-                            Err(e) => {
-                                eprintln!("Error: {e}");
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        cancellation_token.cancel();
-                        continue;
-                    }
-                    Err(e) => {
-                        eprintln!("Read error: {e}");
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    app.run_app()
 }

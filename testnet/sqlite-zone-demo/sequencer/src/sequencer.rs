@@ -10,7 +10,7 @@ use thiserror::Error;
 use tokio::time::sleep;
 use tracing::{debug, info};
 
-use rusqlite::Error as SqliteError;
+use nanosql::rusqlite::Error as SqliteError;
 
 #[derive(Debug, Error)]
 pub enum SequencerError {
@@ -56,7 +56,7 @@ fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     } else {
         debug!("Generating new signing key and saving to {:?}", path);
         let mut key_bytes = [0u8; ED25519_SECRET_KEY_SIZE];
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key_bytes);
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut key_bytes);
         fs::write(path, key_bytes)?;
         Ok(Ed25519Key::from_bytes(&key_bytes))
     }
@@ -83,12 +83,19 @@ impl Sequencer {
         node_auth_password: Option<String>,
         queue_file: &str,
         checkpoint_path: &str,
+        channel_path: &str,
     ) -> Result<Self> {
         let node_url = Url::parse(node_endpoint).map_err(|e| SequencerError::Url(e.to_string()))?;
 
         let basic_auth = node_auth_username.map(|username| {
             BasicAuthCredentials::new(username, node_auth_password)
         });
+
+        for path in [signing_key_path, checkpoint_path, channel_path] {
+            if let Some(parent) = Path::new(path).parent() {
+                fs::create_dir_all(parent)?;
+            }
+        }
 
         let checkpoint = load_checkpoint(Path::new(&checkpoint_path));
         if checkpoint.is_some() {
@@ -97,8 +104,7 @@ impl Sequencer {
 
         let signing_key = load_or_create_signing_key(Path::new(signing_key_path))?;
         let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
-
-        println!("Channel ID: {}", hex::encode(channel_id.as_ref()));
+        fs::write(channel_path, hex::encode(channel_id.as_ref())).expect("failed to write channel id");
 
         let zone_sequencer = ZoneSequencer::init(
             channel_id,

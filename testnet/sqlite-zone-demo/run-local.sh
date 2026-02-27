@@ -102,8 +102,8 @@ while [[ $# -gt 0 ]]; do
             INDEXER_NODE_AUTH_PASSWORD="$2"
             shift 2
             ;;
-        --channel-id)
-            export CHANNEL_ID="$2"
+        --channel-path)
+            export CHANNEL_PATH="$2"
             echo "hi"
             shift 2
             ;;

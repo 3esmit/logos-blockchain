@@ -12,6 +12,7 @@ use strum::EnumIter;
 use crate::{
     block::BlockNumber,
     mantle::{NoteId, ops::channel::Ed25519PublicKey},
+    utils::serde_bytes_newtype,
 };
 
 pub type SessionNumber = u64;
@@ -110,8 +111,9 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct DeclarationId(pub [u8; 32]);
+serde_bytes_newtype!(DeclarationId, 32);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -241,7 +243,37 @@ fn parse_session_number(input: &[u8]) -> IResult<&[u8], SessionNumber> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use lb_key_management_system_keys::keys::Ed25519Key;
+    use rand::thread_rng;
+
     use super::*;
+    use crate::codec::DeserializeOp as _;
+
+    /// Test that [`DeclarationId`] can be serde-ed correctly
+    /// when used as a key in a HashMap.
+    #[test]
+    fn test_declaration_id_serde_string_key() {
+        let declarations = HashMap::from([(
+            DeclarationId([1; 32]),
+            Declaration {
+                service_type: ServiceType::BlendNetwork,
+                provider_id: ProviderId(Ed25519Key::generate(&mut thread_rng()).public_key()),
+                locked_note_id: NoteId::from_bytes(&[3; 32]).unwrap(),
+                locators: vec![Locator(Multiaddr::empty())],
+                zk_id: ZkPublicKey::from_bytes(&[4; 32]).unwrap(),
+                created: 5,
+                active: 6,
+                withdrawn: None,
+                nonce: 7,
+            },
+        )]);
+        let serialized = serde_json::to_string(&declarations).unwrap();
+        let deserialized: HashMap<DeclarationId, Declaration> =
+            serde_json::from_str(&serialized).unwrap();
+        assert_eq!(declarations, deserialized);
+    }
 
     #[test]
     fn test_activity_metadata_empty_bytes() {

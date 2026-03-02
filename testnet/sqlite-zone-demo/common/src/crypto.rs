@@ -207,8 +207,8 @@ pub fn generate_password() -> Zeroizing<String> {
 mod tests {
     use chrono::{Days, Utc};
     use rand::{
-        Rng, RngCore,
-        distr::{SampleString, StandardUniform},
+        Rng as _, RngCore as _,
+        distr::{SampleString as _, StandardUniform},
     };
     use zxcvbn::{Score, zxcvbn};
 
@@ -296,8 +296,7 @@ mod tests {
                     result,
                     Err(Error::XChaCha20Poly1305(chacha20poly1305::Error))
                 ),
-                "unexpected result: {:#?}",
-                result,
+                "unexpected result: {result:#?}",
             );
         }
 
@@ -347,10 +346,9 @@ mod tests {
                         result,
                         Err(Error::XChaCha20Poly1305(chacha20poly1305::Error))
                     ),
-                    "unexpected result: {:#?}",
-                    result,
-                );
-            }
+                    "unexpected result: {result:#?}",
+                )
+            };
 
             // Case #2: the label is (slightly) altered
             {
@@ -370,10 +368,9 @@ mod tests {
                         result,
                         Err(Error::XChaCha20Poly1305(chacha20poly1305::Error))
                     ),
-                    "unexpected result: {:#?}",
-                    result,
-                );
-            }
+                    "unexpected result: {result:#?}",
+                )
+            };
 
             // Case #2: the last modification date is tampered with
             {
@@ -393,8 +390,7 @@ mod tests {
                         result,
                         Err(Error::XChaCha20Poly1305(chacha20poly1305::Error))
                     ),
-                    "unexpected result: {:#?}",
-                    result,
+                    "unexpected result: {result:#?}",
                 );
             }
         }

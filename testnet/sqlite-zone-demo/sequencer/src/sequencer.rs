@@ -2,12 +2,12 @@ use std::{
     fs,
     fs::OpenOptions,
     io,
-    io::{BufRead, BufReader},
+    io::{BufRead as _, BufReader},
     path::Path,
     time::Duration,
 };
 
-use fs2::FileExt;
+use fs2::FileExt as _;
 use lb_common_http_client::BasicAuthCredentials;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
@@ -106,7 +106,7 @@ impl Sequencer {
 
         let checkpoint = load_checkpoint(Path::new(&checkpoint_path));
         if checkpoint.is_some() {
-            println!("  Restored checkpoint from {}", checkpoint_path);
+            println!("  Restored checkpoint from {checkpoint_path}");
         }
 
         let signing_key = load_or_create_signing_key(Path::new(signing_key_path))?;
@@ -119,8 +119,8 @@ impl Sequencer {
 
         Ok(Self {
             zone_sequencer,
-            queue_file: queue_file.to_string(),
-            checkpoint_path: checkpoint_path.to_string(),
+            queue_file: queue_file.to_owned(),
+            checkpoint_path: checkpoint_path.to_owned(),
         })
     }
 
@@ -136,7 +136,7 @@ impl Sequencer {
         let reader = BufReader::new(&file);
         let mut queue_vec = Vec::new();
         for query in reader.lines() {
-            queue_vec.push(query?.to_string());
+            queue_vec.push(query?.clone());
         }
 
         file.set_len(0)?;

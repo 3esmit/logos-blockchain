@@ -49,7 +49,7 @@ impl State {
         let table_state =
             TableState::new().with_selected(if items.is_empty() { None } else { Some(0) });
 
-        Ok(State {
+        Ok(Self {
             db,
             clipboard,
             theme,
@@ -220,7 +220,7 @@ impl State {
 
         if key.kind != KeyEventKind::Press {
             return Ok(());
-        };
+        }
 
         match key.code {
             KeyCode::Up | KeyCode::Char('k' | 'K') => {
@@ -265,11 +265,10 @@ impl State {
             return Ok(ControlFlow::Continue(event));
         }
 
-        if let Event::Key(evt) = event {
-            if evt.code == KeyCode::Esc {
+        if let Event::Key(evt) = event
+            && evt.code == KeyCode::Esc {
                 self.popup_error = None;
             }
-        }
 
         Ok(ControlFlow::Break(()))
     }
@@ -347,13 +346,12 @@ impl State {
         });
         self.items = self.db.list_items_for_display(search_term.as_deref())?;
 
-        #[allow(unused_parens)]
+        #[expect(unused_parens)]
         if (adjust_selection
             && !self.items.is_empty()
-            && !self
+            && self
                 .table_state
-                .selected()
-                .is_some_and(|idx| idx < self.items.len()))
+                .selected().is_none_or(|idx| idx >= self.items.len()))
         {
             self.table_state.select_last();
         }
@@ -409,7 +407,7 @@ impl PasswordEntryState {
         enc_pass.set_style(theme.default());
 
         // set up text field style
-        let mut state = PasswordEntryState {
+        let mut state = Self {
             is_visible: false,
             enc_pass,
             theme,
@@ -428,7 +426,7 @@ impl PasswordEntryState {
         if self.is_visible {
             self.enc_pass.clear_mask_char();
         } else {
-            self.enc_pass.set_mask_char('●');
+            self.enc_pass.set_mask_char('\u{25cf}');
         }
 
         let show_hide_title = format!(
@@ -467,7 +465,7 @@ impl FindItemState {
                 .border_type(BorderType::Rounded),
         );
 
-        let mut state = FindItemState {
+        let mut state = Self {
             search_term,
             has_focus: true,
             theme,
@@ -485,11 +483,11 @@ impl FindItemState {
             self.search_term
                 .set_style(self.theme.default().add_modifier(Modifier::BOLD));
             self.search_term
-                .set_block(block.border_style(self.theme.border().add_modifier(Modifier::BOLD)))
+                .set_block(block.border_style(self.theme.border().add_modifier(Modifier::BOLD)));
         } else {
             self.search_term.set_style(self.theme.default());
             self.search_term
-                .set_block(block.border_style(self.theme.border()))
+                .set_block(block.border_style(self.theme.border()));
         }
     }
 }

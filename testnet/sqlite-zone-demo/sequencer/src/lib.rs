@@ -25,7 +25,7 @@ pub struct SequencerArgs {
     )]
     pub node_url: String,
 
-    /// Path to the SQLite database file
+    /// Path to the `SQLite` database file
     #[arg(long, default_value = "./data/database.db", env = "SEQUENCER_DB_PATH")]
     pub db_path: String,
 
@@ -72,7 +72,7 @@ struct App {
 
 impl App {
     fn new(state: State) -> Result<Self> {
-        Ok(App {
+        Ok(Self {
             screen: ScreenGuard::open()?,
             state,
         })

@@ -4,7 +4,7 @@ use std::{fs, path::Path};
 
 use chrono::{DateTime, Utc};
 use nanosql::{
-    AsSqlTy, Connection, ConnectionExt, FromSql, InsertInput, Null, Param, ResultRecord, Table,
+    AsSqlTy, Connection, ConnectionExt as _, FromSql, InsertInput, Null, Param, ResultRecord, Table,
     ToSql, Value,
 };
 
@@ -42,7 +42,7 @@ impl DatabaseReadOnly {
             });
         }
 
-        Ok(DatabaseReadOnly { connection })
+        Ok(Self { connection })
     }
 
     pub fn execute_batch(&self, sql: &str) -> Result<()> {

@@ -1,10 +1,10 @@
 //! Describes and implements the password database.
 
-use std::{fs, fs::File, io::Write, path::Path, sync::Mutex};
+use std::{fs, fs::File, io::Write as _, path::Path, sync::Mutex};
 
 use chrono::{DateTime, Utc};
 use nanosql::{
-    AsSqlTy, Connection, ConnectionExt, FromSql, InsertInput, Null, Param, ResultRecord, Table,
+    AsSqlTy, Connection, ConnectionExt as _, FromSql, InsertInput, Null, Param, ResultRecord, Table,
     ToSql, Value,
     rusqlite::trace::{TraceEvent, TraceEventCodes},
 };
@@ -56,23 +56,21 @@ impl Database {
 
         connection.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(Self::trace_fn));
 
-        Ok(Database { connection })
+        Ok(Self { connection })
     }
 
     fn trace_fn(event: TraceEvent<'_>) {
-        if let TraceEvent::Stmt(stmt, _) = event {
-            if let Some(sql) = stmt.expanded_sql() {
+        if let TraceEvent::Stmt(stmt, _) = event
+            && let Some(sql) = stmt.expanded_sql() {
                 if sql.trim_start().to_uppercase().starts_with("SELECT") {
                     return;
                 }
-                if let Ok(mut guard) = TRACE_FILE.lock() {
-                    if let Some(file) = guard.as_mut() {
+                if let Ok(mut guard) = TRACE_FILE.lock()
+                    && let Some(file) = guard.as_mut() {
                         let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let _unused = writeln!(file, "{}", normalized);
+                        let _unused = writeln!(file, "{normalized}");
                     }
-                }
             }
-        }
     }
 
     /// Retrieves the schema version of the database.
@@ -281,7 +279,7 @@ mod tests {
             .add_item(input_2)
             .expect_err("item with duplicate salt added");
         let Error::Db(NanosqlError::Sqlite(SqliteError::SqliteFailure(error, _))) = error else {
-            panic!("unexpected error: {}", error);
+            panic!("unexpected error: {error}");
         };
 
         assert_eq!(error.code, ErrorCode::ConstraintViolation);
@@ -325,7 +323,7 @@ mod tests {
             .add_item(input_2)
             .expect_err("item with duplicate nonce added");
         let Error::Db(NanosqlError::Sqlite(SqliteError::SqliteFailure(error, _))) = error else {
-            panic!("unexpected error: {}", error);
+            panic!("unexpected error: {error}");
         };
 
         assert_eq!(error.code, ErrorCode::ConstraintViolation);

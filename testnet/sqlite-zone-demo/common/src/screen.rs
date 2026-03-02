@@ -1,20 +1,19 @@
 //! A guard object that makes sure the screen and terminal mode
 //! is always restored, even when an error or panic occurs.
 
-use std::ops::{Deref, DerefMut};
-use std::io::{self, Stdout};
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::error::{Error, Result};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
     crossterm::{
+        ExecutableCommand as _,
+        event::{DisableMouseCapture, EnableMouseCapture},
         terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
-        event::{EnableMouseCapture, DisableMouseCapture},
-        ExecutableCommand,
     },
 };
-use crate::error::{Error, Result};
-
+use std::io::{self, Stdout};
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static IS_OPEN: AtomicBool = AtomicBool::new(false);
 
@@ -51,7 +50,7 @@ impl ScreenGuard {
 
             match Terminal::new(CrosstermBackend::new(io::stdout())) {
                 Ok(terminal) => {
-                    result = Ok(ScreenGuard { terminal });
+                    result = Ok(Self { terminal });
                     Some(true)
                 }
                 Err(error) => {
@@ -70,7 +69,7 @@ impl ScreenGuard {
     }
     */
 
-    fn finalize(&mut self) -> Result<()> {
+    fn finalize() -> Result<()> {
         terminal::disable_raw_mode()?;
         io::stdout().execute(DisableMouseCapture)?;
         io::stdout().execute(LeaveAlternateScreen)?;
@@ -95,7 +94,7 @@ impl DerefMut for ScreenGuard {
 
 impl Drop for ScreenGuard {
     fn drop(&mut self) {
-        if let Err(error) = self.finalize() {
+        if let Err(error) = ScreenGuard::finalize() {
             eprintln!("Error restoring terminal: {error:#}");
         }
     }

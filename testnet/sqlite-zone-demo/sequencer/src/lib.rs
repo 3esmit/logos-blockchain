@@ -9,16 +9,20 @@ mod tui;
 use std::sync::Arc;
 
 use clap::Parser;
+use demo_sqlite_common::logging::RawModeWriter;
 use sequencer::Sequencer;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
-use demo_sqlite_common::logging::RawModeWriter;
 
 #[derive(Parser, Debug)]
 #[command(about = "SQLite zone sequencer")]
 pub struct SequencerArgs {
     /// Logos blockchain node HTTP endpoint
-    #[arg(long, default_value = "http://localhost:8080", env = "SEQUENCER_NODE_ENDPOINT")]
+    #[arg(
+        long,
+        default_value = "http://localhost:8080",
+        env = "SEQUENCER_NODE_ENDPOINT"
+    )]
     pub node_url: String,
 
     /// Path to the SQLite database file
@@ -26,7 +30,11 @@ pub struct SequencerArgs {
     pub db_path: String,
 
     /// Path to the signing key file (created if it doesn't exist)
-    #[arg(long, default_value = "./data/sequencer.key", env = "SEQUENCER_SIGNING_KEY_PATH")]
+    #[arg(
+        long,
+        default_value = "./data/sequencer.key",
+        env = "SEQUENCER_SIGNING_KEY_PATH"
+    )]
     pub key_path: String,
 
     /// Basic auth username for node endpoint
@@ -42,7 +50,11 @@ pub struct SequencerArgs {
     pub queue_file: String,
 
     /// Path to the checkpoint file for crash recovery
-    #[arg(long, default_value = "./data/sequencer.checkpoint", env = "CHECKPOINT_PATH")]
+    #[arg(
+        long,
+        default_value = "./data/sequencer.checkpoint",
+        env = "CHECKPOINT_PATH"
+    )]
     checkpoint_path: String,
 
     /// Path to the channel ID file
@@ -50,13 +62,7 @@ pub struct SequencerArgs {
     channel_path: String,
 }
 
-use crate::{
-    config::Config,
-    db::Database,
-    tui::State,
-    screen::ScreenGuard,
-    error::Result,
-};
+use crate::{config::Config, db::Database, error::Result, screen::ScreenGuard, tui::State};
 
 #[derive(Debug)]
 struct App {

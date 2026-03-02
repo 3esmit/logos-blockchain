@@ -55,8 +55,6 @@ lb-tx-service                    = { features = ["rocksdb-backend"], workspace =
 lb-utils                         = { features = ["serde", "time"], workspace = true }
 lb-wallet-service                = { workspace = true }
 libp2p                           = { features = ["autonat", "gossipsub", "identify", "kad", "macros"], workspace = true }
-demo-sqlite-indexer              = { path = "../../../testnet/sqlite-zone-demo/indexer" }
-demo-sqlite-sequencer            = { path = "../../../testnet/sqlite-zone-demo/sequencer" }
 logos-blockchain-tui-zone        = { path = "../../../testnet/tui-zone" }
 num-bigint                       = { default-features = false, version = "0.4" }
 overwatch                        = { workspace = true }

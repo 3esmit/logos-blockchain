@@ -22,16 +22,12 @@ crypto-common             = { version = "0.1.6", features = ["std"] }
 directories               = "6.0"
 logos-blockchain-zone-sdk = { path = "../../../zone-sdk" }
 nanosql                   = { version = "0.10.0", features = ["chrono"] }
-owo-colors                = { default-features = false, version = "4.2.3" }
 rand                      = { version = "0.9" }
 ratatui                   = { version = "0.29", features = ["serde"] }
 serde                     = { features = ["derive"], workspace = true }
 serde_json                = { workspace = true }
 thiserror                 = { workspace = true }
-tokio                     = { default-features = false, features = ["signal"], version = "1" }
-tokio-util                = { version = "0.7" }
 tracing-subscriber        = { features = ["env-filter"], version = "0.3" }
-tui-textarea              = "0.7"
 zeroize                   = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]

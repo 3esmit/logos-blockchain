@@ -1,16 +1,18 @@
 //! Key derivation, encryption, and authentication.
 
-use std::iter;
-use serde::Serialize;
-use chrono::{DateTime, Utc};
-use rand::seq::IndexedRandom;
-use zeroize::Zeroizing;
-use block_padding::{RawPadding, Iso7816};
-use crypto_common::typenum::Unsigned;
-use argon2::Argon2;
-use chacha20poly1305::{XChaCha20Poly1305, KeyInit, aead::{Aead, Payload, KeySizeUser}};
 use crate::error::Result;
-
+use argon2::Argon2;
+use block_padding::{Iso7816, RawPadding as _};
+use chacha20poly1305::{
+    KeyInit as _, XChaCha20Poly1305,
+    aead::{Aead as _, KeySizeUser, Payload},
+};
+use chrono::{DateTime, Utc};
+use crypto_common::typenum::Unsigned as _;
+use rand::seq::IndexedRandom as _;
+use serde::Serialize;
+use std::iter;
+use zeroize::Zeroizing;
 
 /// The length of the per-item password salt, in bytes.
 pub use argon2::RECOMMENDED_SALT_LEN;
@@ -23,14 +25,17 @@ pub const NONCE_LEN: usize = 24;
 pub const PADDING_BLOCK_SIZE: usize = 256;
 
 /// The set of characters that will be sampled for generating a strong, random password.
+/// 
 /// These are ASCII-only letters, digits, and printable punctuation characters easily
 /// available on a US English keyboard and should readily be accepted by most systems.
-pub const PASSWORD_CHARSET: &'static [u8] =
+pub const PASSWORD_CHARSET: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?-+*/%=_@#$^&~()[]{}";
 
-/// The length of randomly generated passwords. This provides log_2(87^40) ~= 257 bits of
-/// entropy, or just over 32 bytes, requiring around 10^77 guesses on average using brute
-/// force. This should satisfy even the most stringent requirements.
+/// The length of randomly generated passwords.
+///
+/// This provides `log_2(87^40)` ~= 257 bits of entropy, or just over 32 bytes,
+/// requiring around 10^77 guesses on average using brute force.
+/// This should satisfy even the most stringent requirements.
 pub const PASSWORD_LEN: usize = 40;
 
 /// The pieces of data that are not encrypted but still validated using the
@@ -46,7 +51,9 @@ struct AdditionalData<'a> {
 }
 
 /// The result of encrypting and authenticating the secret, and authenticating
-/// the additional data, using the specified password. The salt for the Key
+/// the additional data, using the specified password.
+/// 
+/// The salt for the Key
 /// Derivation Function and the nonce for the authentication are generated
 /// _inside_ the encryption function, so that the API ensures fresh,
 /// cryptographically strong random values, so accidental re-use is prevented.
@@ -82,7 +89,7 @@ impl EncryptionInput<'_> {
         // the new buffer.
         let unpadded_secret = self.plaintext_secret;
         let total_len = (unpadded_secret.len() / PADDING_BLOCK_SIZE + 1) * PADDING_BLOCK_SIZE;
-        let mut padded_secret = Zeroizing::new(vec![0x00_u8; total_len]);
+        let mut padded_secret = Zeroizing::new(vec![0x00u8; total_len]);
 
         padded_secret[..unpadded_secret.len()].copy_from_slice(unpadded_secret);
         Iso7816::raw_pad(padded_secret.as_mut_slice(), unpadded_secret.len());
@@ -104,7 +111,7 @@ impl EncryptionInput<'_> {
         let hasher = Argon2::default();
 
         // The actual encryption key is cleared (overwritten with all 0s) upon drop.
-        let mut key = Zeroizing::new([0_u8; <XChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE]);
+        let mut key = Zeroizing::new([0u8; <XChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE]);
         hasher.hash_password_into(encryption_password, &kdf_salt, &mut *key)?;
 
         // Create encryption and authentication context.
@@ -156,7 +163,7 @@ impl DecryptionInput<'_> {
         let hasher = Argon2::default();
 
         // The actual encryption key is cleared (overwritten with all 0s) upon drop.
-        let mut key = Zeroizing::new([0_u8; <XChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE]);
+        let mut key = Zeroizing::new([0u8; <XChaCha20Poly1305 as KeySizeUser>::KeySize::USIZE]);
         hasher.hash_password_into(decryption_password, &self.kdf_salt, &mut *key)?;
 
         // Create decryption and verification context.
@@ -193,21 +200,23 @@ pub fn generate_password() -> Zeroizing<String> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Utc, Days};
-    use rand::{Rng, RngCore, distr::{StandardUniform, SampleString}};
-    use zxcvbn::{zxcvbn, Score};
+    use super::{DecryptionInput, EncryptionInput, PADDING_BLOCK_SIZE, PASSWORD_LEN};
     use crate::error::{Error, Result};
-    use super::{EncryptionInput, DecryptionInput, PADDING_BLOCK_SIZE, PASSWORD_LEN};
-
+    use chrono::{Days, Utc};
+    use rand::{
+        Rng, RngCore,
+        distr::{SampleString, StandardUniform},
+    };
+    use zxcvbn::{Score, zxcvbn};
 
     #[test]
     fn correct_encryption_and_decryption_succeeds() -> Result<()> {
         let timestamp = Utc::now();
         let mut rng = rand::rng();
         let p0 = vec![]; // empty payload edge case
-        let mut p1 = vec![0_u8; PADDING_BLOCK_SIZE - 1];
-        let mut p2 = vec![0_u8; PADDING_BLOCK_SIZE];
-        let mut p3 = vec![0_u8; PADDING_BLOCK_SIZE + 1];
+        let mut p1 = vec![0u8; PADDING_BLOCK_SIZE - 1];
+        let mut p2 = vec![0u8; PADDING_BLOCK_SIZE];
+        let mut p3 = vec![0u8; PADDING_BLOCK_SIZE + 1];
 
         rng.fill_bytes(&mut p1);
         rng.fill_bytes(&mut p2);
@@ -245,9 +254,9 @@ mod tests {
         let timestamp = Utc::now();
         let mut rng = rand::rng();
         let p0 = vec![]; // empty payload edge case
-        let mut p1 = vec![0_u8; PADDING_BLOCK_SIZE - 1];
-        let mut p2 = vec![0_u8; PADDING_BLOCK_SIZE];
-        let mut p3 = vec![0_u8; PADDING_BLOCK_SIZE + 1];
+        let mut p1 = vec![0u8; PADDING_BLOCK_SIZE - 1];
+        let mut p2 = vec![0u8; PADDING_BLOCK_SIZE];
+        let mut p3 = vec![0u8; PADDING_BLOCK_SIZE + 1];
 
         rng.fill_bytes(&mut p1);
         rng.fill_bytes(&mut p2);
@@ -294,9 +303,9 @@ mod tests {
         let timestamp = Utc::now();
         let mut rng = rand::rng();
         let p0 = vec![]; // empty payload edge case
-        let mut p1 = vec![0_u8; PADDING_BLOCK_SIZE - 1];
-        let mut p2 = vec![0_u8; PADDING_BLOCK_SIZE];
-        let mut p3 = vec![0_u8; PADDING_BLOCK_SIZE + 1];
+        let mut p1 = vec![0u8; PADDING_BLOCK_SIZE - 1];
+        let mut p2 = vec![0u8; PADDING_BLOCK_SIZE];
+        let mut p3 = vec![0u8; PADDING_BLOCK_SIZE + 1];
 
         rng.fill_bytes(&mut p1);
         rng.fill_bytes(&mut p2);
@@ -399,24 +408,23 @@ mod tests {
             let has_digit = password.chars().any(|c| c.is_ascii_digit());
             let has_punct = password.chars().any(|c| c.is_ascii_punctuation());
 
-            let char_class_count =
-                u32::from(has_lower) + u32::from(has_upper) + u32::from(has_digit) + u32::from(has_punct);
+            let char_class_count = u32::from(has_lower)
+                + u32::from(has_upper)
+                + u32::from(has_digit)
+                + u32::from(has_punct);
 
             // Digits are not always found because their probability is relatively low,
             // so assert that at least a reasonable variety of characters is exhibited.
             assert!(char_class_count >= 3);
 
             // Ensure that all characters are from the specified set.
-            assert!(
-                password.chars().all(|c| {
-                    !c.is_ascii_control() && (
-                        c.is_ascii_lowercase() ||
-                        c.is_ascii_uppercase() ||
-                        c.is_ascii_digit() ||
-                        c.is_ascii_punctuation()
-                    )
-                })
-            );
+            assert!(password.chars().all(|c| {
+                !c.is_ascii_control()
+                    && (c.is_ascii_lowercase()
+                        || c.is_ascii_uppercase()
+                        || c.is_ascii_digit()
+                        || c.is_ascii_punctuation())
+            }));
 
             // Evaluate password using the `zxcvbn` algorithm. It should never get anything
             // but the maximal score, and it should not trigger any warnings/suggestions.

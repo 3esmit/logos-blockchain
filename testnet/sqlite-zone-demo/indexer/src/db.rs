@@ -1,13 +1,13 @@
 //! Describes and implements the password database.
 
-use std::{fs, path::Path};
+use crate::crypto::{NONCE_LEN, RECOMMENDED_SALT_LEN};
+use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
 use nanosql::{
-    Connection, ConnectionExt, Null, Value,
-    Table, Param, ResultRecord, InsertInput, AsSqlTy, FromSql, ToSql,
+    AsSqlTy, Connection, ConnectionExt, FromSql, InsertInput, Null, Param, ResultRecord, Table,
+    ToSql, Value,
 };
-use crate::crypto::{RECOMMENDED_SALT_LEN, NONCE_LEN};
-use crate::error::{Error, Result};
+use std::{fs, path::Path};
 
 /// The current version of the database schema.
 const SCHEMA_VERSION: i64 = 1;
@@ -16,7 +16,6 @@ const SCHEMA_VERSION: i64 = 1;
 #[derive(Debug)]
 pub struct DatabaseReadOnly {
     connection: Connection,
-    schema_version: i64,
 }
 
 impl DatabaseReadOnly {
@@ -39,7 +38,9 @@ impl DatabaseReadOnly {
             });
         }
 
-        Ok(DatabaseReadOnly { connection, schema_version })
+        Ok(DatabaseReadOnly {
+            connection,
+        })
     }
 
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
@@ -68,7 +69,10 @@ impl DatabaseReadOnly {
         }
     }
 
-    fn metadata_by_key<T: FromSql>(connection: &Connection, key: MetadataKey) -> nanosql::Result<T> {
+    fn metadata_by_key<T: FromSql>(
+        connection: &Connection,
+        key: MetadataKey,
+    ) -> nanosql::Result<T> {
         let Metadata { ref value, .. } = connection.select_by_key(key)?;
         let value = T::column_result(value.into())?;
         Ok(value)
@@ -88,7 +92,9 @@ impl DatabaseReadOnly {
     /// will be matched against the label and the account name, and entries matching either
     /// will be returned.
     pub fn list_items_for_display(&self, search_term: Option<&str>) -> Result<Vec<DisplayItem>> {
-        self.connection.compile_invoke(ListItemsForDisplay, search_term).map_err(Into::into)
+        self.connection
+            .compile_invoke(ListItemsForDisplay, search_term)
+            .map_err(Into::into)
     }
 
     /// Retrieves a full item from the database based on its unique ID (primary key).

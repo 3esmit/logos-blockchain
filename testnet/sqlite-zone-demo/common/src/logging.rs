@@ -20,7 +20,7 @@ impl std::io::Write for RawModeWriter {
 
         let (_, height) = terminal::size().unwrap_or((80, 24));
         let top_row = height / 2 + 1; // 1-based: first row of bottom half
-        let bottom_row = height;       // 1-based: last row of terminal
+        let bottom_row = height; // 1-based: last row of terminal
 
         // Set scroll region to the bottom half, then move cursor to its last row.
         // Any subsequent \n will scroll only within [top_row, bottom_row].
@@ -45,5 +45,7 @@ impl std::io::Write for RawModeWriter {
 
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RawModeWriter {
     type Writer = Self;
-    fn make_writer(&'a self) -> Self::Writer { *self }
+    fn make_writer(&'a self) -> Self::Writer {
+        *self
+    }
 }

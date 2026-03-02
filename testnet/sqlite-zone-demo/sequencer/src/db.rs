@@ -1,14 +1,14 @@
 //! Describes and implements the password database.
 
-use std::{path::Path, fs, fs::File, sync::Mutex, io::Write}; 
+use crate::crypto::{NONCE_LEN, RECOMMENDED_SALT_LEN};
+use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
 use nanosql::{
-    Connection, ConnectionExt, Null, Value,
-    Table, Param, ResultRecord, InsertInput, AsSqlTy, FromSql, ToSql,
-    rusqlite::trace::{TraceEvent, TraceEventCodes}
+    AsSqlTy, Connection, ConnectionExt, FromSql, InsertInput, Null, Param, ResultRecord, Table,
+    ToSql, Value,
+    rusqlite::trace::{TraceEvent, TraceEventCodes},
 };
-use crate::crypto::{RECOMMENDED_SALT_LEN, NONCE_LEN};
-use crate::error::{Error, Result};
+use std::{fs, fs::File, io::Write, path::Path, sync::Mutex};
 
 /// The current version of the database schema.
 const SCHEMA_VERSION: i64 = 1;
@@ -19,7 +19,6 @@ static TRACE_FILE: Mutex<Option<File>> = Mutex::new(None);
 #[derive(Debug)]
 pub struct Database {
     connection: Connection,
-    schema_version: i64,
 }
 
 impl Database {
@@ -29,9 +28,9 @@ impl Database {
             fs::create_dir_all(parent)?;
         }
         let queue_file = fs::OpenOptions::new()
-              .create(true)
-              .append(true)
-              .open(queue_path)?;
+            .create(true)
+            .append(true)
+            .open(queue_path)?;
         *TRACE_FILE.lock().unwrap() = Some(queue_file);
 
         if let Some(parent) = Path::new(path).parent() {
@@ -51,12 +50,11 @@ impl Database {
             });
         }
 
-        connection.trace_v2(
-            TraceEventCodes::SQLITE_TRACE_STMT,
-            Some(Self::trace_fn),
-        );
+        connection.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(Self::trace_fn));
 
-        Ok(Database { connection, schema_version })
+        Ok(Database {
+            connection,
+        })
     }
 
     fn trace_fn(event: TraceEvent<'_>) {
@@ -97,7 +95,10 @@ impl Database {
         }
     }
 
-    fn metadata_by_key<T: FromSql>(connection: &Connection, key: MetadataKey) -> nanosql::Result<T> {
+    fn metadata_by_key<T: FromSql>(
+        connection: &Connection,
+        key: MetadataKey,
+    ) -> nanosql::Result<T> {
         let Metadata { ref value, .. } = connection.select_by_key(key)?;
         let value = T::column_result(value.into())?;
         Ok(value)
@@ -117,7 +118,9 @@ impl Database {
     /// will be matched against the label and the account name, and entries matching either
     /// will be returned.
     pub fn list_items_for_display(&self, search_term: Option<&str>) -> Result<Vec<DisplayItem>> {
-        self.connection.compile_invoke(ListItemsForDisplay, search_term).map_err(Into::into)
+        self.connection
+            .compile_invoke(ListItemsForDisplay, search_term)
+            .map_err(Into::into)
     }
 
     /// Creates a new entry in the database using an already-encrypted secret.
@@ -224,17 +227,16 @@ nanosql::define_query! {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
-    use nanosql::{Null, Error as NanosqlError};
-    use nanosql::rusqlite::{ErrorCode, Error as SqliteError};
-    use crate::crypto::{RECOMMENDED_SALT_LEN, NONCE_LEN};
+    use super::{AddItemInput, Database};
+    use crate::crypto::{NONCE_LEN, RECOMMENDED_SALT_LEN};
     use crate::error::{Error, Result};
-    use super::{Database, AddItemInput};
-
+    use chrono::Utc;
+    use nanosql::rusqlite::{Error as SqliteError, ErrorCode};
+    use nanosql::{Error as NanosqlError, Null};
 
     #[test]
     fn salt_uniqueness_is_enforced() -> Result<()> {
-        let db = Database::open(":memory:")?;
+        let db = Database::open(":memory:", ":queue:")?;
         let salt: [u8; RECOMMENDED_SALT_LEN] = *b"Qk2Dw5aV65Ie8y7t";
         let nonce_1: [u8; NONCE_LEN] = *b"lMVXTMT2z2giginHeWwIajy4";
         let nonce_2: [u8; NONCE_LEN] = *b"rZNaJw3dBHmiqGhfUxLbjL6x";
@@ -264,7 +266,9 @@ mod tests {
 
         // The second item has an identical salt, so insertion must fail
         // due to the violation of the UNIQUE constraint.
-        let error = db.add_item(input_2).expect_err("item with duplicate salt added");
+        let error = db
+            .add_item(input_2)
+            .expect_err("item with duplicate salt added");
         let Error::Db(NanosqlError::Sqlite(SqliteError::SqliteFailure(error, _))) = error else {
             panic!("unexpected error: {}", error);
         };
@@ -276,7 +280,7 @@ mod tests {
 
     #[test]
     fn nonce_uniqueness_is_enforced() -> Result<()> {
-        let db = Database::open(":memory:")?;
+        let db = Database::open(":memory:", ":queue:")?;
         let salt_1: [u8; RECOMMENDED_SALT_LEN] = *b"NdBIIex0BLnkThWH";
         let salt_2: [u8; RECOMMENDED_SALT_LEN] = *b"xS8HYP2XAjgSnEOJ";
         let nonce: [u8; NONCE_LEN] = *b"vb4yngPRSgEOrBLNGw8YcGpG";
@@ -306,7 +310,9 @@ mod tests {
 
         // The second item has an identical nonce, so insertion must fail
         // due to the violation of the UNIQUE constraint.
-        let error = db.add_item(input_2).expect_err("item with duplicate nonce added");
+        let error = db
+            .add_item(input_2)
+            .expect_err("item with duplicate nonce added");
         let Error::Db(NanosqlError::Sqlite(SqliteError::SqliteFailure(error, _))) = error else {
             panic!("unexpected error: {}", error);
         };

@@ -8,8 +8,6 @@ use logos_blockchain_zone_sdk::indexer::ZoneIndexer;
 use reqwest::Url;
 use tracing::{error, info};
 
-
-
 use crate::{db::DatabaseReadOnly, error::Error};
 
 pub type Result<T> = std::result::Result<T, Error>;

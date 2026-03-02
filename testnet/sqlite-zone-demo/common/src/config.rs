@@ -1,13 +1,12 @@
 //! Configures the environment of the application: color themes, database path, etc.
 
-use std::io::ErrorKind;
-use std::fs::File;
-use std::path::Path;
+use crate::error::{Error, Result, ResultExt as _};
+use directories::{ProjectDirs, UserDirs};
+use ratatui::style::{Color, Style};
 use serde::Deserialize;
-use directories::{UserDirs, ProjectDirs};
-use ratatui::style::{Style, Color};
-use crate::error::{Error, Result, ResultExt};
-
+use std::fs::File;
+use std::io::ErrorKind;
+use std::path::Path;
 
 /// Configures the environment of the application.
 #[derive(Clone, Default, Debug, Deserialize)]
@@ -44,7 +43,7 @@ impl Config {
         }
 
         // not found anywhere, return the built-in default config
-        Ok(Config::default())
+        Ok(Self::default())
     }
 
     fn project_dirs() -> Result<ProjectDirs> {
@@ -97,30 +96,35 @@ pub struct Theme {
 }
 
 impl Theme {
+    #[must_use]
     pub fn default(&self) -> Style {
         Style::default()
             .bg(self.default.bg.unwrap_or(Color::Black))
             .fg(self.default.fg.unwrap_or(Color::LightYellow))
     }
 
+    #[must_use]
     pub fn highlight(&self) -> Style {
         Style::default()
             .bg(self.highlight.bg.unwrap_or(Color::LightYellow))
             .fg(self.highlight.fg.unwrap_or(Color::Black))
     }
 
+    #[must_use]
     pub fn border(&self) -> Style {
         Style::default()
             .bg(self.border.bg.unwrap_or(Color::Black))
             .fg(self.border.fg.unwrap_or(Color::LightCyan))
     }
 
+    #[must_use]
     pub fn border_highlight(&self) -> Style {
         Style::default()
             .bg(self.border_highlight.bg.unwrap_or(Color::LightYellow))
             .fg(self.border_highlight.fg.unwrap_or(Color::Cyan))
     }
 
+    #[must_use]
     pub fn error(&self) -> Style {
         Style::default()
             .bg(self.error.bg.unwrap_or(Color::LightYellow))

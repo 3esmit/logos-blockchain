@@ -1,28 +1,27 @@
 //! The bulk of the actual user interface logic.
 
-use std::ops::{ControlFlow, Deref, DerefMut};
-use std::time::Duration;
-use std::fmt::{self, Debug, Formatter};
-use zeroize::Zeroizing;
-use ratatui::{
-    Frame,
-    layout::{Rect, Constraint, Margin},
-    style::Modifier,
-    widgets::{
-        Clear, Table, TableState, Row, Paragraph,
-        block::{Block, BorderType},
-    },
-    crossterm::event::{self, Event, KeyEventKind, KeyCode, KeyModifiers, MouseEventKind},
-};
-use tui_textarea::TextArea;
-use arboard::Clipboard;
 use crate::{
     config::Theme,
     crypto::DecryptionInput,
     db::{DatabaseReadOnly, DisplayItem},
     error::{Error, Result},
 };
-
+use arboard::Clipboard;
+use ratatui::{
+    Frame,
+    crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind},
+    layout::{Constraint, Margin, Rect},
+    style::Modifier,
+    widgets::{
+        Clear, Paragraph, Row, Table, TableState,
+        block::{Block, BorderType},
+    },
+};
+use std::fmt::{self, Debug, Formatter};
+use std::ops::{ControlFlow, Deref, DerefMut};
+use std::time::Duration;
+use tui_textarea::TextArea;
+use zeroize::Zeroizing;
 
 /// The top-level UI state, the basis of rendering.
 #[derive(Debug)]
@@ -43,8 +42,8 @@ impl State {
         let items = db.list_items_for_display(None)?;
         let clipboard = ClipboardDebugWrapper(Clipboard::new()?);
 
-        let table_state = TableState::new()
-            .with_selected(if items.is_empty() { None } else { Some(0) });
+        let table_state =
+            TableState::new().with_selected(if items.is_empty() { None } else { Some(0) });
 
         Ok(State {
             db,
@@ -69,7 +68,10 @@ impl State {
     pub fn draw(&mut self, frame: &mut Frame) {
         let half_screen = {
             let full = frame.area();
-            Rect { height: full.height / 2, ..full }
+            Rect {
+                height: full.height / 2,
+                ..full
+            }
         };
         let bottom_input_height = 3;
         let mut table_area = {
@@ -117,15 +119,23 @@ impl State {
                     item.last_modified_at.format("%F %T").to_string(),
                 ])
             }),
-            [Constraint::Percentage(40), Constraint::Percentage(40), Constraint::Min(24)]
-        ).header(
+            [
+                Constraint::Percentage(40),
+                Constraint::Percentage(40),
+                Constraint::Min(24),
+            ],
+        )
+        .header(
             Row::new(["Title", "Username or account", "Modified at (UTC)"])
-                .style(self.theme.default().add_modifier(Modifier::BOLD))
-        ).row_highlight_style(
-            Modifier::REVERSED
-        ).block(
+                .style(self.theme.default().add_modifier(Modifier::BOLD)),
+        )
+        .row_highlight_style(Modifier::REVERSED)
+        .block(
             Block::bordered()
-                .title(format!(" SteelSafe v{} (read-only) ", env!("CARGO_PKG_VERSION")))
+                .title(format!(
+                    " SteelSafe v{} (read-only) ",
+                    env!("CARGO_PKG_VERSION")
+                ))
                 .title_bottom(" [C]opy secret ")
                 .title_bottom(" [F]ind ")
                 .title_bottom(" [1] First ")
@@ -137,10 +147,9 @@ impl State {
                     self.theme.border().add_modifier(Modifier::BOLD)
                 } else {
                     self.theme.border()
-                })
-        ).style(
-            self.theme.default()
+                }),
         )
+        .style(self.theme.default())
     }
 
     fn error_modal(&self, error: &Error) -> Paragraph<'static> {
@@ -314,9 +323,9 @@ impl State {
                     self.sync_data(true)?;
                     Ok(ControlFlow::Break(()))
                 }
-                _ => Ok(ControlFlow::Continue(event))
-            }
-            _ => Ok(ControlFlow::Continue(event))
+                _ => Ok(ControlFlow::Continue(event)),
+            },
+            _ => Ok(ControlFlow::Continue(event)),
         }
     }
 
@@ -335,13 +344,13 @@ impl State {
         self.items = self.db.list_items_for_display(search_term.as_deref())?;
 
         #[allow(unused_parens)]
-        if (
-            adjust_selection
-            &&
-            !self.items.is_empty()
-            &&
-            !self.table_state.selected().is_some_and(|idx| idx < self.items.len())
-        ) {
+        if (adjust_selection
+            && !self.items.is_empty()
+            && !self
+                .table_state
+                .selected()
+                .is_some_and(|idx| idx < self.items.len()))
+        {
             self.table_state.select_last();
         }
 
@@ -351,7 +360,10 @@ impl State {
     /// Actually copy the decrypted plaintext secret to the clipboard.
     /// We can't zeroize the clipboard content, so we don't even bother.
     fn copy_secret_to_clipboard(&mut self, enc_pass: &str) -> Result<()> {
-        let index = self.table_state.selected().ok_or(Error::SelectionRequired)?;
+        let index = self
+            .table_state
+            .selected()
+            .ok_or(Error::SelectionRequired)?;
         let uid = self.items[index].uid;
         let item = self.db.item_by_id(uid)?;
 
@@ -374,13 +386,9 @@ impl State {
 
     /// The main table has focus when none of the other widgets do.
     fn main_table_has_focus(&self) -> bool {
-        (
-            self.find.is_none()
-            ||
-            self.find.as_ref().is_some_and(|find| !find.has_focus)
-        )
-        && self.passwd_entry.is_none()
-        && self.popup_error.is_none()
+        (self.find.is_none() || self.find.as_ref().is_some_and(|find| !find.has_focus))
+            && self.passwd_entry.is_none()
+            && self.popup_error.is_none()
     }
 }
 
@@ -431,7 +439,7 @@ impl PasswordEntryState {
                 .title_bottom(" <Esc> Cancel ")
                 .title_bottom(show_hide_title)
                 .border_type(BorderType::Rounded)
-                .border_style(self.theme.border().add_modifier(Modifier::BOLD))
+                .border_style(self.theme.border().add_modifier(Modifier::BOLD)),
         );
     }
 }
@@ -452,7 +460,7 @@ impl FindItemState {
                 .title(" Search term ")
                 .title_bottom(" <Enter> Focus secrets ")
                 .title_bottom(" <Esc> Exit search ")
-                .border_type(BorderType::Rounded)
+                .border_type(BorderType::Rounded),
         );
 
         let mut state = FindItemState {
@@ -470,15 +478,14 @@ impl FindItemState {
         let block = self.search_term.block().cloned().unwrap_or_default();
 
         if self.has_focus {
-            self.search_term.set_style(self.theme.default().add_modifier(Modifier::BOLD));
-            self.search_term.set_block(
-                block.border_style(self.theme.border().add_modifier(Modifier::BOLD))
-            )
+            self.search_term
+                .set_style(self.theme.default().add_modifier(Modifier::BOLD));
+            self.search_term
+                .set_block(block.border_style(self.theme.border().add_modifier(Modifier::BOLD)))
         } else {
             self.search_term.set_style(self.theme.default());
-            self.search_term.set_block(
-                block.border_style(self.theme.border())
-            )
+            self.search_term
+                .set_block(block.border_style(self.theme.border()))
         }
     }
 }

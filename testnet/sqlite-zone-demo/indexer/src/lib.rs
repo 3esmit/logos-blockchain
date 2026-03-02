@@ -9,16 +9,20 @@ mod tui;
 use std::sync::Arc;
 
 use clap::Parser;
+use demo_sqlite_common::logging::RawModeWriter;
 use indexer::Indexer;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
-use demo_sqlite_common::logging::RawModeWriter;
 
 #[derive(Parser, Debug)]
 #[command(about = "SQLite zone indexer - replay zone blocks into a local SQLite database")]
 pub struct IndexerArgs {
     /// Logos blockchain node HTTP endpoint
-    #[arg(long, default_value = "http://localhost:8080", env = "INDEXER_NODE_ENDPOINT")]
+    #[arg(
+        long,
+        default_value = "http://localhost:8080",
+        env = "INDEXER_NODE_ENDPOINT"
+    )]
     pub node_url: String,
 
     /// Path to the SQLite database file
@@ -38,13 +42,7 @@ pub struct IndexerArgs {
     pub node_auth_password: Option<String>,
 }
 
-use crate::{
-    config::Config,
-    db::DatabaseReadOnly,
-    tui::State,
-    screen::ScreenGuard,
-    error::Result,
-};
+use crate::{config::Config, db::DatabaseReadOnly, error::Result, screen::ScreenGuard, tui::State};
 
 #[derive(Debug)]
 struct App {

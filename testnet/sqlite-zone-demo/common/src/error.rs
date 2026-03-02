@@ -1,20 +1,21 @@
 //! Errors and results specific to Steelsafe.
 
-use std::fmt::{self, Display, Debug, Formatter};
-use std::io::Error as IoError;
-use std::str::Utf8Error;
-use std::error::Error as StdError;
-use thiserror::Error;
-use serde_json::Error as JsonError;
-use argon2::Error as Argon2Error;
-use chacha20poly1305::Error as XChaCha20Poly1305Error;
-use block_padding::UnpadError;
-use crypto_common::InvalidLength;
 use arboard::Error as ClipboardError;
+use argon2::Error as Argon2Error;
+use block_padding::UnpadError;
+use chacha20poly1305::Error as XChaCha20Poly1305Error;
+use crypto_common::InvalidLength;
+use logos_blockchain_zone_sdk::indexer::Error as ZoneIndexerError;
 use nanosql::Error as SqlError;
 use nanosql::rusqlite::Error as RusqliteError;
-use logos_blockchain_zone_sdk::indexer::Error as ZoneIndexerError;
+use serde_json::Error as JsonError;
+use std::error::Error as StdError;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io::Error as IoError;
+use std::str::Utf8Error;
+use thiserror::Error;
 
+use crate::error::Error::Context;
 
 #[derive(Error)]
 pub enum Error {
@@ -58,10 +59,7 @@ pub enum Error {
     Sqlite(#[from] RusqliteError),
 
     #[error("Database schema version too high: need <= {expected}, got {actual}")]
-    SchemaVersionMismatch {
-        expected: i64,
-        actual: i64,
-    },
+    SchemaVersionMismatch { expected: i64, actual: i64 },
 
     #[error("Password hashing error: {0}")]
     Argon2(#[from] Argon2Error),
@@ -101,7 +99,7 @@ impl Error {
         E: StdError + Send + Sync + 'static,
         M: Into<String>,
     {
-        Error::Context {
+        Context {
             message: message.into(),
             source: Box::new(source),
         }
@@ -124,11 +122,11 @@ pub trait ResultExt<T> {
 
 impl<T, E> ResultExt<T> for Result<T, E>
 where
-    E: StdError + Send + Sync + 'static
+    E: StdError + Send + Sync + 'static,
 {
     fn context<M>(self, message: M) -> Result<T>
     where
-        M: Into<String>
+        M: Into<String>,
     {
         self.map_err(|error| Error::context(error, message))
     }

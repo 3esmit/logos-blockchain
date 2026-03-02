@@ -1,10 +1,19 @@
-use std::{fs::OpenOptions, io::{BufRead, BufReader}, path::Path, time::Duration, io, fs};
 use fs2::FileExt;
+use std::{
+    fs,
+    fs::OpenOptions,
+    io,
+    io::{BufRead, BufReader},
+    path::Path,
+    time::Duration,
+};
 
 use lb_common_http_client::BasicAuthCredentials;
-use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::sequencer::{ZoneSequencer, Error as ZoneSequencerError, SequencerCheckpoint};
+use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use logos_blockchain_zone_sdk::sequencer::{
+    Error as ZoneSequencerError, SequencerCheckpoint, ZoneSequencer,
+};
 use reqwest::Url;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -87,9 +96,8 @@ impl Sequencer {
     ) -> Result<Self> {
         let node_url = Url::parse(node_endpoint).map_err(|e| SequencerError::Url(e.to_string()))?;
 
-        let basic_auth = node_auth_username.map(|username| {
-            BasicAuthCredentials::new(username, node_auth_password)
-        });
+        let basic_auth = node_auth_username
+            .map(|username| BasicAuthCredentials::new(username, node_auth_password));
 
         for path in [signing_key_path, checkpoint_path, channel_path] {
             if let Some(parent) = Path::new(path).parent() {
@@ -104,15 +112,11 @@ impl Sequencer {
 
         let signing_key = load_or_create_signing_key(Path::new(signing_key_path))?;
         let channel_id = ChannelId::from(signing_key.public_key().to_bytes());
-        fs::write(channel_path, hex::encode(channel_id.as_ref())).expect("failed to write channel id");
+        fs::write(channel_path, hex::encode(channel_id.as_ref()))
+            .expect("failed to write channel id");
 
-        let zone_sequencer = ZoneSequencer::init(
-            channel_id,
-            signing_key,
-            node_url,
-            basic_auth,
-            checkpoint,
-        );
+        let zone_sequencer =
+            ZoneSequencer::init(channel_id, signing_key, node_url, basic_auth, checkpoint);
 
         Ok(Self {
             zone_sequencer,
@@ -154,7 +158,10 @@ impl Sequencer {
         let data = pending.join("\n").into_bytes();
         let result = self.zone_sequencer.publish(data).await?;
 
-        info!("Inscription published with tx_hash: {:?}", result.inscription_id);
+        info!(
+            "Inscription published with tx_hash: {:?}",
+            result.inscription_id
+        );
 
         save_checkpoint(Path::new(&self.checkpoint_path), &result.checkpoint);
 

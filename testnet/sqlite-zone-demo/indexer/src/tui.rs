@@ -1,3 +1,5 @@
+#![allow(clippy::allow_attributes_without_reason)]
+
 //! The bulk of the actual user interface logic.
 
 use std::{
@@ -196,11 +198,11 @@ impl State {
             ControlFlow::Continue(event) => event,
         };
 
-        self.handle_main_table_event(event)
+        self.handle_main_table_event(&event)
     }
 
     /// Handles events when the main table has focus.
-    fn handle_main_table_event(&mut self, event: Event) -> Result<()> {
+    fn handle_main_table_event(&mut self, event: &Event) -> Result<()> {
         if let Event::Mouse(mouse) = event {
             match mouse.kind {
                 MouseEventKind::ScrollDown => {
@@ -260,6 +262,7 @@ impl State {
     }
 
     /// Handles events when the error modal is open.
+    #[expect(clippy::unnecessary_wraps)]
     fn handle_error_input(&mut self, event: Event) -> Result<ControlFlow<(), Event>> {
         if self.popup_error.is_none() {
             return Ok(ControlFlow::Continue(event));

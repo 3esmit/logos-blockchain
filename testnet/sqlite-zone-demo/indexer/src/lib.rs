@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::allow_attributes_without_reason)]
 
 pub mod db;
 pub mod indexer;
@@ -69,6 +70,7 @@ impl App {
     }
 }
 
+#[expect(clippy::unused_async)]
 pub async fn run(args: IndexerArgs) -> Result<()> {
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))

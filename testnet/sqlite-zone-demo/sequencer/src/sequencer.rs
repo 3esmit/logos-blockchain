@@ -125,7 +125,7 @@ impl Sequencer {
     }
 
     /// Drain the queue file and return all pending queries
-    async fn queue_drain(&self) -> Result<Vec<String>> {
+    fn queue_drain(&self) -> Result<Vec<String>> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -146,7 +146,7 @@ impl Sequencer {
 
     /// Process all pending queries as a single inscription
     async fn process_pending_batch(&self) -> Result<()> {
-        let pending = self.queue_drain().await?;
+        let pending = self.queue_drain()?;
         if pending.is_empty() {
             return Ok(());
         }
@@ -168,7 +168,7 @@ impl Sequencer {
     }
 
     /// Check if the queue file is empty
-    pub async fn queue_is_empty(&self) -> Result<bool> {
+    pub fn queue_is_empty(&self) -> Result<bool> {
         match fs::metadata(self.queue_file.clone()) {
             Ok(meta) => Ok(meta.len() == 0),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),
@@ -181,7 +181,7 @@ impl Sequencer {
         let poll_interval = Duration::from_millis(100);
 
         loop {
-            let is_empty = match self.queue_is_empty().await {
+            let is_empty = match self.queue_is_empty() {
                 Ok(empty) => empty,
                 Err(e) => {
                     tracing::error!("Failed to check queue: {}", e);

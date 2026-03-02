@@ -128,11 +128,6 @@ if [ -n "$ENV_FILE" ]; then
     fi
 fi
 
-# Validate required env vars
-missing_vars=()
-[ -z "$SEQUENCER_NODE_ENDPOINT" ] && missing_vars+=("SEQUENCER_NODE_ENDPOINT")
-[ -z "$INDEXER_NODE_ENDPOINT" ] && missing_vars+=("INDEXER_NODE_ENDPOINT")
-
 if [ ${#missing_vars[@]} -ne 0 ]; then
     echo -e "${RED}Error: Missing required environment variables:${NC}"
     for var in "${missing_vars[@]}"; do

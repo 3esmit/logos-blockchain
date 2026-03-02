@@ -18,7 +18,7 @@ use demo_sqlite_common::logging::RawModeWriter;
 #[command(about = "SQLite zone indexer - replay zone blocks into a local SQLite database")]
 pub struct IndexerArgs {
     /// Logos blockchain node HTTP endpoint
-    #[arg(long, default_value = "http://localhost:18081", env = "INDEXER_NODE_ENDPOINT")]
+    #[arg(long, default_value = "http://localhost:8080", env = "INDEXER_NODE_ENDPOINT")]
     pub node_url: String,
 
     /// Path to the SQLite database file

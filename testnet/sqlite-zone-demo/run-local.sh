@@ -4,7 +4,7 @@
 # Runs sequencer and/or indexer without Docker (works on ARM Mac)
 #
 # Usage:
-#   ./run-local.sh <service> --env-file /path/to/.env-local [--clean]
+#   ./run-local.sh <service> [--env-file /path/to/.env-local] [--clean]
 #
 # Services:
 #   sequencer  - Run only the sequencer
@@ -125,9 +125,6 @@ if [ -n "$ENV_FILE" ]; then
         set -a
         source "$ENV_FILE"
         set +a
-    else
-        echo -e "${RED}Error: env file not found: $ENV_FILE${NC}"
-        exit 1
     fi
 fi
 

@@ -23,14 +23,6 @@ async fn main() -> Result<()> {
                 logos_blockchain_tui_zone::run(inscribe_args).await;
                 return Ok(());
             }
-            logos_blockchain_node::config::Command::SqliteSequencer(args) => {
-                demo_sqlite_sequencer::run(args).await;
-                return Ok(());
-            }
-            logos_blockchain_node::config::Command::SqliteIndexer(args) => {
-                demo_sqlite_indexer::run(args).await;
-                return Ok(());
-            }
         }
     }
 

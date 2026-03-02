@@ -48,15 +48,26 @@ In either case, you will need access to a running **Logos Node**. If you are run
 
 ### 2. Running the Sequencer
 
-#### 2a. Using the Built-In Runner
+You can run the following file to execute the sequencer directly: `testnet/sqlite-zone-demo/run-local.sh`.
 
-The Logos Blockchain Node binary comes with a built-in argument, allowing you to run the SQLite Zone Sequencer:
+The script automates building binaries, managing data directories, and linking environment variables between services.
 
 ```bash
-./logos-blockchain-node sqlite-sequencer [arguments]
+# Change to correct path
+cd testnet/sqlite-zone-demo
+
+# Usage
+./run-local.sh <service> [--env-file <path-to-env>] [--clean]
+
+# Run only a specific component
+./run-local.sh sequencer --env-file .env-local
+
+# Start fresh (deletes local databases/keys)
+./run-local.sh sequencer --env-file .env-local --clean
+
 ```
 
-This command should usually work without any additional arguments, relying on default values. The full list of arguments is provided below:
+The information in the environment variables can also be provided to the script via command line arguments. The full list of arguments is provided below:
 
 | Argument with Example | Description|
 | --- | --- |
@@ -69,44 +80,31 @@ This command should usually work without any additional arguments, relying on de
 | `--checkpoint-path ./sequencer.checkpoint` | Path to the checkpoint file for crash recovery. |
 | `--channel-path ./channel.txt` | Path to the channel ID file (for the indexer to read). |
 
+Running this script should allow you to enter SQL queries into the command line.
 
-#### 2b. Using the Local Runner
+### 4. Running the Indexer
 
-You can also run the following file to execute the sequencer directly: `testnet/sqlite-zone-demo/run-local.sh`.
+You can run the following file to execute the sequencer directly: `testnet/sqlite-zone-demo/run-local.sh`.
 
 The script automates building binaries, managing data directories, and linking environment variables between services.
+
+Make sure to provide the Channel ID obtained from the Sequencer to the Indexer so it can monitor the correct channel. This can be done via the `--channel-path` command line argument, or by setting the `CHANNEL_PATH` environment variable.
 
 ```bash
 # Change to correct path
 cd testnet/sqlite-zone-demo
 
 # Usage
-./run-local.sh <service> --env-file <path-to-env> [--clean]
+./run-local.sh <service> [--env-file <path-to-env>] [--clean]
 
 # Run only a specific component
-./run-local.sh sequencer --env-file .env-local
+./run-local.sh indexer --env-file .env-local
 
 # Start fresh (deletes local databases/keys)
-./run-local.sh sequencer --env-file .env-local --clean
-
+./run-local.sh indexer --env-file .env-local --clean
 ```
 
-Running this script should allow you to enter SQL queries into the command line.
-
-### 4. Running the Indexer
-
-#### 2a. Using the Built-In Runner
-
-The Logos Blockchain Node binary comes with a built-in argument, allowing you to run the SQLite Zone Indexer in a new terminal window:
-
-```bash
-./logos-blockchain-node sqlite-indexer [arguments]
-
-```
-
-Make sure to provide the Channel ID obtained from the Sequencer to the Indexer so it can monitor the correct channel. This can be done via the `--channel-path` command line argument, or by setting the `CHANNEL_PATH`environment variable.
-
-The full list of arguments is provided below:
+The information in the environment variables can also be provided to the script via command line arguments. The full list of arguments is provided below:
 
 | Argument with Example | Description|
 | --- | --- |
@@ -117,27 +115,7 @@ The full list of arguments is provided below:
 | `--node-auth-password password` | Basic auth password for node endpoint. |
 | `--channel-path ./channel.txt` | Path to the channel ID file (for the indexer to read). |
 
-#### 2b. Using the Local Runner
-
-You can also run the following file to execute the sequencer directly: `testnet/sqlite-zone-demo/run-local.sh`.
-
-The script automates building binaries, managing data directories, and linking environment variables between services.
-
-```bash
-# Change to correct path
-cd testnet/sqlite-zone-demo
-
-# Usage
-./run-local.sh <service> --env-file <path-to-env> [--clean]
-
-# Run only a specific component
-./run-local.sh indexer --env-file .env-local
-
-# Start fresh (deletes local databases/keys)
-./run-local.sh indexer --env-file .env-local --clean
-```
-
-### Notes on Using the Read-Only Indexer Password Manager
+#### Notes on Using the Read-Only Indexer Password Manager
 While the Sequencer provides a fully functional instance of the Steelsafe password manager, the Indexer has a similar one that is read-only. New passwords cannot be created, but passwords obtained from the blockchain can be read when the correct master password is provided.
 
 In the Indexer's terminal window, make sure to wait for the "Applied X statement(s)" info message from the Indexer to make sure it received the latest updates before querying. This may take a few minutes, so please be patient.

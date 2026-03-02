@@ -83,10 +83,6 @@ pub enum Command {
     Init(InitArgs),
     /// Publish text inscriptions as zone blocks
     Inscribe(logos_blockchain_tui_zone::InscribeArgs),
-    /// Run the SQLite zone sequencer
-    SqliteSequencer(demo_sqlite_sequencer::SequencerArgs),
-    /// Run the SQLite zone indexer
-    SqliteIndexer(demo_sqlite_indexer::IndexerArgs),
 }
 
 #[cfg(feature = "config-gen")]

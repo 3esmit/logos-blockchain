@@ -1,7 +1,12 @@
 //! A guard object that makes sure the screen and terminal mode
 //! is always restored, even when an error or panic occurs.
 
-use crate::error::{Error, Result};
+use std::{
+    io::{self, Stdout},
+    ops::{Deref, DerefMut},
+    sync::atomic::{AtomicBool, Ordering},
+};
+
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -11,9 +16,8 @@ use ratatui::{
         terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
     },
 };
-use std::io::{self, Stdout};
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::error::{Error, Result};
 
 static IS_OPEN: AtomicBool = AtomicBool::new(false);
 
@@ -94,7 +98,7 @@ impl DerefMut for ScreenGuard {
 
 impl Drop for ScreenGuard {
     fn drop(&mut self) {
-        if let Err(error) = ScreenGuard::finalize() {
+        if let Err(error) = Self::finalize() {
             eprintln!("Error restoring terminal: {error:#}");
         }
     }

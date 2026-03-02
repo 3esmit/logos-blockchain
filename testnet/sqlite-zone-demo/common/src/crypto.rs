@@ -1,7 +1,10 @@
 //! Key derivation, encryption, and authentication.
 
-use crate::error::Result;
+use std::iter;
+
 use argon2::Argon2;
+/// The length of the per-item password salt, in bytes.
+pub use argon2::RECOMMENDED_SALT_LEN;
 use block_padding::{Iso7816, RawPadding as _};
 use chacha20poly1305::{
     KeyInit as _, XChaCha20Poly1305,
@@ -11,23 +14,24 @@ use chrono::{DateTime, Utc};
 use crypto_common::typenum::Unsigned as _;
 use rand::seq::IndexedRandom as _;
 use serde::Serialize;
-use std::iter;
 use zeroize::Zeroizing;
 
-/// The length of the per-item password salt, in bytes.
-pub use argon2::RECOMMENDED_SALT_LEN;
+use crate::error::Result;
 
 /// The length of the per-item authentication nonce, in bytes.
 pub const NONCE_LEN: usize = 24;
 
 /// The length of the padding block size, in bytes. The plaintext secret will be
-/// padded before encryption, so that its length is a multiple of this block size.
+/// padded before encryption, so that its length is a multiple of this block
+/// size.
 pub const PADDING_BLOCK_SIZE: usize = 256;
 
-/// The set of characters that will be sampled for generating a strong, random password.
-/// 
-/// These are ASCII-only letters, digits, and printable punctuation characters easily
-/// available on a US English keyboard and should readily be accepted by most systems.
+/// The set of characters that will be sampled for generating a strong, random
+/// password.
+///
+/// These are ASCII-only letters, digits, and printable punctuation characters
+/// easily available on a US English keyboard and should readily be accepted by
+/// most systems.
 pub const PASSWORD_CHARSET: &[u8] =
     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?-+*/%=_@#$^&~()[]{}";
 
@@ -52,7 +56,7 @@ struct AdditionalData<'a> {
 
 /// The result of encrypting and authenticating the secret, and authenticating
 /// the additional data, using the specified password.
-/// 
+///
 /// The salt for the Key
 /// Derivation Function and the nonce for the authentication are generated
 /// _inside_ the encryption function, so that the API ensures fresh,
@@ -78,8 +82,8 @@ pub struct EncryptionInput<'a> {
 }
 
 impl EncryptionInput<'_> {
-    /// Encrypts and authenticates the secret, and authenticates the additional data,
-    /// using a key derived from the `encryption_password`.
+    /// Encrypts and authenticates the secret, and authenticates the additional
+    /// data, using a key derived from the `encryption_password`.
     pub fn encrypt_and_authenticate(self, encryption_password: &[u8]) -> Result<EncryptionOutput> {
         // Pad the secret to a multiple of the block size.
         // Directly extending the String could re-allocate, which would leave
@@ -107,7 +111,8 @@ impl EncryptionInput<'_> {
         let auth_nonce: [u8; NONCE_LEN] = rand::random();
 
         // Create KDF context.
-        // This uses recommended parameters (19 MB memory, 2 rounds, 1 degree of parallelism).
+        // This uses recommended parameters (19 MB memory, 2 rounds, 1 degree of
+        // parallelism).
         let hasher = Argon2::default();
 
         // The actual encryption key is cleared (overwritten with all 0s) upon drop.
@@ -200,14 +205,15 @@ pub fn generate_password() -> Zeroizing<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DecryptionInput, EncryptionInput, PADDING_BLOCK_SIZE, PASSWORD_LEN};
-    use crate::error::{Error, Result};
     use chrono::{Days, Utc};
     use rand::{
         Rng, RngCore,
         distr::{SampleString, StandardUniform},
     };
     use zxcvbn::{Score, zxcvbn};
+
+    use super::{DecryptionInput, EncryptionInput, PADDING_BLOCK_SIZE, PASSWORD_LEN};
+    use crate::error::{Error, Result};
 
     #[test]
     fn correct_encryption_and_decryption_succeeds() -> Result<()> {

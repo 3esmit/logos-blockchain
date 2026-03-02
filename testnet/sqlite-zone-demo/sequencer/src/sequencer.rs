@@ -1,4 +1,3 @@
-use fs2::FileExt;
 use std::{
     fs,
     fs::OpenOptions,
@@ -8,18 +7,18 @@ use std::{
     time::Duration,
 };
 
+use fs2::FileExt;
 use lb_common_http_client::BasicAuthCredentials;
 use lb_core::mantle::ops::channel::ChannelId;
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use logos_blockchain_zone_sdk::sequencer::{
     Error as ZoneSequencerError, SequencerCheckpoint, ZoneSequencer,
 };
+use nanosql::rusqlite::Error as SqliteError;
 use reqwest::Url;
 use thiserror::Error;
 use tokio::time::sleep;
 use tracing::{debug, info};
-
-use nanosql::rusqlite::Error as SqliteError;
 
 #[derive(Debug, Error)]
 pub enum SequencerError {

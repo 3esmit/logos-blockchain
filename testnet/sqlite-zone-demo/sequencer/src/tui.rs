@@ -1,11 +1,12 @@
 //! The bulk of the actual user interface logic.
 
-use crate::{
-    config::Theme,
-    crypto::{DecryptionInput, EncryptionInput},
-    db::{AddItemInput, Database, DisplayItem, Item},
-    error::{Error, Result},
+use std::{
+    fmt::{self, Debug, Formatter},
+    mem,
+    ops::{ControlFlow, Deref, DerefMut},
+    time::Duration,
 };
+
 use arboard::Clipboard;
 use nanosql::Utc;
 use ratatui::{
@@ -19,12 +20,15 @@ use ratatui::{
         block::{Block, BorderType},
     },
 };
-use std::fmt::{self, Debug, Formatter};
-use std::mem;
-use std::ops::{ControlFlow, Deref, DerefMut};
-use std::time::Duration;
 use tui_textarea::TextArea;
 use zeroize::Zeroizing;
+
+use crate::{
+    config::Theme,
+    crypto::{DecryptionInput, EncryptionInput},
+    db::{AddItemInput, Database, DisplayItem, Item},
+    error::{Error, Result},
+};
 
 /// The top-level UI state, the basis of rendering.
 #[derive(Debug)]
@@ -382,7 +386,8 @@ impl State {
 
     /// Handles events for the "New item" dialog.
     fn handle_new_input(&mut self, event: Event) -> Result<ControlFlow<(), Event>> {
-        // if the input text area is not open, ignore the event and give it back right away
+        // if the input text area is not open, ignore the event and give it back right
+        // away
         let Some(new_item) = self.new_item.as_mut() else {
             return Ok(ControlFlow::Continue(event));
         };
@@ -847,7 +852,8 @@ impl FocusedTextArea {
     }
 }
 
-/// The sole purpose of this is to implement `Debug` so that it doesn't break literally everything.
+/// The sole purpose of this is to implement `Debug` so that it doesn't break
+/// literally everything.
 struct ClipboardDebugWrapper(Clipboard);
 
 impl Debug for ClipboardDebugWrapper {

@@ -1,18 +1,20 @@
 //! Errors and results specific to Steelsafe.
 
+use std::{
+    error::Error as StdError,
+    fmt::{self, Debug, Display, Formatter},
+    io::Error as IoError,
+    str::Utf8Error,
+};
+
 use arboard::Error as ClipboardError;
 use argon2::Error as Argon2Error;
 use block_padding::UnpadError;
 use chacha20poly1305::Error as XChaCha20Poly1305Error;
 use crypto_common::InvalidLength;
 use logos_blockchain_zone_sdk::indexer::Error as ZoneIndexerError;
-use nanosql::Error as SqlError;
-use nanosql::rusqlite::Error as RusqliteError;
+use nanosql::{Error as SqlError, rusqlite::Error as RusqliteError};
 use serde_json::Error as JsonError;
-use std::error::Error as StdError;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
-use std::str::Utf8Error;
 use thiserror::Error;
 
 use crate::error::Error::Context;

@@ -1,12 +1,13 @@
-//! Configures the environment of the application: color themes, database path, etc.
+//! Configures the environment of the application: color themes, database path,
+//! etc.
 
-use crate::error::{Error, Result, ResultExt as _};
+use std::{fs::File, io::ErrorKind, path::Path};
+
 use directories::{ProjectDirs, UserDirs};
 use ratatui::style::{Color, Style};
 use serde::Deserialize;
-use std::fs::File;
-use std::io::ErrorKind;
-use std::path::Path;
+
+use crate::error::{Error, Result, ResultExt as _};
 
 /// Configures the environment of the application.
 #[derive(Clone, Default, Debug, Deserialize)]

@@ -1,14 +1,18 @@
 //! Describes and implements the password database.
 
-use crate::crypto::{NONCE_LEN, RECOMMENDED_SALT_LEN};
-use crate::error::{Error, Result};
+use std::{fs, fs::File, io::Write, path::Path, sync::Mutex};
+
 use chrono::{DateTime, Utc};
 use nanosql::{
     AsSqlTy, Connection, ConnectionExt, FromSql, InsertInput, Null, Param, ResultRecord, Table,
     ToSql, Value,
     rusqlite::trace::{TraceEvent, TraceEventCodes},
 };
-use std::{fs, fs::File, io::Write, path::Path, sync::Mutex};
+
+use crate::{
+    crypto::{NONCE_LEN, RECOMMENDED_SALT_LEN},
+    error::{Error, Result},
+};
 
 /// The current version of the database schema.
 const SCHEMA_VERSION: i64 = 1;
@@ -52,9 +56,7 @@ impl Database {
 
         connection.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(Self::trace_fn));
 
-        Ok(Database {
-            connection,
-        })
+        Ok(Database { connection })
     }
 
     fn trace_fn(event: TraceEvent<'_>) {
@@ -74,9 +76,9 @@ impl Database {
     }
 
     /// Retrieves the schema version of the database.
-    /// If the schema version was not yet set (because the database was just created),
-    /// then the schema version of the currently-running steelsafe process will be
-    /// inserted (and returned).
+    /// If the schema version was not yet set (because the database was just
+    /// created), then the schema version of the currently-running steelsafe
+    /// process will be inserted (and returned).
     fn schema_version(connection: &Connection) -> nanosql::Result<i64> {
         // If the schema version is not yet stored in the DB, then insert it.
         // Otherwise, leave the existing version (ignore the insertion).
@@ -106,17 +108,18 @@ impl Database {
 
     /// Returns the list of items in the database.
     ///
-    /// The returned data is human-readable: it contains fields such as the identifying
-    /// name/label/title of the entry, the optional account information, and the date of
-    /// creation/last modification. It does not return binary data such as the encrypted
-    /// secret, the KDF salt, or the authentication nonce.
+    /// The returned data is human-readable: it contains fields such as the
+    /// identifying name/label/title of the entry, the optional account
+    /// information, and the date of creation/last modification. It does not
+    /// return binary data such as the encrypted secret, the KDF salt, or
+    /// the authentication nonce.
     ///
     /// If the `search_term` is `None`, then all items are returned.
     ///
-    /// If the `search_term` is `Some(_)`, then only items matching the search term will
-    /// be returned. The search term is interpreted as an SQL `LIKE` pattern. The pattern
-    /// will be matched against the label and the account name, and entries matching either
-    /// will be returned.
+    /// If the `search_term` is `Some(_)`, then only items matching the search
+    /// term will be returned. The search term is interpreted as an SQL
+    /// `LIKE` pattern. The pattern will be matched against the label and
+    /// the account name, and entries matching either will be returned.
     pub fn list_items_for_display(&self, search_term: Option<&str>) -> Result<Vec<DisplayItem>> {
         self.connection
             .compile_invoke(ListItemsForDisplay, search_term)
@@ -128,9 +131,9 @@ impl Database {
         self.connection.insert_one(input).map_err(Into::into)
     }
 
-    /// Retrieves a full item from the database based on its unique ID (primary key).
-    /// This includes encryption and authentication data: the encrypted secret, the
-    /// KDF salt, and the authentication nonce.
+    /// Retrieves a full item from the database based on its unique ID (primary
+    /// key). This includes encryption and authentication data: the
+    /// encrypted secret, the KDF salt, and the authentication nonce.
     pub fn item_by_id(&self, id: u64) -> Result<Item> {
         self.connection.select_by_key(id).map_err(Into::into)
     }
@@ -146,12 +149,15 @@ pub struct Item {
     /// Human-readable identifier of the item.
     #[nanosql(unique)]
     pub label: String,
-    /// Username, email address, etc. for identification. `None` if not applicable.
+    /// Username, email address, etc. for identification. `None` if not
+    /// applicable.
     pub account: Option<String>,
-    /// Last modification date of the item. If never modified, this is the creation date.
+    /// Last modification date of the item. If never modified, this is the
+    /// creation date.
     pub last_modified_at: DateTime<Utc>,
     /// The encrypted and authenticated password data.
-    /// Also contains a copy of the other fields for the purpose of tamper protection.
+    /// Also contains a copy of the other fields for the purpose of tamper
+    /// protection.
     pub encrypted_secret: Vec<u8>,
     /// The salt for the key derivation function.
     ///
@@ -227,12 +233,17 @@ nanosql::define_query! {
 
 #[cfg(test)]
 mod tests {
-    use super::{AddItemInput, Database};
-    use crate::crypto::{NONCE_LEN, RECOMMENDED_SALT_LEN};
-    use crate::error::{Error, Result};
     use chrono::Utc;
-    use nanosql::rusqlite::{Error as SqliteError, ErrorCode};
-    use nanosql::{Error as NanosqlError, Null};
+    use nanosql::{
+        Error as NanosqlError, Null,
+        rusqlite::{Error as SqliteError, ErrorCode},
+    };
+
+    use super::{AddItemInput, Database};
+    use crate::{
+        crypto::{NONCE_LEN, RECOMMENDED_SALT_LEN},
+        error::{Error, Result},
+    };
 
     #[test]
     fn salt_uniqueness_is_enforced() -> Result<()> {

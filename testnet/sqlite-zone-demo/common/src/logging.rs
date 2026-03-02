@@ -5,11 +5,11 @@ use ratatui::crossterm::terminal;
 /// A writer that confines log output to the bottom half of the terminal.
 ///
 /// Before each write it:
-/// 1. Sets the DECSTBM scroll region to the bottom half, so that
-///    any scroll caused by new lines never displaces the top half.
-/// 2. Moves the cursor to the last row of that region, so the newest
-///    line always appears at the bottom and older lines scroll upward
-///    within the region.
+/// 1. Sets the DECSTBM scroll region to the bottom half, so that any scroll
+///    caused by new lines never displaces the top half.
+/// 2. Moves the cursor to the last row of that region, so the newest line
+///    always appears at the bottom and older lines scroll upward within the
+///    region.
 /// 3. Converts bare `\n` to `\r\n` for correct rendering in raw mode.
 #[derive(Clone, Copy)]
 pub struct RawModeWriter;

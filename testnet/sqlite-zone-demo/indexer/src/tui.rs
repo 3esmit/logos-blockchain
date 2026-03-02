@@ -1,11 +1,11 @@
 //! The bulk of the actual user interface logic.
 
-use crate::{
-    config::Theme,
-    crypto::DecryptionInput,
-    db::{DatabaseReadOnly, DisplayItem},
-    error::{Error, Result},
+use std::{
+    fmt::{self, Debug, Formatter},
+    ops::{ControlFlow, Deref, DerefMut},
+    time::Duration,
 };
+
 use arboard::Clipboard;
 use ratatui::{
     Frame,
@@ -17,11 +17,15 @@ use ratatui::{
         block::{Block, BorderType},
     },
 };
-use std::fmt::{self, Debug, Formatter};
-use std::ops::{ControlFlow, Deref, DerefMut};
-use std::time::Duration;
 use tui_textarea::TextArea;
 use zeroize::Zeroizing;
+
+use crate::{
+    config::Theme,
+    crypto::DecryptionInput,
+    db::{DatabaseReadOnly, DisplayItem},
+    error::{Error, Result},
+};
 
 /// The top-level UI state, the basis of rendering.
 #[derive(Debug)]
@@ -490,7 +494,8 @@ impl FindItemState {
     }
 }
 
-/// The sole purpose of this is to implement `Debug` so that it doesn't break literally everything.
+/// The sole purpose of this is to implement `Debug` so that it doesn't break
+/// literally everything.
 struct ClipboardDebugWrapper(Clipboard);
 
 impl Debug for ClipboardDebugWrapper {

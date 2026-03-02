@@ -2078,7 +2078,6 @@ name = "demo-sqlite-sequencer"
 version = "0.1.0"
 dependencies = [
  "arboard",
- "block-padding",
  "chrono",
  "clap",
  "demo-sqlite-common",

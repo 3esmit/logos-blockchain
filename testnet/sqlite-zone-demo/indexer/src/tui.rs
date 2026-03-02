@@ -266,9 +266,10 @@ impl State {
         }
 
         if let Event::Key(evt) = event
-            && evt.code == KeyCode::Esc {
-                self.popup_error = None;
-            }
+            && evt.code == KeyCode::Esc
+        {
+            self.popup_error = None;
+        }
 
         Ok(ControlFlow::Break(()))
     }
@@ -351,7 +352,8 @@ impl State {
             && !self.items.is_empty()
             && self
                 .table_state
-                .selected().is_none_or(|idx| idx >= self.items.len()))
+                .selected()
+                .is_none_or(|idx| idx >= self.items.len()))
         {
             self.table_state.select_last();
         }

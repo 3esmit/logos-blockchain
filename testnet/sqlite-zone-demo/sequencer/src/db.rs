@@ -4,8 +4,8 @@ use std::{fs, fs::File, io::Write as _, path::Path, sync::Mutex};
 
 use chrono::{DateTime, Utc};
 use nanosql::{
-    AsSqlTy, Connection, ConnectionExt as _, FromSql, InsertInput, Null, Param, ResultRecord, Table,
-    ToSql, Value,
+    AsSqlTy, Connection, ConnectionExt as _, FromSql, InsertInput, Null, Param, ResultRecord,
+    Table, ToSql, Value,
     rusqlite::trace::{TraceEvent, TraceEventCodes},
 };
 
@@ -61,16 +61,18 @@ impl Database {
 
     fn trace_fn(event: TraceEvent<'_>) {
         if let TraceEvent::Stmt(stmt, _) = event
-            && let Some(sql) = stmt.expanded_sql() {
-                if sql.trim_start().to_uppercase().starts_with("SELECT") {
-                    return;
-                }
-                if let Ok(mut guard) = TRACE_FILE.lock()
-                    && let Some(file) = guard.as_mut() {
-                        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let _unused = writeln!(file, "{normalized}");
-                    }
+            && let Some(sql) = stmt.expanded_sql()
+        {
+            if sql.trim_start().to_uppercase().starts_with("SELECT") {
+                return;
             }
+            if let Ok(mut guard) = TRACE_FILE.lock()
+                && let Some(file) = guard.as_mut()
+            {
+                let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+                let _unused = writeln!(file, "{normalized}");
+            }
+        }
     }
 
     /// Retrieves the schema version of the database.

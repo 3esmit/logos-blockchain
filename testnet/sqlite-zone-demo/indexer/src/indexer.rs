@@ -61,7 +61,7 @@ impl Indexer {
         Ok(Self { zone_indexer, db })
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn db(&self) -> Arc<Mutex<DatabaseReadOnly>> {
         Arc::clone(&self.db)
     }

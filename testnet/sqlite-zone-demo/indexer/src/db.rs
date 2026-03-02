@@ -4,8 +4,8 @@ use std::{fs, path::Path};
 
 use chrono::{DateTime, Utc};
 use nanosql::{
-    AsSqlTy, Connection, ConnectionExt as _, FromSql, InsertInput, Null, Param, ResultRecord, Table,
-    ToSql, Value,
+    AsSqlTy, Connection, ConnectionExt as _, FromSql, InsertInput, Null, Param, ResultRecord,
+    Table, ToSql, Value,
 };
 
 use crate::{

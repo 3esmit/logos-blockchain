@@ -304,6 +304,8 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::allow_attributes_without_reason)]
+    #[expect(clippy::string_slice)]
     fn altered_additional_data_fails_verification() -> Result<()> {
         let timestamp = Utc::now();
         let mut rng = rand::rng();
@@ -347,7 +349,7 @@ mod tests {
                         Err(Error::XChaCha20Poly1305(chacha20poly1305::Error))
                     ),
                     "unexpected result: {result:#?}",
-                )
+                );
             };
 
             // Case #2: the label is (slightly) altered
@@ -369,7 +371,7 @@ mod tests {
                         Err(Error::XChaCha20Poly1305(chacha20poly1305::Error))
                     ),
                     "unexpected result: {result:#?}",
-                )
+                );
             };
 
             // Case #2: the last modification date is tampered with

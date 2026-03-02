@@ -13,25 +13,33 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-demo-sqlite-common               = { workspace = true }
-arboard                          = "3.4.1"
-chrono                           = { version = "0.4", features = ["serde"] }
-clap                             = { features = ["derive", "env", "std"], version = "4" }
-fs2                              = "0.4"
-hex                              = "0.4"
-lb-common-http-client            = { workspace = true }
-lb-core                          = { workspace = true }
+arboard = "3.4.1"
+chrono = { features = ["serde"], version = "0.4" }
+clap = { features = ["derive", "env", "std"], version = "4" }
+demo-sqlite-common = { workspace = true }
+fs2 = "0.4"
+hex = "0.4"
+lb-common-http-client = { workspace = true }
+lb-core = { workspace = true }
 lb-key-management-system-service = { workspace = true }
-logos-blockchain-zone-sdk        = { path = "../../../zone-sdk" }
-nanosql                          = { version = "0.10.0", features = ["chrono"] }
-rand                             = { version = "0.9" }
-ratatui                          = { version = "0.29", features = ["serde"] }
-reqwest                          = { features = ["json", "rustls-tls"], workspace = true }
-rusqlite                         = { version = "0.33.0", features = ["bundled", "trace"] }
-serde_json                       = { workspace = true }
-thiserror                        = { workspace = true }
-tokio                            = { default-features = false, features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"], version = "1" }
-tracing                          = { workspace = true }
-tracing-subscriber               = { features = ["env-filter"], version = "0.3" }
-tui-textarea                     = "0.7"
-zeroize                          = { workspace = true, features = ["alloc"] }
+logos-blockchain-zone-sdk = { path = "../../../zone-sdk" }
+nanosql = { features = ["chrono"], version = "0.10.0" }
+rand = { version = "0.9" }
+ratatui = { features = ["serde"], version = "0.29" }
+reqwest = { features = ["json", "rustls-tls"], workspace = true }
+rusqlite = { features = ["bundled", "trace"], version = "0.33.0" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { default-features = false, features = [
+  "io-std",
+  "io-util",
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+], version = "1" }
+tracing = { workspace = true }
+tracing-subscriber = { features = ["env-filter"], version = "0.3" }
+tui-textarea = "0.7"
+zeroize = { features = ["alloc"], workspace = true }

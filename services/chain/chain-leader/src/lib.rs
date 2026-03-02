@@ -612,15 +612,6 @@ where
             }
         }
 
-        if !invalid_tx_hashes.is_empty()
-            && let Err(e) = relays
-                .mempool_adapter()
-                .remove_transactions(&invalid_tx_hashes)
-                .await
-        {
-            error!("Failed to remove invalid transactions from mempool: {e:?}");
-        }
-
         let valid_tx_stream = stream::iter(valid_txs);
         let selected_txs_stream = tx_selector.select_tx_from(valid_tx_stream);
         let txs: Vec<_> = selected_txs_stream.take(MAX_TRANSACTIONS).collect().await;

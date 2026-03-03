@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_core::{header::HeaderId, mantle::TxHash};
+use lb_core::header::HeaderId;
 
 pub mod adapter;
 
@@ -12,8 +12,6 @@ pub trait MempoolAdapter<Tx>: Send + Sync {
         &self,
         ancestor_hint: HeaderId,
     ) -> Result<Pin<Box<dyn Stream<Item = Tx> + Send>>, overwatch::DynError>;
-
-    async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError>;
 
     async fn post_tx(&self, tx: Tx) -> Result<(), overwatch::DynError>;
 }

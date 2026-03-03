@@ -48,15 +48,6 @@ where
         Ok(view_stream)
     }
 
-    async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError> {
-        self.mempool_relay
-            .send(MempoolMsg::Remove { ids: ids.to_vec() })
-            .await
-            .map_err(|(e, _)| format!("Could not remove transactions from mempool: {e}"))?;
-
-        Ok(())
-    }
-
     async fn post_tx(&self, tx: Tx) -> Result<(), overwatch::DynError> {
         let (reply_channel, receiver) = oneshot::channel();
         self.mempool_relay

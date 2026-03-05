@@ -68,6 +68,8 @@ jobs:
             label: self-hosted-linux
           - os: [self-hosted, macOS]
             label: self-hosted-macos
+          - os: [self-hosted, Windows]
+            label: self-hosted-windows
     runs-on: ${{ matrix.platform.os }}
     steps:
       # Disable rustup override before checkout, so the toolchain state is clean before any workspace files or
@@ -78,10 +80,6 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-hack
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
@@ -122,7 +120,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, macos-latest ]
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
@@ -140,7 +138,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, macos-latest ]
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: -D warnings
@@ -153,11 +151,6 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/lints/${{ matrix.os }}
-
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run cargo clippy on workspace
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
@@ -182,6 +175,7 @@ jobs:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
           - [ self-hosted, Linux ]
           - [ self-hosted, macOS ]
+          - [ self-hosted, Windows ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Disable rustup override

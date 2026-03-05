@@ -35,6 +35,8 @@ jobs:
             label: self-hosted-linux
           - os: [self-hosted, macOS]
             label: self-hosted-macos
+          - os: [self-hosted, Windows]
+            label: self-hosted-windows
     runs-on: ${{ matrix.platform.os }}
 
     steps:

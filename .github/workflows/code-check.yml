@@ -64,10 +64,6 @@ jobs:
       matrix:
         platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: [self-hosted, Linux]
-            label: self-hosted-linux
-          - os: [self-hosted, macOS]
-            label: self-hosted-macos
           - os: [self-hosted, Windows]
             label: self-hosted-windows
     runs-on: ${{ matrix.platform.os }}
@@ -172,8 +168,6 @@ jobs:
       matrix:
         os:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - [ self-hosted, Linux ]
-          - [ self-hosted, macOS ]
           - [ self-hosted, Windows ]
     runs-on: ${{ matrix.os }}
     steps:

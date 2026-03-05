@@ -40,10 +40,6 @@ jobs:
     runs-on: ${{ matrix.platform.os }}
 
     steps:
-      # Remove any rustup override to ensure default toolchain is used
-      - name: Disable rustup override
-        run: rustup override unset || true
-
       # Checkout the repository code
       # Notes:
       # - We need to test the exact PR code, immutable, no synthetic merge commit from master

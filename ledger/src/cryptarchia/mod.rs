@@ -763,7 +763,7 @@ pub mod tests {
         block_state.utxos = block_state.utxos.insert(utxo_add.id(), utxo_add).0;
         ledger
             .states
-            .insert(id, full_ledger_state(block_state, &ledger.config));
+            .insert_mut(id, full_ledger_state(block_state, &ledger.config));
         id
     }
 

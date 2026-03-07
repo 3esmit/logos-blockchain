@@ -20,6 +20,7 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
+use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
@@ -55,7 +56,7 @@ pub enum LedgerError<Id> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ledger<Id: Eq + Hash> {
-    states: HashMap<Id, LedgerState>,
+    states: HashTrieMapSync<Id, LedgerState>,
     config: Config,
 }
 
@@ -94,8 +95,7 @@ where
                 .clone()
                 .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
 
-        let mut states = self.states.clone();
-        states.insert(id, new_state);
+        let states = self.states.insert(id, new_state);
         Ok(Self {
             states,
             config: self.config.clone(),
@@ -124,7 +124,7 @@ where
     ///
     /// `true` if the state was successfully removed, `false` otherwise.
     pub fn prune_state_at(&mut self, block: &Id) -> bool {
-        self.states.remove(block).is_some()
+        self.states.remove_mut(block)
     }
 }
 

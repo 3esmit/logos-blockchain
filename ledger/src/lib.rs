@@ -20,7 +20,6 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
-use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 // While individual notes are constrained to be `u64`, intermediate calculations
@@ -56,7 +55,7 @@ pub enum LedgerError<Id> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ledger<Id: Eq + Hash> {
-    states: HashTrieMapSync<Id, LedgerState>,
+    states: HashMap<Id, LedgerState>,
     config: Config,
 }
 
@@ -71,16 +70,15 @@ where
         }
     }
 
-    /// Create a new [`Ledger`] with the updated state.
-    #[must_use = "Returns a new instance with the updated state, without modifying the original."]
+    /// Try to update the ledger state by applying the given proof and transactions on top of the parent state.
     pub fn try_update<LeaderProof, Constants>(
-        &self,
+        &mut self,
         id: Id,
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
-    ) -> Result<Self, LedgerError<Id>>
+    ) -> Result<(), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
@@ -95,11 +93,8 @@ where
                 .clone()
                 .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
 
-        let states = self.states.insert(id, new_state);
-        Ok(Self {
-            states,
-            config: self.config.clone(),
-        })
+        self.states.insert(id, new_state);
+        Ok(())
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -124,7 +119,7 @@ where
     ///
     /// `true` if the state was successfully removed, `false` otherwise.
     pub fn prune_state_at(&mut self, block: &Id) -> bool {
-        self.states.remove_mut(block)
+        self.states.remove(block).is_some()
     }
 }
 
@@ -362,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_ledger_try_update_with_transaction() {
-        let (ledger, genesis_id, utxo) = create_test_ledger();
+        let (mut ledger, genesis_id, utxo) = create_test_ledger();
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
         // determine fees
@@ -384,7 +379,7 @@ mod tests {
         );
 
         let new_id = [1; 32];
-        let new_ledger = ledger
+        ledger
             .try_update::<_, MainnetGasConstants>(
                 new_id,
                 genesis_id,
@@ -395,7 +390,7 @@ mod tests {
             .unwrap();
 
         // Verify the transaction was applied
-        let new_state = new_ledger.state(&new_id).unwrap();
+        let new_state = ledger.state(&new_id).unwrap();
         assert!(!new_state.latest_utxos().contains(&utxo.id()));
 
         // Verify output was created

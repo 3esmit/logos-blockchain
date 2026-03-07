@@ -593,7 +593,7 @@ pub mod tests {
             .unwrap();
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        *ledger = ledger.try_update::<_, MainnetGasConstants>(
+        ledger.try_update::<_, MainnetGasConstants>(
             id,
             parent,
             slot,
@@ -763,7 +763,7 @@ pub mod tests {
         block_state.utxos = block_state.utxos.insert(utxo_add.id(), utxo_add).0;
         ledger
             .states
-            .insert_mut(id, full_ledger_state(block_state, &ledger.config));
+            .insert(id, full_ledger_state(block_state, &ledger.config));
         id
     }
 

@@ -4964,6 +4964,8 @@ name = "logos-blockchain-zone-sdk"
 version = "0.2.1"
 dependencies = [
  "futures",
+ "logos-blockchain-chain-broadcast-service",
+ "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",

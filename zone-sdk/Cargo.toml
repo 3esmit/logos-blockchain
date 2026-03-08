@@ -18,6 +18,8 @@ futures                          = { default-features = false, version = "0.3" }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
+lb-chain-broadcast-service       = { workspace = true }
+lb-chain-service                 = { workspace = true }
 reqwest                          = { workspace = true }
 rpds                             = { default-features = false, version = "1.1.1" }
 serde                            = { features = ["derive"], workspace = true }

@@ -41,8 +41,6 @@ tracing:
     gelf: null
   tracing: None
   filter: None
-  metrics: !Otlp
-    endpoint: "grpc://otlp.lab.vac.dev:30317"
-    host_identifier: "gusto_node"
+  metrics: None
   console: None
   level: "DEBUG"

@@ -103,49 +103,20 @@ impl IntoMetricU64 for i32 {
     }
 }
 
-fn u64_counter(name: &'static str) -> Counter<u64> {
-    let mut counters = U64_COUNTERS.lock().expect("u64 counter lock poisoned");
-
-    counters
-        .entry(name)
-        .or_insert_with(|| meter().u64_counter(name).build())
-        .clone()
-}
-
-fn f64_counter(name: &'static str) -> Counter<f64> {
-    let mut counters = F64_COUNTERS.lock().expect("f64 counter lock poisoned");
-
-    counters
-        .entry(name)
-        .or_insert_with(|| meter().f64_counter(name).build())
-        .clone()
-}
-
-fn u64_gauge(name: &'static str) -> Gauge<u64> {
-    let mut gauges = U64_GAUGES.lock().expect("u64 gauge lock poisoned");
-
-    gauges
-        .entry(name)
-        .or_insert_with(|| meter().u64_gauge(name).build())
-        .clone()
-}
-
-fn u64_histogram(name: &'static str) -> Histogram<u64> {
-    let mut histograms = U64_HISTOGRAMS.lock().expect("u64 histogram lock poisoned");
-
-    histograms
-        .entry(name)
-        .or_insert_with(|| meter().u64_histogram(name).build())
-        .clone()
-}
-
-fn f64_histogram(name: &'static str) -> Histogram<f64> {
-    let mut histograms = F64_HISTOGRAMS.lock().expect("f64 histogram lock poisoned");
-
-    histograms
-        .entry(name)
-        .or_insert_with(|| meter().f64_histogram(name).build())
-        .clone()
+macro_rules! get_instrument {
+    ($map:expr, $name:expr, $method:ident) => {{
+        match $map.lock() {
+            Ok(mut map) => Some(
+                map.entry($name)
+                    .or_insert_with(|| meter().$method($name).build())
+                    .clone(),
+            ),
+            Err(e) => {
+                tracing::error!("Instrument '{}' lock poisoned: {:?}", $name, e);
+                None
+            }
+        }
+    }};
 }
 
 pub fn increase_counter_u64(
@@ -153,21 +124,31 @@ pub fn increase_counter_u64(
     value: impl IntoMetricU64,
     attributes: &[KeyValue],
 ) {
-    u64_counter(name).add(value.into_metric_u64(), attributes);
+    if let Some(c) = get_instrument!(U64_COUNTERS, name, u64_counter) {
+        c.add(value.into_metric_u64(), attributes);
+    }
 }
 
 pub fn counter_f64(name: &'static str, value: f64, attributes: &[KeyValue]) {
-    f64_counter(name).add(value, attributes);
+    if let Some(counter) = get_instrument!(F64_COUNTERS, name, f64_counter) {
+        counter.add(value, attributes);
+    }
 }
 
 pub fn gauge_u64(name: &'static str, value: impl IntoMetricU64, attributes: &[KeyValue]) {
-    u64_gauge(name).record(value.into_metric_u64(), attributes);
+    if let Some(gauge) = get_instrument!(U64_GAUGES, name, u64_gauge) {
+        gauge.record(value.into_metric_u64(), attributes);
+    }
 }
 
 pub fn histogram_u64(name: &'static str, value: impl IntoMetricU64, attributes: &[KeyValue]) {
-    u64_histogram(name).record(value.into_metric_u64(), attributes);
+    if let Some(hist) = get_instrument!(U64_HISTOGRAMS, name, u64_histogram) {
+        hist.record(value.into_metric_u64(), attributes);
+    }
 }
 
 pub fn histogram_f64(name: &'static str, value: f64, attributes: &[KeyValue]) {
-    f64_histogram(name).record(value, attributes);
+    if let Some(hist) = get_instrument!(F64_HISTOGRAMS, name, f64_histogram) {
+        hist.record(value, attributes);
+    }
 }

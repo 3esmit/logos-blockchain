@@ -320,7 +320,7 @@ impl Cryptarchia {
         self.consensus = consensus;
 
         // Prune the ledger states of all the pruned blocks.
-        self.prune_ledger_states(pruned_blocks.all());
+        self.prune_ledger_states(pruned_blocks.all(), false);
 
         Ok((pruned_blocks, reorged_blocks))
     }
@@ -334,9 +334,16 @@ impl Cryptarchia {
     /// Remove the ledger states associated with blocks that have been pruned by
     /// the [`lb_cryptarchia_engine::Cryptarchia`].
     ///
+    /// If `shrink` is true, also call `self.ledger.shrink()` after pruning the
+    /// states to free up memory pruned.
+    ///
     /// Details on which blocks are pruned can be found in the
     /// [`lb_cryptarchia_engine::Cryptarchia::receive_block`].
-    fn prune_ledger_states<'a>(&'a mut self, blocks: impl Iterator<Item = &'a HeaderId>) {
+    fn prune_ledger_states<'a>(
+        &'a mut self,
+        blocks: impl Iterator<Item = &'a HeaderId>,
+        shrink: bool,
+    ) {
         let mut pruned_states_count = 0usize;
         for block in blocks {
             if self.ledger.prune_state_at(block) {
@@ -350,6 +357,10 @@ impl Cryptarchia {
             }
         }
         tracing::debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+
+        if shrink {
+            self.ledger.shrink();
+        }
     }
 
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
@@ -359,7 +370,11 @@ impl Cryptarchia {
             consensus,
             genesis_id: self.genesis_id,
         };
-        cryptarchia.prune_ledger_states(pruned_blocks.all());
+
+        // Prune the ledger states of all the pruned blocks.
+        // Also, shrink the set of ledger states to free up memory,
+        // assuming that many blocks have been pruned during bootstrapping.
+        cryptarchia.prune_ledger_states(pruned_blocks.all(), true);
         (cryptarchia, pruned_blocks)
     }
 

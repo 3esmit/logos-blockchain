@@ -4828,6 +4828,7 @@ version = "0.2.1"
 dependencies = [
  "async-trait",
  "futures",
+ "indexmap 2.13.0",
  "logos-blockchain-core",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",

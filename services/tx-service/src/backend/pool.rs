@@ -8,25 +8,23 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::Status;
 use crate::{
-    backend::{MemPool, MempoolError, RecoverableMempool},
+    backend::{MemPool, MempoolError, RecoverableMempool, tx_queue::TxQueue},
     storage::MempoolStorageAdapter,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PoolRecoveryState<Key>
-where
-    Key: Hash + Eq + Ord,
-{
-    pub pending_items: BTreeSet<Key>,
+#[serde(bound = "Key: Hash + Eq + Serialize + DeserializeOwned")]
+pub struct PoolRecoveryState<Key> {
+    pub pending_items: TxQueue<Key>,
     pub last_item_timestamp: u64,
 }
 
 pub struct Mempool<BlockId, Item, Key, Storage, RuntimeServiceId> {
-    pending_items: BTreeSet<Key>,
+    pending_items: TxQueue<Key>,
     last_item_timestamp: u64,
     storage_adapter: Storage,
     _phantom: std::marker::PhantomData<(BlockId, Item, RuntimeServiceId)>,
@@ -68,7 +66,7 @@ where
 
     fn new(_settings: Self::Settings, storage: Self::Storage) -> Self {
         Self {
-            pending_items: BTreeSet::new(),
+            pending_items: TxQueue::new(),
             last_item_timestamp: 0,
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,

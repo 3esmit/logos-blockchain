@@ -38,6 +38,7 @@ fn cryptarchia_switch_to_online() {
         lb_cryptarchia_engine::State::Bootstrapping,
         Slot::new(0),
         0,
+        0,
     );
 
     // Add 3 new blocks to the chain

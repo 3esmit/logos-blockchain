@@ -132,6 +132,7 @@ where
         self.states.shrink_to_fit();
     }
 
+    /// Returns the number of ledger states currently held in memory.
     pub fn len(&self) -> usize {
         self.states.len()
     }

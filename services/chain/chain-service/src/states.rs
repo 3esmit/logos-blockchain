@@ -240,6 +240,8 @@ mod tests {
                 ledger: ledger_state,
                 consensus: cryptarchia_engine.clone(),
                 genesis_id: genesis_header_id,
+                blocks_since_last_shrink: 0,
+                ledger_shrink_interval: 0,
             },
             pruned_stale_blocks.clone(),
         )
@@ -339,6 +341,8 @@ mod tests {
                 ledger_config.clone(),
             ),
             genesis_id: genesis_header_id,
+            blocks_since_last_shrink: 0,
+            ledger_shrink_interval: 0,
         };
         let info_before = original.info();
 
@@ -359,6 +363,7 @@ mod tests {
             *engine.state(),
             saved_state.lib_block_slot,
             saved_state.lib_block_length,
+            0,
         );
 
         // Replay blocks between LIB and tip (as initialize_cryptarchia does).

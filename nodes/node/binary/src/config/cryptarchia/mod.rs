@@ -106,6 +106,7 @@ impl ServiceConfig {
                     .as_path(),
             ),
             starting_state: self.deployment.genesis_state.into(),
+            ledger_shrink_interval: 10, // TODO: expose to config
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: lb_chain_network_service::BootstrapConfig {

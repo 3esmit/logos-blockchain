@@ -211,6 +211,8 @@ pub struct Cryptarchia {
     pub ledger: lb_ledger::Ledger<HeaderId>,
     pub consensus: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
     pub genesis_id: HeaderId,
+    blocks_since_last_shrink: usize,
+    ledger_shrink_interval: usize,
 }
 
 impl Cryptarchia {
@@ -224,6 +226,7 @@ impl Cryptarchia {
         state: lb_cryptarchia_engine::State,
         lib_slot: Slot,
         lib_length: u64,
+        ledger_shrink_interval: usize,
     ) -> Self {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
@@ -235,6 +238,8 @@ impl Cryptarchia {
             ),
             ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
             genesis_id,
+            blocks_since_last_shrink: 0,
+            ledger_shrink_interval,
         }
     }
 
@@ -322,6 +327,7 @@ impl Cryptarchia {
 
         // Prune the ledger states of all the pruned blocks.
         self.prune_ledger_states(pruned_blocks.all());
+        self.maybe_shrink_ledger_states();
 
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
@@ -371,6 +377,27 @@ impl Cryptarchia {
     /// should not be called frequently since it is an expensive operation.
     fn shrink_ledger_states(&mut self) {
         self.ledger.shrink();
+        self.blocks_since_last_shrink = 0;
+    }
+
+    /// Periodically shrinks the ledger states HashMap to reclaim memory
+    /// from pruned entries. Without this, `HashMap::remove` leaves the
+    /// internal capacity allocated, causing steady memory growth.
+    fn maybe_shrink_ledger_states(&mut self) {
+        self.blocks_since_last_shrink = self.blocks_since_last_shrink.saturating_add(1);
+        if self.ledger_shrink_interval > 0
+            && self.blocks_since_last_shrink >= self.ledger_shrink_interval
+        {
+            let old_capacity = self.ledger.capacity();
+            self.shrink_ledger_states();
+            tracing::debug!(
+                target: LOG_TARGET,
+                len = self.ledger.len(),
+                old_capacity,
+                new_capacity = self.ledger.capacity(),
+                "Periodic ledger states shrink"
+            );
+        }
     }
 
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
@@ -379,6 +406,8 @@ impl Cryptarchia {
             ledger: self.ledger,
             consensus,
             genesis_id: self.genesis_id,
+            blocks_since_last_shrink: 0,
+            ledger_shrink_interval: self.ledger_shrink_interval,
         };
 
         // Prune the ledger states of all the pruned blocks.
@@ -437,6 +466,9 @@ pub struct CryptarchiaSettings {
     pub starting_state: StartingState,
     pub recovery_file: PathBuf,
     pub bootstrap: BootstrapConfig,
+    /// How often (in blocks) to call `shrink_to_fit` on the ledger states
+    /// HashMap to reclaim memory from pruned entries. Set to 0 to disable.
+    pub ledger_shrink_interval: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -547,6 +579,7 @@ where
         let CryptarchiaSettings {
             config: ledger_config,
             bootstrap: bootstrap_config,
+            ledger_shrink_interval,
             ..
         } = self
             .service_resources_handle
@@ -571,6 +604,7 @@ where
                 ledger_config.clone(),
                 &relays,
                 current_slot,
+                ledger_shrink_interval,
             )
             .await;
         // These are blocks that have been pruned by the cryptarchia engine but have not
@@ -1106,6 +1140,7 @@ where
         ledger_config: lb_ledger::Config,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         current_slot: Slot,
+        ledger_shrink_interval: usize,
     ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
         let lib_id = self.state.lib;
         let genesis_id = self.state.genesis_id;
@@ -1123,6 +1158,7 @@ where
             state,
             self.state.lib_block_slot,
             self.state.lib_block_length,
+            ledger_shrink_interval,
         );
 
         // We reapply blocks here instead of saving ledger states to correcly make use

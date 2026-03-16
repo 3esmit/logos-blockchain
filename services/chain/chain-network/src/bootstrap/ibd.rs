@@ -1114,6 +1114,7 @@ mod tests {
             lb_cryptarchia_engine::State::Bootstrapping,
             0.into(),
             0,
+            0,
         )
     }
 

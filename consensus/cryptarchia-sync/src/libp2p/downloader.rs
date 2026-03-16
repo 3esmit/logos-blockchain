@@ -2,11 +2,12 @@ use futures::stream;
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::Control;
 use tokio::{sync::oneshot, time, time::Duration};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::{
     DownloadBlocksRequest, GetTipResponse,
     libp2p::{
+        LOG_TARGET,
         behaviour::{BlocksRequestStream, BoxedStream, TipRequestStream},
         errors::{ChainSyncError, ChainSyncErrorKind},
         messages::{DownloadBlocksResponse, RequestMessage},
@@ -94,20 +95,41 @@ impl Downloader {
         let peer_id = request_stream.peer_id;
         let reply_channel = request_stream.reply_channel;
 
+        debug!(
+            target: LOG_TARGET, %peer_id,
+            "receive_blocks: starting block stream from peer"
+        );
+
+        let mut blocks_received: usize = 0;
         #[expect(
             closure_returning_async_block,
             reason = "Signature expected by `try_unfold`"
+        )]
+        #[expect(
+            unused_assignments,
+            reason = "TODO: remove blocks_received after debugging"
         )]
         let stream = stream::try_unfold(libp2p_stream, move |mut stream| async move {
             let response = time::timeout(timeout, unpack_from_reader(&mut stream)).await;
 
             match response {
-                Ok(Ok(DownloadBlocksResponse::Block(block))) => Ok(Some((block, stream))),
+                Ok(Ok(DownloadBlocksResponse::Block(block))) => {
+                    blocks_received += 1;
+                    Ok(Some((block, stream)))
+                }
                 Ok(Ok(DownloadBlocksResponse::NoMoreBlocks)) => {
+                    debug!(
+                        target: LOG_TARGET, %peer_id, blocks_received,
+                        "receive_blocks: received NoMoreBlocks, closing stream"
+                    );
                     utils::close_stream(peer_id, stream).await?;
                     Ok(None)
                 }
                 Ok(Ok(DownloadBlocksResponse::Failure(reason))) => {
+                    debug!(
+                        target: LOG_TARGET, %peer_id, blocks_received, %reason,
+                        "receive_blocks: peer reported failure, closing stream"
+                    );
                     utils::close_stream(peer_id, stream).await?;
 
                     Err(ChainSyncError {
@@ -116,10 +138,18 @@ impl Downloader {
                     })
                 }
                 Ok(Err(e)) => {
+                    debug!(
+                        target: LOG_TARGET, %peer_id, blocks_received, error = %e,
+                        "receive_blocks: deserialization error, closing stream"
+                    );
                     drop(utils::close_stream(peer_id, stream).await);
                     Err(ChainSyncError::from((peer_id, e)))
                 }
                 Err(e) => {
+                    debug!(
+                        target: LOG_TARGET, %peer_id, blocks_received, error = %e,
+                        "receive_blocks: timeout, closing stream"
+                    );
                     drop(utils::close_stream(peer_id, stream).await);
                     Err(ChainSyncError::from((peer_id, e)))
                 }

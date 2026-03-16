@@ -25,12 +25,14 @@ use rand::{seq::IteratorRandom as _, thread_rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     metrics,
     network::{BoxedStream, NetworkAdapter},
 };
+
+const LOG_TARGET: &str = "chain-network::network::libp2p";
 
 type Relay<T, RuntimeServiceId> =
     OutboundRelay<<NetworkService<T, RuntimeServiceId> as ServiceData>::Message>;
@@ -256,11 +258,20 @@ where
         // All peers we know about, including those that are not connected.
         let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
 
-        let peers_to_request = choose_peers_to_request_download(
+        let peers_to_request: Vec<_> = choose_peers_to_request_download(
             &connected_peers,
             self.settings.max_connected_peers_to_try_download,
             &discovered_peers,
             self.settings.max_discovered_peers_to_try_download,
+        )
+        .collect();
+
+        debug!(
+            target: LOG_TARGET,
+            ?target_block,
+            num_peers = peers_to_request.len(),
+            ?peers_to_request,
+            "request_blocks_from_peers: racing peers via select_ok"
         );
 
         let requests = peers_to_request
@@ -278,7 +289,10 @@ where
                         )
                         .await?;
 
-                    debug!("Requested orphan parents from peer: {peer}");
+                    debug!(
+                        target: LOG_TARGET, %peer, ?target_block,
+                        "request_blocks_from_peers: peer responded first, other futures will be dropped"
+                    );
 
                     Ok(stream)
                 }
@@ -286,7 +300,26 @@ where
             })
             .collect::<Vec<_>>();
 
-        select_ok(requests).await.map(|(stream, _)| stream)
+        let result = select_ok(requests).await;
+
+        match &result {
+            Ok((_, remaining)) => {
+                debug!(
+                    target: LOG_TARGET,
+                    ?target_block,
+                    remaining_futures_dropped = remaining.len(),
+                    "request_blocks_from_peers: select_ok resolved, dropping remaining futures"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    target: LOG_TARGET, ?target_block, error = %e,
+                    "request_blocks_from_peers: all peers failed"
+                );
+            }
+        }
+
+        result.map(|(stream, _)| stream)
     }
 }
 

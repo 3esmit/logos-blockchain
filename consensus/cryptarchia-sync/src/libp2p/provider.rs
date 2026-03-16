@@ -1,11 +1,12 @@
 use futures::{TryStreamExt as _, stream::BoxStream};
 use libp2p::{PeerId, Stream as Libp2pStream};
 use tokio::sync::mpsc;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::{
     BlocksResponse, DynError, ProviderResponse, TipResponse,
     libp2p::{
+        LOG_TARGET,
         errors::{ChainSyncError, ChainSyncErrorKind},
         messages::{DownloadBlocksResponse, RequestMessage},
         packing::unpack_from_reader,
@@ -64,6 +65,10 @@ impl Provider {
         peer_id: PeerId,
         mut libp2p_stream: Libp2pStream,
     ) -> Result<(), ChainSyncError> {
+        debug!(
+            target: LOG_TARGET, %peer_id,
+            "provide_blocks: waiting for blocks stream from service"
+        );
         let response = reply_receiver.recv().await.ok_or_else(|| ChainSyncError {
             peer: peer_id,
             kind: ChainSyncErrorKind::ChannelReceiveError(
@@ -73,9 +78,22 @@ impl Provider {
 
         match response {
             ProviderResponse::Available(stream) => {
-                Self::send_blocks(peer_id, stream, libp2p_stream).await
+                debug!(
+                    target: LOG_TARGET, %peer_id,
+                    "provide_blocks: received blocks stream, starting to send"
+                );
+                let result = Self::send_blocks(peer_id, stream, libp2p_stream).await;
+                debug!(
+                    target: LOG_TARGET, %peer_id, ?result,
+                    "provide_blocks: send_blocks completed"
+                );
+                result
             }
             ProviderResponse::Unavailable { reason } => {
+                debug!(
+                    target: LOG_TARGET, %peer_id, %reason,
+                    "provide_blocks: blocks unavailable"
+                );
                 let response = DownloadBlocksResponse::Failure(reason);
                 send_message(peer_id, &mut libp2p_stream, &response).await?;
                 drop(close_stream(peer_id, libp2p_stream).await);
@@ -98,24 +116,39 @@ impl Provider {
             })
             .try_fold(&mut libp2p_stream, async |stream, block| {
                 let message = DownloadBlocksResponse::Block(block);
-                send_message(peer_id, stream, &message).await?;
-                Ok(stream)
+                if let Err(e) = send_message(peer_id, stream, &message).await {
+                    error!(
+                        target: LOG_TARGET, %peer_id, error = %e,
+                        "send_blocks: failed to send block to peer"
+                    );
+                    Err(e)
+                } else {
+                    Ok(stream)
+                }
             })
             .await;
 
         let final_result = match result {
             Ok(_) => {
+                debug!(
+                    target: LOG_TARGET, %peer_id,
+                    "send_blocks: all blocks sent, sending NoMoreBlocks"
+                );
                 let message = DownloadBlocksResponse::NoMoreBlocks;
                 send_message(peer_id, &mut libp2p_stream, &message).await
             }
             Err(e) => {
-                error!("Failed to send blocks to peer {}: {}", peer_id, e);
+                error!(
+                    target: LOG_TARGET, %peer_id, error = %e,
+                    "send_blocks: failed during block transmission"
+                );
                 let message = DownloadBlocksResponse::Failure(e.to_string());
                 drop(send_message(peer_id, &mut libp2p_stream, &message).await);
                 Err(e)
             }
         };
 
+        debug!(target: LOG_TARGET, %peer_id, "send_blocks: closing stream");
         drop(close_stream(peer_id, libp2p_stream).await);
 
         final_result

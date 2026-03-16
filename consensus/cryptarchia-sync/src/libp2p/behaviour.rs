@@ -23,6 +23,7 @@ use crate::{
     BlocksResponse, DownloadBlocksRequest, TipResponse,
     config::Config,
     libp2p::{
+        LOG_TARGET,
         downloader::Downloader,
         errors::ChainSyncError,
         messages::RequestMessage,
@@ -253,6 +254,13 @@ impl Behaviour {
         request: DownloadBlocksRequest,
         mut stream: Libp2pStream,
     ) -> Poll<ToSwarmEvent> {
+        debug!(
+            target: LOG_TARGET,
+            %peer_id,
+            ?request.target_block,
+            sending_block_responses = self.sending_block_responses.len(),
+            "handle_download_request: new blocks request from peer"
+        );
         if request.known_blocks.additional_blocks.len() > MAX_ADDITIONAL_BLOCKS {
             error!("Received excessive number of additional blocks");
 
@@ -285,6 +293,16 @@ impl Behaviour {
         let concurrent_requests = self.receiving_requests.len()
             + self.sending_block_responses.len()
             + self.sending_tip_responses.len();
+
+        debug!(
+            target: LOG_TARGET,
+            %peer_id,
+            concurrent_requests,
+            receiving_requests = self.receiving_requests.len(),
+            sending_block_responses = self.sending_block_responses.len(),
+            sending_tip_responses = self.sending_tip_responses.len(),
+            "handle_incoming_stream: new stream from peer"
+        );
 
         if concurrent_requests >= MAX_INCOMING_REQUESTS {
             self.incoming_streams_to_close.push(
@@ -476,8 +494,22 @@ impl NetworkBehaviour for Behaviour {
         }
 
         if let Poll::Ready(Some(result)) = self.sending_block_responses.poll_next_unpin(cx) {
-            if let Err(e) = result {
-                error!("Sending response failed: {}", e);
+            match &result {
+                Ok(()) => {
+                    debug!(
+                        target: LOG_TARGET,
+                        remaining = self.sending_block_responses.len(),
+                        "sending_block_responses: provider finished sending blocks"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        target: LOG_TARGET,
+                        remaining = self.sending_block_responses.len(),
+                        error = %e,
+                        "sending_block_responses: provider failed"
+                    );
+                }
             }
 
             self.try_notify_waker();

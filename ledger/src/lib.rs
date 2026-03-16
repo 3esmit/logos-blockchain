@@ -131,6 +131,14 @@ where
     pub fn shrink(&mut self) {
         self.states.shrink_to_fit();
     }
+
+    pub fn len(&self) -> usize {
+        self.states.len()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.states.capacity()
+    }
 }
 
 /// A ledger state

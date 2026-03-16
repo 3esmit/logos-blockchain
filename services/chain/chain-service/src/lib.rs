@@ -352,7 +352,16 @@ impl Cryptarchia {
                 );
             }
         }
-        tracing::debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+        tracing::debug!(
+            target: LOG_TARGET,
+            pruned_states_count,
+            ledger_states_len = self.ledger.len(),
+            ledger_states_capacity = self.ledger.capacity(),
+            // self.consensus is pruned outside of this function, but logging here for now
+            branches_len = self.consensus.branches().len(),
+            branches_capacity = self.consensus.branches().capacity(),
+            "Pruned old forks and their ledger states"
+        );
     }
 
     /// Shrinks the memory held by the ledger states.

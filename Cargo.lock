@@ -4723,9 +4723,11 @@ dependencies = [
  "async-trait",
  "cucumber",
  "derivative",
+ "ed25519",
  "futures",
  "futures-util",
  "hex",
+ "libp2p",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
@@ -4739,9 +4741,12 @@ dependencies = [
  "logos-blockchain-node",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "logos-blockchain-wallet",
+ "logos-blockchain-zksign",
  "num-bigint",
  "rand 0.8.5",
  "reqwest",
+ "rpds",
  "serde_json",
  "serde_yaml",
  "serial_test",
@@ -6311,9 +6316,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.13"
+version = "0.11.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
+checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",

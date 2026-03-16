@@ -11,6 +11,7 @@ use lb_libp2p::{Multiaddr, multiaddr};
 
 pub mod env;
 mod framework;
+pub use framework::local::USER_CONFIG_FILE;
 mod node;
 pub mod workloads;
 

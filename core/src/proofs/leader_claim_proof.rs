@@ -1,4 +1,4 @@
-use lb_groth16::{serde::serde_fr, Fr};
+use lb_groth16::{Fr, serde::serde_fr};
 use lb_utxotree::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

@@ -438,8 +438,16 @@ fn encode_ed25519_public_key(key: &Ed25519PublicKey) -> Vec<u8> {
 
 fn encode_zk_signature(sig: &ZkSignature) -> Vec<u8> {
     // ZkSignature wraps ZkSignProof which is CompressedGroth16Proof
-    // CompressedProof is 128 bytes: pi_a (32) + pi_b (64) + pi_c (32)
-    sig.as_proof().to_bytes().to_vec()
+    encode_groth16_proof(sig.as_proof())
+}
+
+fn encode_poc(poc: &Groth16LeaderClaimProof) -> Vec<u8> {
+    // Groth16LeaderClaimProof wraps PocProof which is CompressedGroth16Proof
+    encode_groth16_proof(poc.proof())
+}
+
+fn encode_groth16_proof(proof: &CompressedGroth16Proof) -> Vec<u8> {
+    proof.to_bytes().to_vec()
 }
 
 /// Encode channel operations
@@ -619,7 +627,7 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
             bytes
         }
         (OpProof::ZkSig(sig), Op::SDPWithdraw(_) | Op::SDPActive(_)) => encode_zk_signature(sig),
-        (OpProof::PoC(poc), Op::LeaderClaim(_)) => poc.proof().to_bytes().to_vec(),
+        (OpProof::PoC(poc), Op::LeaderClaim(_)) => encode_poc(poc),
         _ => {
             panic!("Mismatch between proof type and operation type");
         }
@@ -667,7 +675,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx) -> usize {
             // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
             Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
 
-            // ZkSigProof = ZkSignature, ProofOfClaimProof = Groth16
+            // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
             Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) => GROTH16_BYTES,
         })
         .sum::<usize>();
@@ -1519,9 +1527,12 @@ mod tests {
 
         let (remaining, decoded) = decode_op_proof(&encoded, &op).unwrap();
         assert!(remaining.is_empty());
-        assert_eq!(decoded, OpProof::PoC(Groth16LeaderClaimProof::new(
-            CompressedGroth16Proof::from_bytes(&proof_bytes),
-            voucher_nf,
-        )));
+        assert_eq!(
+            decoded,
+            OpProof::PoC(Groth16LeaderClaimProof::new(
+                CompressedGroth16Proof::from_bytes(&proof_bytes),
+                voucher_nf,
+            ))
+        );
     }
 }

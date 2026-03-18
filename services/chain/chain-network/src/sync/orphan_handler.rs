@@ -174,10 +174,7 @@ where
 
     fn dequeue_next_orphan(&mut self) -> Option<OrphanInfo> {
         let block_id = self.pending_orphans_queue.keys().next().copied()?;
-        let maybe_removed = self.remove_orphan(&block_id);
-        debug!(target: LOG_TARGET, ?orphan_info, "Orphan block dequeued");
-        metrics::orphan_blocks_pending(self.pending_orphans_queue.len());
-        maybe_removed
+        self.remove_orphan(&block_id)
     }
 
     async fn request_blocks_stream(

@@ -154,7 +154,10 @@ where
                         .ok_or_else(|| DynError::from(GetBlocksError::BlockNotFound(id)))
                 }
             })
-            .map_err(DynError::from)
+            .map_err(|e| {
+                error!("Error while streaming blocks: {e}");
+                DynError::from(e)
+            })
             .take_while(|result| future::ready(result.is_ok()));
 
         Box::pin(stream)

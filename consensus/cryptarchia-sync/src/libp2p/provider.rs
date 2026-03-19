@@ -1,7 +1,7 @@
 use futures::{TryStreamExt as _, stream::BoxStream};
 use libp2p::{PeerId, Stream as Libp2pStream};
 use tokio::sync::mpsc;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     BlocksResponse, DynError, ProviderResponse, TipResponse,
@@ -98,7 +98,9 @@ impl Provider {
             })
             .try_fold(&mut libp2p_stream, async |stream, block| {
                 let message = DownloadBlocksResponse::Block(block);
+                warn!("WRITING A BLOCK TO STREAM");
                 send_message(peer_id, stream, &message).await?;
+                warn!("WRITING A BLOCK TO STREAM: DONE");
                 Ok(stream)
             })
             .await;
@@ -106,6 +108,7 @@ impl Provider {
         let final_result = match result {
             Ok(_) => {
                 let message = DownloadBlocksResponse::NoMoreBlocks;
+                warn!("WRITING NO_MORE_BLOCKS TO STREAM");
                 send_message(peer_id, &mut libp2p_stream, &message).await
             }
             Err(e) => {
@@ -116,6 +119,7 @@ impl Provider {
             }
         };
 
+        warn!("CLOSING WRITE STREAM");
         drop(close_stream(peer_id, libp2p_stream).await);
 
         final_result

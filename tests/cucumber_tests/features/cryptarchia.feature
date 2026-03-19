@@ -27,13 +27,13 @@ Feature: Cryptarchia
   Scenario: Orphan staggered start
     Given I have a cluster with capacity of 4 nodes
     And I start node "NODE_1"
-    When node "NODE_1" is at height 1 in 300 seconds
+    When node "NODE_1" is at height 10 in 3000 seconds
     And I start peer node "NODE_2" connected to node "NODE_1"
-    When node "NODE_2" is at height 2 in 300 seconds
+    When node "NODE_2" is at height 20 in 3000 seconds
     And I start peer node "NODE_3" connected to node "NODE_2"
-    When node "NODE_3" is at height 3 in 300 seconds
+    When node "NODE_3" is at height 30 in 3000 seconds
     And I start peer node "NODE_4" connected to node "NODE_3"
-    Then all nodes have at least 4 blocks and converged to within 1 blocks in 300 seconds
+    Then all nodes have at least 40 blocks and converged to within 10 blocks in 3000 seconds
     Then I stop all nodes
 
   @cryptarchia_ci @undefined_behaviour

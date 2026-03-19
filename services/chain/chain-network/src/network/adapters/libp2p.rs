@@ -280,7 +280,9 @@ where
 
                     debug!("Requested orphan parents from peer: {peer}");
 
-                    Ok(stream)
+                    // Ok(stream)
+                    drop(stream);
+                    Err("DROPPED READ STREAM!!!!".into())
                 }
                 .boxed()
             })

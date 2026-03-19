@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::{borrow::Cow, sync::LazyLock};
 
 use bytes::Bytes;
 use lb_groth16::{
@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::ZkHasher,
     mantle::{
-        AuthenticatedMantleTx, Transaction, TransactionHasher,
+        AuthenticatedMantleTx, DependantMantleTx, MantleTxParent, Transaction, TransactionHasher,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasConstants, GasCost},
         ledger::Tx as LedgerTx,
@@ -354,6 +354,17 @@ impl AuthenticatedMantleTx for SignedMantleTx {
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         self.mantle_tx.ops.iter().zip(self.ops_proofs.iter())
+    }
+}
+
+impl DependantMantleTx for SignedMantleTx {
+    fn parents(&self) -> impl Iterator<Item = MantleTxParent<'_>> {
+        self.mantle_tx.ops.iter().filter_map(|op| match op {
+            Op::ChannelInscribe(inscribe_op) => Some(MantleTxParent::InscriptionMsgId(
+                Cow::Borrowed(&inscribe_op.parent),
+            )),
+            _ => None,
+        })
     }
 }
 

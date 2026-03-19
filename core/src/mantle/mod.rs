@@ -1,4 +1,4 @@
-use std::{hash::Hash, pin::Pin};
+use std::{borrow::Cow, hash::Hash, pin::Pin};
 
 use futures::Stream;
 use lb_key_management_system_keys::keys::ZkSignature;
@@ -21,6 +21,8 @@ pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
 pub use tx::{MantleTx, SignedMantleTx, TxHash};
+
+use crate::mantle::ops::channel::MsgId;
 
 pub const MAX_MANTLE_TXS: usize = 1024;
 
@@ -48,6 +50,15 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCost {
     fn ledger_tx_proof(&self) -> &ZkSignature;
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
+}
+
+pub enum MantleTxParent<'tx> {
+    InscriptionMsgId(Cow<'tx, MsgId>),
+}
+
+pub trait DependantMantleTx: Transaction {
+    // Return the parents of this transaction and its inner Operations
+    fn parents(&self) -> impl Iterator<Item = MantleTxParent<'_>>;
 }
 
 /// A genesis transaction as specified in
@@ -78,6 +89,12 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         T::ops_with_proof(self)
+    }
+}
+
+impl<T: DependantMantleTx> DependantMantleTx for &T {
+    fn parents(&self) -> impl Iterator<Item = MantleTxParent<'_>> {
+        T::parents(self)
     }
 }
 

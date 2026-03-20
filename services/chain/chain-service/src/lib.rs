@@ -877,17 +877,18 @@ where
         storage_blocks_to_remove: HashSet<HeaderId>,
         state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
     ) {
-        match <Self as ServiceData>::State::from_cryptarchia_and_unpruned_blocks(
-            cryptarchia,
-            storage_blocks_to_remove,
-        ) {
-            Ok(state) => {
-                state_updater.update(Some(state));
-            }
-            Err(e) => {
-                error!(target: LOG_TARGET, "Failed to update state: {}", e);
-            }
-        }
+        // TODO: Commented out to investigate heap fragmentation
+        // match <Self as ServiceData>::State::from_cryptarchia_and_unpruned_blocks(
+        //     cryptarchia,
+        //     storage_blocks_to_remove,
+        // ) {
+        //     Ok(state) => {
+        //         state_updater.update(Some(state));
+        //     }
+        //     Err(e) => {
+        //         error!(target: LOG_TARGET, "Failed to update state: {}", e);
+        //     }
+        // }
     }
 
     /// Try to add a [`Block`] to [`Cryptarchia`].

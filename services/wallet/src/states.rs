@@ -98,9 +98,10 @@ impl<'u> ServiceState<'u> {
     }
 
     fn update_state(&self) {
-        self.updater.update(Some(RecoveryState {
-            next_new_voucher_index: self.next_new_voucher_index,
-            vouchers: self.wallet.vouchers().clone(),
-        }));
+        // TODO: Commented out to investigate heap fragmentation
+        // self.updater.update(Some(RecoveryState {
+        //     next_new_voucher_index: self.next_new_voucher_index,
+        //     vouchers: self.wallet.vouchers().clone(),
+        // }));
     }
 }

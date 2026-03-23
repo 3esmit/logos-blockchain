@@ -4526,6 +4526,7 @@ dependencies = [
  "proptest-macro",
  "rpds",
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

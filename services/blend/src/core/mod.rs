@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
@@ -1790,8 +1791,21 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
 {
+    let mut seen_processed_messages = HashSet::new();
     processed_messages_to_release
         .into_iter()
+        .filter(|processed_message_to_release| {
+            // Temporary guard: send a processed message only once per batch.
+            let is_new = seen_processed_messages.insert(processed_message_to_release.clone());
+            if !is_new {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    processed_message = ?processed_message_to_release,
+                    "Duplicate processed message in one release batch; old behavior would send it twice, current code skips it"
+                );
+            }
+            is_new
+        })
         .inspect(|processed_message_to_release| {
             if let Some(state_updater) = state_updater.as_mut()
                 && state_updater.remove_sent_processed_message(processed_message_to_release).is_err() {

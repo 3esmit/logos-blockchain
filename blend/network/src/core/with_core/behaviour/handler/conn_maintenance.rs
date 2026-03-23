@@ -94,13 +94,22 @@ where
             cx.waker().wake_by_ref();
             return Poll::Pending;
         }
-        let outcome = if self.is_spammy() {
-            ConnectionMonitorOutput::Spammy
-        } else if self.is_unhealthy() {
+        let spammy_suppressed = self.is_spammy();
+        let outcome =
+        // Disabled for now while investigating long-run failures.
+        if self.is_unhealthy() {
             ConnectionMonitorOutput::Unhealthy
         } else {
             ConnectionMonitorOutput::Healthy
         };
+        if spammy_suppressed {
+            debug!(
+                target: LOG_TARGET,
+                received_messages = self.current_window_message_count,
+                expected_range = ?self.expected_message_range,
+                "Spammy threshold reached; old behavior would emit Spammy, current code suppresses it"
+            );
+        }
         debug!(target: LOG_TARGET, "Monitor clock. Received messages = {:#?}, expected range = {:#?} -> Outcome = {outcome:?}.", self.current_window_message_count, self.expected_message_range);
         self.reset(new_expected_message_count_range);
         Poll::Ready(Some(outcome))

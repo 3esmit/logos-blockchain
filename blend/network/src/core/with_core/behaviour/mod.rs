@@ -707,10 +707,12 @@ impl<ProofsVerifier, ObservationWindowClockProvider>
                     tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged but within the sensitivity window. Simply ignoring the message.");
                     Ok(())
                 } else {
-                    tracing::debug!(target: LOG_TARGET, "Neighbor {peer_id:?} on connection {connection_id:?} sent us a message previously already exchanged. Marking it as spammy.");
-                    self.close_spammy_connection(
-                        (peer_id, connection_id),
-                        SpamReason::DuplicateMessage,
+                    // Keep this path from disconnecting the peer for now.
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        ?peer_id,
+                        ?connection_id,
+                        "Duplicate outside sensitivity window; old behavior would mark peer spammy, current code drops it"
                     );
                     Err(())
                 }

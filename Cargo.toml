@@ -6,7 +6,7 @@ keywords    = ["blockchain", "privacy"]
 license     = "MIT or Apache-2.0"
 readme      = "README.md"
 repository  = "https://github.com/logos-blockchain/logos-blockchain"
-version     = "0.1.0"
+version     = "0.2.1"
 
 [profile.release]
 codegen-units = 1     # (Much) slower build time, much better performances
@@ -17,6 +17,11 @@ strip         = true  # Remove symbols to reduce binary size
 # LTO cannot be overridden for downstream dependencies.
 codegen-units = 1
 opt-level     = 3
+
+[profile.release-profiling]
+debug    = true      # Include debug symbols for profiling
+inherits = "release"
+strip    = "none"    # Don't strip symbols to allow for better profiling results
 
 [workspace]
 # Make sure any excluded crates are still clipped in our CI. Also, make sure they use the same Clippy and rustc lints we specify in this file down below.

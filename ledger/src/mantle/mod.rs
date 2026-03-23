@@ -38,13 +38,16 @@ pub enum Error {
     NoteNotFound(NoteId),
 }
 
-/// Tracks mantle ops
+/// A state of the mantle ledger
+///
+/// NOTE: Most collection fields in this struct should use `rpds`
+/// since we keep a copy of this state for each block.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq, Debug)]
 pub struct LedgerState {
     channels: channel::Channels,
-    sdp: sdp::SdpLedger,
-    leaders: leader::LeaderState,
+    pub sdp: sdp::SdpLedger,
+    pub leaders: leader::LeaderState,
 }
 
 impl LedgerState {

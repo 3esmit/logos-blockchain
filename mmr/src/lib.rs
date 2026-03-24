@@ -73,18 +73,23 @@ where
         }
     }
 
-    pub fn push(&self, elem: T) -> Result<Self, MmrFull> {
+    pub fn push(&self, elem: T) -> Result<(Self, MerklePath), MmrFull> {
         if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
             return Err(MmrFull);
         }
 
-        let root = Hash::digest(&[*elem.as_ref()]);
-        let mut last_root = Root { root, height: 1 };
+        let index = self.len();
+        let leaf_hash = Hash::digest(&[*elem.as_ref()]);
+        let mut last_root = Root { root: leaf_hash, height: 1 };
         let mut roots = self.roots.clone();
+        let mut siblings = Vec::with_capacity((MAX_HEIGHT - 1) as usize);
 
+        // Cascade: merge with existing roots of the same height.
+        // Each consumed root is a LEFT sibling of the pushed element.
         while let Some(root) = roots.peek().copied() {
             if last_root.height == root.height {
                 roots.pop_mut();
+                siblings.push(root.root);
                 last_root = Root {
                     root: Hash::compress(&[root.root, last_root.root]),
                     height: last_root.height + 1,
@@ -98,12 +103,30 @@ where
             }
         }
 
+        // Remaining roots and empty subtrees form the higher-level siblings.
+        // This mirrors the frontier_root logic.
+        let mut height = last_root.height;
+        for remaining in roots.iter() {
+            while height < remaining.height {
+                siblings.push(empty_subtree_root::<Hash>(height));
+                height += 1;
+            }
+            siblings.push(remaining.root);
+            height += 1;
+        }
+        while height < MAX_HEIGHT {
+            siblings.push(empty_subtree_root::<Hash>(height));
+            height += 1;
+        }
+
         roots = roots.push(last_root);
 
-        Ok(Self {
+        let mmr = Self {
             roots,
             _hash: std::marker::PhantomData,
-        })
+        };
+        let path = MerklePath { index, leaf_hash, siblings };
+        Ok((mmr, path))
     }
 
     #[must_use]
@@ -177,6 +200,43 @@ fn empty_subtree_root<Hash: Digest>(height: u8) -> Fr {
 #[error("MMR is full")]
 pub struct MmrFull;
 
+#[derive(Debug, Clone)]
+pub struct MerklePath {
+    pub index: usize,
+    pub leaf_hash: Fr,
+    pub siblings: Vec<Fr>,
+}
+
+impl MerklePath {
+    pub fn compute_root<Hash: Digest>(&self) -> Fr {
+        let mut hash = self.leaf_hash;
+        for (k, sibling) in self.siblings.iter().enumerate() {
+            if (self.index >> k) & 1 == 0 {
+                hash = Hash::compress(&[hash, *sibling]);
+            } else {
+                hash = Hash::compress(&[*sibling, hash]);
+            }
+        }
+        hash
+    }
+
+    pub fn update<Hash: Digest>(&mut self, other: &MerklePath) {
+        let diff = self.index ^ other.index;
+        assert!(diff != 0, "cannot update with the same index");
+        let k = (usize::BITS - 1 - diff.leading_zeros()) as usize;
+
+        let mut subtree_root = other.leaf_hash;
+        for level in 0..k {
+            if (other.index >> level) & 1 == 0 {
+                subtree_root = Hash::compress(&[subtree_root, other.siblings[level]]);
+            } else {
+                subtree_root = Hash::compress(&[other.siblings[level], subtree_root]);
+            }
+        }
+        self.siblings[k] = subtree_root;
+    }
+}
+
 #[cfg(test)]
 mod test {
     use ark_ff::PrimeField as _;
@@ -248,7 +308,7 @@ mod test {
     fn test_frontier_root_8(elems: Vec<[u8; 32]>) {
         let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, 8>>::new();
         for elem in &elems {
-            mmr = mmr.push(elem.as_ref().into()).unwrap();
+            (mmr, _) = mmr.push(elem.as_ref().into()).unwrap();
         }
         assert_eq!(mmr.frontier_root(), root(&padded_leaves(elems, 8)));
     }
@@ -258,7 +318,7 @@ mod test {
     fn test_frontier_root_16(elems: Vec<[u8; 32]>) {
         let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, 16>>::new();
         for elem in &elems {
-            mmr = mmr.push(elem.as_ref().into()).unwrap();
+            (mmr, _) = mmr.push(elem.as_ref().into()).unwrap();
         }
         assert_eq!(mmr.frontier_root(), root(&padded_leaves(elems, 16)));
     }
@@ -281,15 +341,18 @@ mod test {
         let frontier_root0 = mmr.frontier_root();
         assert_eq!(frontier_root0, empty_subtree_root::<ZkHasher>(HEIGHT));
 
-        mmr = mmr.push(b"hello".as_ref().into()).unwrap();
+        let path0;
+        (mmr, path0) = mmr.push(b"hello".as_ref().into()).unwrap();
         assert_eq!(mmr.len(), 1);
         assert_eq!(mmr.roots.size(), 1);
         assert_eq!(mmr.roots.peek().unwrap().height, 1);
         assert_eq!(mmr.roots.peek().unwrap().root, leaf(b"hello"));
         let frontier_root1 = mmr.frontier_root();
         assert_ne!(frontier_root1, frontier_root0);
+        assert_eq!(path0.compute_root::<ZkHasher>(), frontier_root1);
 
-        mmr = mmr.push(b"world".as_ref().into()).unwrap();
+        let path1;
+        (mmr, path1) = mmr.push(b"world".as_ref().into()).unwrap();
         assert_eq!(mmr.len(), 2);
         assert_eq!(mmr.roots.size(), 1);
         assert_eq!(mmr.roots.peek().unwrap().height, 2);
@@ -299,8 +362,10 @@ mod test {
         );
         let frontier_root2 = mmr.frontier_root();
         assert_ne!(frontier_root2, frontier_root1);
+        assert_eq!(path1.compute_root::<ZkHasher>(), frontier_root2);
 
-        mmr = mmr.push(b"!".as_ref().into()).unwrap();
+        let path2;
+        (mmr, path2) = mmr.push(b"!".as_ref().into()).unwrap();
         assert_eq!(mmr.len(), 3);
         assert_eq!(mmr.roots.size(), 2);
         let top_root = mmr.roots.iter().last().unwrap();
@@ -313,8 +378,10 @@ mod test {
         assert_eq!(mmr.roots.peek().unwrap().root, leaf(b"!"));
         let frontier_root3 = mmr.frontier_root();
         assert_ne!(frontier_root3, frontier_root2);
+        assert_eq!(path2.compute_root::<ZkHasher>(), frontier_root3);
 
-        mmr = mmr.push(b"!".as_ref().into()).unwrap();
+        let path3;
+        (mmr, path3) = mmr.push(b"!".as_ref().into()).unwrap();
         assert_eq!(mmr.len(), 4);
         assert_eq!(mmr.roots.size(), 1);
         assert_eq!(mmr.roots.peek().unwrap().height, 3);
@@ -327,10 +394,66 @@ mod test {
         );
         let frontier_root4 = mmr.frontier_root();
         assert_ne!(frontier_root4, frontier_root3);
+        assert_eq!(path3.compute_root::<ZkHasher>(), frontier_root4);
 
         assert!(matches!(
             mmr.push(b"already full".as_ref().into()),
             Err(MmrFull)
         ));
+    }
+
+    #[test]
+    fn test_merkle_path_update() {
+        const HEIGHT: u8 = 3;
+        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+
+        // Push 3 elements, track path for element at index 2
+        let (mmr2, _) = mmr.push(b"a".as_ref().into()).unwrap();
+        let (mmr3, _) = mmr2.push(b"b".as_ref().into()).unwrap();
+        let (mmr4, path2) = mmr3.push(b"c".as_ref().into()).unwrap();
+        mmr = mmr4;
+
+        // path2 should verify against current frontier root
+        assert_eq!(path2.compute_root::<ZkHasher>(), mmr.frontier_root());
+
+        // Push a 4th element
+        let path3;
+        (mmr, path3) = mmr.push(b"d".as_ref().into()).unwrap();
+
+        // path2 is now stale
+        assert_ne!(path2.compute_root::<ZkHasher>(), mmr.frontier_root());
+
+        // Update path2 using path3
+        let mut path2 = path2;
+        path2.update::<ZkHasher>(&path3);
+        assert_eq!(path2.compute_root::<ZkHasher>(), mmr.frontier_root());
+    }
+
+    #[test]
+    fn test_merkle_path_update_all() {
+        const HEIGHT: u8 = 4;
+        type Mmr = MerkleMountainRange<TestFr, ZkHasher, HEIGHT>;
+        let mut mmr = Mmr::new();
+        let mut paths = Vec::new();
+
+        let elems: &[&[u8]] = &[b"a", b"b", b"c", b"d", b"e", b"f", b"g", b"h"];
+        for elem in elems {
+            let path;
+            (mmr, path) = mmr.push((*elem).into()).unwrap();
+
+            // Update all previous paths with the new push proof
+            for p in &mut paths {
+                MerklePath::update::<ZkHasher>(p, &path);
+            }
+
+            // All paths should verify against the current root
+            let frontier = mmr.frontier_root();
+            for p in &paths {
+                assert_eq!(p.compute_root::<ZkHasher>(), frontier);
+            }
+            assert_eq!(path.compute_root::<ZkHasher>(), frontier);
+
+            paths.push(path);
+        }
     }
 }

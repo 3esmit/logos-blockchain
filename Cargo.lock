@@ -2029,7 +2029,7 @@ dependencies = [
 
 [[package]]
 name = "demo-sqlite-common"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "arboard",
  "argon2",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "demo-sqlite-indexer"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "arboard",
  "chrono",
@@ -2075,7 +2075,7 @@ dependencies = [
 
 [[package]]
 name = "demo-sqlite-sequencer"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "arboard",
  "chrono",

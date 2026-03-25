@@ -1,6 +1,6 @@
-# Logos SQLite Zone Sequencer and Indexer Demo
+# Logos SQLite Zone Sequencer and Indexer Demo - TUTORIAL SKELETON
 
-This directory contains a reference implementation of a Sovereign Zone solution using the Logos Blockchain as a simple database server.
+This directory contains a skeleton implementation of a Sovereign Zone solution using the Logos Blockchain as a simple database server. It is meant to be used in conjunction with the Zone SDK tutorial in the logos-docs repository.
 
 ## System Architecture
 

@@ -2,7 +2,8 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.4.2
+# TODO: revert this to v0.4.2 or the latest
+ARG VERSION=v0.4.1
 
 # ===========================
 # BUILD IMAGE
@@ -16,7 +17,7 @@ COPY . .
 
 # Install dependencies needed for building RocksDB.
 RUN apt-get update && apt-get install -yq \
-    git gcc g++ clang libssl-dev pkg-config ca-certificates curl unzip
+    git gcc g++ clang libssl-dev pkg-config ca-certificates curl unzip build-essential
 
 # Install Bun for L2 demo frontend.
 RUN curl -fsSL https://bun.sh/install | bash
@@ -31,7 +32,8 @@ RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run bu
 WORKDIR /logos-blockchain
 ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 RUN scripts/setup-logos-blockchain-circuits.sh "$VERSION" "$LOGOS_BLOCKCHAIN_CIRCUITS"
-RUN cargo build --locked --release --all-features
+# TODO: remove `--features jemalloc`
+RUN cargo build --locked --release --features jemalloc
 
 # ===========================
 # NODE IMAGE

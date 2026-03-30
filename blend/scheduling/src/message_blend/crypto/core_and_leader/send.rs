@@ -141,6 +141,11 @@ where
         // We validate the payload early on so we don't generate proofs unnecessarily.
         let validated_payload = PaddedPayloadBody::try_from(payload)?;
         let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
+        let membership_size = self.membership.size();
+        let local_index = self
+            .membership
+            .local_index()
+            .expect("Local node index should exist.");
 
         match payload_type {
             PayloadType::Cover => {
@@ -152,16 +157,25 @@ where
                 }
             }
             PayloadType::Data => {
-                for _ in 0..self.num_blend_layers.into() {
-                    let Some(proof) = self.proofs_generator.get_next_leader_proof().await else {
-                        return Err(Error::NoLeadershipInfoProvided);
-                    };
-                    proofs.push(proof);
+                for _ in 0..self.num_blend_layers.get() {
+                    loop {
+                        let Some(proof) = self.proofs_generator.get_next_core_proof().await else {
+                            return Err(Error::NoMoreProofOfQuotas);
+                        };
+                        let expected_index = proof
+                            .proof_of_selection
+                            .expected_index(membership_size)
+                            .expect("Node index should exist.");
+                        if expected_index == local_index {
+                            continue;
+                        }
+                        proofs.push(proof);
+                        break;
+                    }
                 }
             }
         }
 
-        let membership_size = self.membership.size();
         let proofs_and_signing_keys = proofs
             .into_iter()
             // Collect remote (or local) index info for each PoSel.

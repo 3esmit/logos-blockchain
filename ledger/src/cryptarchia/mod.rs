@@ -613,13 +613,13 @@ fn update_storage_market(
     storage_gas_consumed_in_epoch: Gas,
     storage_gas_ema: Gas,
 ) -> (GasPrice, Gas) {
-    let previous_price = storage_gas_price.into_inner() as u128;
-    let total_storage_gas = storage_gas_consumed_in_epoch.into_inner() as u128;
-    let previous_ema = storage_gas_ema.into_inner() as u128;
+    let previous_price = u128::from(storage_gas_price.into_inner());
+    let total_storage_gas = u128::from(storage_gas_consumed_in_epoch.into_inner());
+    let previous_ema = u128::from(storage_gas_ema.into_inner());
 
     let new_ema: Gas =
         (((total_storage_gas + previous_ema) / STORAGE_MARKET_EMA_DENOMINATOR) as Value).into();
-    let new_ema_unsigned = new_ema.into_inner() as u128;
+    let new_ema_unsigned = u128::from(new_ema.into_inner());
     let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
     let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
         ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)

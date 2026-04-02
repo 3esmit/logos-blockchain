@@ -8,7 +8,7 @@ use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
-        gas::{Gas, GasConstants},
+        gas::{Gas, GasConstants, GasCost, GasPrice},
         ops::transfer::TransferOp,
     },
     proofs::leader_proof::{self, LeaderPublic},
@@ -153,15 +153,15 @@ pub struct LedgerState {
     stake_inference: Arc<StakeInference>,
     // rolling fee window of 120 blocks, used to derive block rewards
     #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
-    fee_window: [Value; WINDOW_SIZE],
+    fee_window: [GasCost; WINDOW_SIZE],
     // Smoothed Average Execution Gas used up to the last block
     average_execution_gas: Gas,
     // Execution Base Fee that are burned and minimum required to pay.
-    execution_base_fee: Gas,
+    execution_base_fee: GasPrice,
     // Exponential Moving Average Storage Gas used in the currect epoch
     storage_gas_ema: Gas,
     // Actual storage Gas price of the currect epoch
-    storage_gas_price: Gas,
+    storage_gas_price: GasPrice,
     // The amount of Storage Gas consumed in the current epoch
     storage_gas_consumed_in_epoch: Gas,
 }
@@ -262,7 +262,7 @@ impl LedgerState {
                 next_epoch_state,
                 epoch_state,
                 block_density,
-                storage_gas_consumed_in_epoch: 0u64,
+                storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
                 storage_gas_price: new_price,
                 ..self
@@ -294,7 +294,7 @@ impl LedgerState {
             );
             // Then for the empty epochs
             for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
-                (new_price, new_ema) = update_storage_market(new_price, 0u64, new_ema);
+                (new_price, new_ema) = update_storage_market(new_price, 0.into(), new_ema);
             }
 
             tracing::warn!(
@@ -328,7 +328,7 @@ impl LedgerState {
                 next_epoch_state,
                 epoch_state,
                 block_density,
-                storage_gas_consumed_in_epoch: 0u64,
+                storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
                 storage_gas_price: new_price,
                 ..self
@@ -339,15 +339,18 @@ impl LedgerState {
     #[must_use]
     pub fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
         // First update the `average_execution_gas`
-        let avg_numerator = u128::from(block_execution_gas_consumed)
-            + EXECUTION_MARKET_EMA_PREV_WEIGHT * u128::from(self.average_execution_gas);
+        let avg_numerator = u128::from(block_execution_gas_consumed.into_inner())
+            + EXECUTION_MARKET_EMA_PREV_WEIGHT
+                * u128::from(self.average_execution_gas.into_inner());
         let new_average_execution_gas: Gas =
-            (avg_numerator / EXECUTION_MARKET_EMA_DENOMINATOR) as Gas;
+            ((avg_numerator / EXECUTION_MARKET_EMA_DENOMINATOR) as Value).into();
 
         // Then update the `execution_base_fee`
-        let fee_numerator = u128::from(self.execution_base_fee)
-            * (EXECUTION_MARKET_BASE_FEE_NUMERATOR + u128::from(self.average_execution_gas));
-        let new_base_fee = (fee_numerator / EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Gas;
+        let fee_numerator = u128::from(self.execution_base_fee.into_inner())
+            * (EXECUTION_MARKET_BASE_FEE_NUMERATOR
+                + u128::from(self.average_execution_gas.into_inner()));
+        let new_base_fee =
+            ((fee_numerator / EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
 
         Self {
             average_execution_gas: new_average_execution_gas,
@@ -420,7 +423,7 @@ impl LedgerState {
                 .map_err(|_| LedgerError::InvalidNote(*input))?;
             balance = balance
                 .checked_add(utxo.note.value.into())
-                .ok_or(LedgerError::Overflow)?;
+                .ok_or(LedgerError::BalanceOverflow)?;
             pks.push(utxo.note.pk);
         }
 
@@ -434,7 +437,7 @@ impl LedgerState {
             }
             balance = balance
                 .checked_sub(utxo.note.value.into())
-                .ok_or(LedgerError::Overflow)?;
+                .ok_or(LedgerError::BalanceOverflow)?;
             self.utxos = self.utxos.insert(utxo.id(), utxo).0;
         }
         Ok((self, balance))
@@ -464,18 +467,21 @@ impl LedgerState {
         }
     }
 
-    pub const fn update_fee_window(&mut self, index: usize, total_fee: u64) {
+    pub const fn update_fee_window(&mut self, index: usize, total_fee: GasCost) {
         self.fee_window[index] = total_fee;
     }
 
     #[must_use]
-    pub const fn get_fee_from_index(&self, index: usize) -> Value {
+    pub const fn get_fee_from_index(&self, index: usize) -> GasCost {
         self.fee_window[index]
     }
 
     #[must_use]
     pub fn get_summed_fees(&self) -> u128 {
-        self.fee_window.iter().map(|x| u128::from(*x)).sum()
+        self.fee_window
+            .iter()
+            .map(|x| u128::from(x.into_inner()))
+            .sum()
     }
 
     #[must_use]
@@ -499,12 +505,12 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub const fn execution_base_fee(&self) -> &Gas {
+    pub const fn execution_base_fee(&self) -> &GasPrice {
         &self.execution_base_fee
     }
 
     #[must_use]
-    pub const fn storage_gas_price(&self) -> &Gas {
+    pub const fn storage_gas_price(&self) -> &GasPrice {
         &self.storage_gas_price
     }
 
@@ -589,12 +595,12 @@ impl LedgerState {
             },
             block_density,
             stake_inference,
-            fee_window: [0u64; 120],
-            average_execution_gas: 0u64,
-            execution_base_fee: 0u64,
-            storage_gas_ema: 0u64,
-            storage_gas_price: 1u64,
-            storage_gas_consumed_in_epoch: 0u64,
+            fee_window: [0.into(); 120],
+            average_execution_gas: 0.into(),
+            execution_base_fee: 0.into(),
+            storage_gas_ema: 0.into(),
+            storage_gas_price: 1.into(),
+            storage_gas_consumed_in_epoch: 0.into(),
         }
     }
 }
@@ -602,26 +608,29 @@ impl LedgerState {
 // This function upgrade the storage Gas price when a new epoch starts assuming
 // the structure contains how much storage gas was consumed in the previous
 // epoch according to <https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5>
-const fn update_storage_market(
-    storage_gas_price: Gas,
+fn update_storage_market(
+    storage_gas_price: GasPrice,
     storage_gas_consumed_in_epoch: Gas,
     storage_gas_ema: Gas,
-) -> (Gas, Gas) {
-    let previous_price = storage_gas_price as u128;
-    let total_storage_gas = storage_gas_consumed_in_epoch as u128;
-    let previous_ema = storage_gas_ema as u128;
+) -> (GasPrice, Gas) {
+    let previous_price = storage_gas_price.into_inner() as u128;
+    let total_storage_gas = storage_gas_consumed_in_epoch.into_inner() as u128;
+    let previous_ema = storage_gas_ema.into_inner() as u128;
 
-    let new_ema = ((total_storage_gas + previous_ema) / STORAGE_MARKET_EMA_DENOMINATOR) as Gas;
-    let new_ema_unsigned = new_ema as u128;
+    let new_ema: Gas =
+        (((total_storage_gas + previous_ema) / STORAGE_MARKET_EMA_DENOMINATOR) as Value).into();
+    let new_ema_unsigned = new_ema.into_inner() as u128;
     let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
     let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
-        (previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
-            as Gas
+        ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
+            as Value)
+            .into()
     } else if comparator >= STORAGE_MARKET_CLAMP_UP_NUMERATOR * new_ema_unsigned {
-        (previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
-            as Gas
+        ((previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
+            as Value)
+            .into()
     } else {
-        (previous_price * total_storage_gas / new_ema_unsigned) as Gas
+        ((previous_price * total_storage_gas / new_ema_unsigned) as Value).into()
     };
 
     (new_price, new_ema)

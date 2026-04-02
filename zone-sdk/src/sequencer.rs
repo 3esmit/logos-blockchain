@@ -911,8 +911,8 @@ fn create_inscribe_tx(
 
     let inscribe_tx = MantleTx {
         ops: vec![Op::ChannelInscribe(inscribe_op)],
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let tx_hash = inscribe_tx.hash();
@@ -938,8 +938,8 @@ fn create_set_keys_tx(
 
     let set_keys_tx = MantleTx {
         ops: vec![Op::ChannelSetKeys(set_keys_op)],
-        storage_gas_price: 0,
-        execution_gas_price: 0,
+        storage_gas_price: 0.into(),
+        execution_gas_price: 0.into(),
     };
 
     let tx_hash = set_keys_tx.hash();

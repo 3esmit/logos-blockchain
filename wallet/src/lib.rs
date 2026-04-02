@@ -111,7 +111,7 @@ impl WalletState {
                 .clone()
                 .extend_ledger_inputs(utxos[..=i].iter().copied());
 
-            let funding_delta = funded_tx_builder.funding_delta::<G>();
+            let funding_delta = funded_tx_builder.funding_delta::<G>()?;
 
             match funding_delta.cmp(&0) {
                 Ordering::Less => {
@@ -125,7 +125,7 @@ impl WalletState {
                     // We have enough balance, but we need to introduce a change note.
                     // The change note will slightly increase the storage cost of the tx so there is
                     // a chance that we will not be able to fund the tx with the change note.
-                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(change_pk) {
+                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(change_pk)? {
                         // We were able to fund the tx with change note added.
                         return Ok(tx_with_change);
                     }

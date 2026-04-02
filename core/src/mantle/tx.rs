@@ -543,8 +543,8 @@ impl GasCost for SignedMantleTx {
 
     fn total_gas_cost<Constants: GasConstants>(&self, context: &Self::Context) -> Gas {
         let execution_gas = GasCost::execution_gas_consumption::<Constants>(&self, context);
-        let storage_gas = GasCost::storage_gas_consumption(&self, context);
-        execution_gas * self.mantle_tx.execution_gas_price + storage_gas
+        execution_gas * self.mantle_tx.execution_gas_price
+            + <Self as GasCost>::storage_gas_cost(self, context)
     }
 
     fn storage_gas_cost(&self, context: &Self::Context) -> Gas {

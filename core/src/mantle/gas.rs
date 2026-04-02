@@ -49,6 +49,7 @@ impl From<Value> for GasPrice {
 pub struct GasCost(Value);
 
 impl GasCost {
+    #[must_use]
     pub const fn new(value: Value) -> Self {
         Self(value)
     }

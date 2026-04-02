@@ -7,7 +7,7 @@ pub use lb_chain_service::Slot;
 use lb_core::{
     block::Block,
     header::{ContentId, HeaderId},
-    mantle::SignedMantleTx,
+    mantle::{SignedMantleTx, gas::GasPrice},
     proofs::leader_proof::Groth16LeaderProof,
 };
 use lb_groth16::fr_to_bytes;
@@ -53,6 +53,10 @@ pub struct ProcessedBlockEvent {
     pub block: ApiBlock,
     pub tip: HeaderId,
     pub lib: HeaderId,
+    /// Execution gas price of the epoch in which `tip` was produced.
+    pub execution_gas_price: GasPrice,
+    /// Storage gas price of the epoch in which `tip` was produced.
+    pub storage_gas_price: GasPrice,
 }
 
 #[derive(thiserror::Error, Debug)]

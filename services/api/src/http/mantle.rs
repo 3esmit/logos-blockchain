@@ -11,7 +11,7 @@ use lb_chain_service::{
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash, ops::channel::ChannelId},
+    mantle::{SignedMantleTx, Transaction, TxHash, gas::GasPrice, ops::channel::ChannelId},
     sdp::Declaration,
 };
 use lb_ledger::mantle::channel::ChannelState;
@@ -44,6 +44,10 @@ pub struct BlockWithChainState<Tx> {
     pub tip: HeaderId,
     /// The current Last Irreversible Block after processing this block.
     pub lib: HeaderId,
+    /// Execution gas price of the epoch in which `tip` was processed
+    pub execution_gas_price: GasPrice,
+    /// Storage gas price of the epoch in which `tip` was processed
+    pub storage_gas_price: GasPrice,
 }
 
 pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
@@ -247,6 +251,8 @@ where
                 block,
                 tip: event.tip,
                 lib: event.lib,
+                execution_gas_price: event.execution_gas_price,
+                storage_gas_price: event.storage_gas_price,
             })
         }
     });

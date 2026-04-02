@@ -342,6 +342,7 @@ impl LedgerState {
 
             // Check the transaction is balanced
             let total_gas_cost = AuthenticatedMantleTx::total_gas_cost::<Constants>(&tx)?;
+            tracing::warn!(balance, ?total_gas_cost, "YJYJ: applying tx",);
             match balance.cmp(&Balance::from(total_gas_cost.into_inner())) {
                 Ordering::Less => return Err(LedgerError::InsufficientBalance),
                 Ordering::Greater => return Err(LedgerError::UnbalancedTransaction),
@@ -364,6 +365,11 @@ impl LedgerState {
             // TODO: remove the storage price from the Mantle Transaction and wallet should
             // pull the price from ledger to get the fees to pay
             if tx.mantle_tx().storage_gas_price != *self.cryptarchia_ledger.storage_gas_price() {
+                tracing::warn!(
+                    tx_storage_gas_price = ?tx.mantle_tx().storage_gas_price,
+                    ledger_storage_gas_price = ?*self.cryptarchia_ledger.storage_gas_price(),
+                    "YJYJ: InvalidStoragePrice"
+                );
                 return Err(LedgerError::InvalidStoragePrice);
             }
             let tx_fee_tip = GasCost::from(balance as Value).checked_sub(tx_fee_burned)?;
@@ -454,6 +460,11 @@ impl LedgerState {
     #[must_use]
     pub const fn aged_utxos(&self) -> &UtxoTree {
         self.cryptarchia_ledger.aged_utxos()
+    }
+
+    #[must_use]
+    pub const fn cryptarchia_ledger(&self) -> &CryptarchiaLedger {
+        &self.cryptarchia_ledger
     }
 
     #[must_use]

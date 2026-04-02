@@ -3,7 +3,7 @@ use lb_chain_service::Slot;
 use lb_core::{
     block::Block,
     header::{ContentId, Header, HeaderId},
-    mantle::SignedMantleTx,
+    mantle::{SignedMantleTx, gas::GasPrice},
     proofs::leader_proof::Groth16LeaderProof,
 };
 use serde::Serialize;
@@ -59,6 +59,10 @@ pub struct ApiProcessedBlockEvent {
     pub tip: HeaderId,
     /// The current Last Irreversible Block after processing this block.
     pub lib: HeaderId,
+    /// Execution gas price of the epoch in which `tip` was processed.
+    pub execution_gas_price: GasPrice,
+    /// Storage gas price of the epoch in which `tip` was processed.
+    pub storage_gas_price: GasPrice,
 }
 
 impl From<BlockWithChainState<SignedMantleTx>> for ApiProcessedBlockEvent {
@@ -67,6 +71,8 @@ impl From<BlockWithChainState<SignedMantleTx>> for ApiProcessedBlockEvent {
             block: value.block,
             tip: value.tip,
             lib: value.lib,
+            execution_gas_price: value.execution_gas_price,
+            storage_gas_price: value.storage_gas_price,
         }
     }
 }

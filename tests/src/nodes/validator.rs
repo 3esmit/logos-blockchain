@@ -58,9 +58,8 @@ pub struct Validator {
 
 impl Drop for Validator {
     fn drop(&mut self) {
-        if std::thread::panicking()
-            && let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-node")
-        {
+        // if std::thread::panicking()
+        if let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-node") {
             println!("failed to persist tempdir: {e}");
         }
 
@@ -179,6 +178,7 @@ impl Validator {
 
     pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
+        println!("created tempdir at {}", dir.path().display());
         let mut user_config_file = NamedTempFile::new().unwrap();
         let mut deployment_config_file = NamedTempFile::new().unwrap();
 

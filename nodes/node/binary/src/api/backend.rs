@@ -47,7 +47,7 @@ use crate::{
     WalletService,
     api::{
         handlers::{
-            channel, channel_deposit, leader_claim, post_activity, post_declaration,
+            channel, channel_deposit, leader_claim, ledger_state, post_activity, post_declaration,
             post_withdrawal,
         },
         openapi::ApiDoc,
@@ -205,6 +205,10 @@ where
             .route(
                 paths::CRYPTARCHIA_LIB_STREAM,
                 routing::get(cryptarchia_lib_stream::<RuntimeServiceId>),
+            )
+            .route(
+                paths::LEDGER_STATE,
+                routing::get(ledger_state::<RuntimeServiceId>),
             )
             .route(
                 paths::NETWORK_INFO,

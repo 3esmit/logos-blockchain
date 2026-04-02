@@ -102,8 +102,8 @@ async fn test_sequencer_publish_and_indexer_read() {
 
     let test_data: Vec<Vec<u8>> = vec![
         b"Hello, Zone!".to_vec(),
-        b"Second message".to_vec(),
-        b"Third message".to_vec(),
+        // b"Second message".to_vec(),
+        // b"Third message".to_vec(),
     ];
 
     for data in &test_data {

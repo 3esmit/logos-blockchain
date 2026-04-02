@@ -26,7 +26,9 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, genesis_tx::GenesisTx,
+        AuthenticatedMantleTx, Transaction, TxHash,
+        gas::{GasPrice, MainnetGasConstants},
+        genesis_tx::GenesisTx,
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
@@ -194,6 +196,10 @@ pub struct ProcessedBlockEvent {
     pub tip: HeaderId,
     /// The current Last Irreversible Block after processing this block.
     pub lib: HeaderId,
+    /// Execution gas price of the epoch in which `tip` was processed.
+    pub execution_gas_price: GasPrice,
+    /// Storage gas price of the epoch in which `tip` was processed.
+    pub storage_gas_price: GasPrice,
 }
 
 impl PrunedBlocksInfo {
@@ -952,10 +958,16 @@ where
         )
         .await?;
 
+        let tip_ledger_state = cryptarchia
+            .ledger
+            .state(&cryptarchia.tip())
+            .expect("ledger state for tip should exist");
         let processed_block_event = ProcessedBlockEvent {
             block_id: header.id(),
             tip: cryptarchia.tip(),
             lib: cryptarchia.lib(),
+            execution_gas_price: *tip_ledger_state.cryptarchia_ledger().execution_base_fee(),
+            storage_gas_price: *tip_ledger_state.cryptarchia_ledger().storage_gas_price(),
         };
         if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
             error!("Could not notify new block to services {e}");
@@ -1128,10 +1140,20 @@ where
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip();
+        let init_tip_ledger_state = cryptarchia
+            .ledger
+            .state(&init_tip)
+            .expect("Ledger state for tip should exist");
         let init_event = ProcessedBlockEvent {
             block_id: init_tip,
             tip: init_tip,
             lib: cryptarchia.lib(),
+            execution_gas_price: *init_tip_ledger_state
+                .cryptarchia_ledger()
+                .execution_base_fee(),
+            storage_gas_price: *init_tip_ledger_state
+                .cryptarchia_ledger()
+                .storage_gas_price(),
         };
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
             error!("Could not notify new block to services {e}");

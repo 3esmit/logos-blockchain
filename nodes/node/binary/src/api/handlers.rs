@@ -258,6 +258,26 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::LEDGER_STATE,
+    responses(
+        (status = 200, description = "Request the ledger state of the tip block"),
+        (status = 500, description = "Internal server error", body = StreamBody),
+    )
+)]
+pub async fn ledger_state<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(consensus::cryptarchia_ledger_state::<RuntimeServiceId>(
+        &handle
+    ))
+}
+
+#[utoipa::path(
+    get,
     path = paths::NETWORK_INFO,
     responses(
         (status = 200, description = "Query the network information", body = lb_network_service::backends::libp2p::Libp2pInfo),

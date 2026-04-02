@@ -728,7 +728,7 @@ pub mod tests {
     impl LedgerState {
         #[cfg(test)]
         #[must_use]
-        pub fn set_execution_base_fee(self, new_execution_fee: Gas) -> Self {
+        pub fn set_execution_base_fee(self, new_execution_fee: GasPrice) -> Self {
             Self {
                 execution_base_fee: new_execution_fee,
                 ..self
@@ -886,13 +886,13 @@ pub mod tests {
                 lottery_1,
             },
             stake_inference,
-            fee_window: [0u64; 120],
-            average_execution_gas: 0u64,
+            fee_window: [0.into(); 120],
+            average_execution_gas: 0.into(),
             block_density,
-            execution_base_fee: 0u64,
-            storage_gas_ema: 0u64,
-            storage_gas_price: 1u64,
-            storage_gas_consumed_in_epoch: 0u64,
+            execution_base_fee: 0.into(),
+            storage_gas_ema: 0.into(),
+            storage_gas_price: 1.into(),
+            storage_gas_consumed_in_epoch: 0.into(),
         }
     }
 
@@ -1255,8 +1255,8 @@ pub mod tests {
         let transfer_op = TransferOp::new(inputs, outputs);
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op.clone())],
-            execution_gas_price: 1,
-            storage_gas_price: 1,
+            execution_gas_price: 1.into(),
+            storage_gas_price: 1.into(),
         };
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap();
         (
@@ -1597,38 +1597,71 @@ pub mod tests {
     #[test]
     fn test_storage_market_update() {
         // empty epoch
-        assert_eq!((437, 340), update_storage_market(500, 0, 681));
+        assert_eq!(
+            (437.into(), 340.into()),
+            update_storage_market(500.into(), 0.into(), 681.into())
+        );
 
         // Some random values
         // 1) raw = 113 * 1.125 = 127.125 -> 127
-        assert_eq!((127, 450), update_storage_market(113, 600, 300));
+        assert_eq!(
+            (127.into(), 450.into()),
+            update_storage_market(113.into(), 600.into(), 300.into())
+        );
 
         // 2) raw = 113 * 0.875 = 98.875 -> 98
-        assert_eq!((98, 500), update_storage_market(113, 200, 800));
+        assert_eq!(
+            (98.into(), 500.into()),
+            update_storage_market(113.into(), 200.into(), 800.into())
+        );
 
         // 3) raw = 221 * 1.125 = 248.625 -> 248
-        assert_eq!((248, 550), update_storage_market(221, 900, 200));
+        assert_eq!(
+            (248.into(), 550.into()),
+            update_storage_market(221.into(), 900.into(), 200.into())
+        );
 
         // 4) raw = 221 * 0.875 = 193.375 -> 193
-        assert_eq!((193, 500), update_storage_market(221, 100, 900));
+        assert_eq!(
+            (193.into(), 500.into()),
+            update_storage_market(221.into(), 100.into(), 900.into())
+        );
 
         // 5) raw = 345 * 1.125 = 388.125 -> 388
-        assert_eq!((388, 165), update_storage_market(345, 250, 80));
+        assert_eq!(
+            (388.into(), 165.into()),
+            update_storage_market(345.into(), 250.into(), 80.into())
+        );
 
         // 6) raw = 345 * 0.875 = 301.875 -> 301
-        assert_eq!((301, 400), update_storage_market(345, 50, 750));
+        assert_eq!(
+            (301.into(), 400.into()),
+            update_storage_market(345.into(), 50.into(), 750.into())
+        );
 
         // 7) raw = 517 * 1.125 = 581.625 -> 581
-        assert_eq!((581, 160), update_storage_market(517, 220, 100));
+        assert_eq!(
+            (581.into(), 160.into()),
+            update_storage_market(517.into(), 220.into(), 100.into())
+        );
 
         // 8) raw = 517 * 0.875 = 452.375 -> 452
-        assert_eq!((452, 485), update_storage_market(517, 120, 850));
+        assert_eq!(
+            (452.into(), 485.into()),
+            update_storage_market(517.into(), 120.into(), 850.into())
+        );
 
         // 9) raw = 999 * 1.125 = 1123.875 -> 1123
-        assert_eq!((1123, 650), update_storage_market(999, 1000, 300));
+        assert_eq!(
+            (1123.into(), 650.into()),
+            update_storage_market(999.into(), 1000.into(), 300.into())
+        );
 
         // 10) raw = 999 * 0.875 = 874.125 -> 874
-        assert_eq!((874, 650), update_storage_market(999, 300, 1000));
+        assert_eq!(
+            (874.into(), 650.into()),
+            update_storage_market(999.into(), 300.into(), 1000.into())
+        );
     }
 
     #[test]
@@ -1637,9 +1670,9 @@ pub mod tests {
         let mut ledger = LedgerState::from_utxos([], &config(), Fr::ZERO);
 
         // Some random values to test
-        let old_avg = 1_596_688;
-        let old_price = 113;
-        let gas_used = 1_596_618;
+        let old_avg = 1_596_688.into();
+        let old_price = 113.into();
+        let gas_used = 1_596_618.into();
         // 1) G_avg = (1596618 + 9*1596688)/10 = 1596681
         // price = 113 * (1 + 1 / 12_773_440) = 113.00000884648146 -> 113
         ledger.execution_base_fee = old_price;
@@ -1647,12 +1680,12 @@ pub mod tests {
         ledger = ledger.update_execution_market(gas_used);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (113, 1_596_681)
+            (113.into(), 1_596_681.into())
         );
 
-        let old_avg = 1_596_676;
-        let old_price = 221;
-        let gas_used = 1_596_706;
+        let old_avg = 1_596_676.into();
+        let old_price = 221.into();
+        let gas_used = 1_596_706.into();
         // 2) G_avg = (1596706 + 9*1596676)/10 = 1596679
         // price = 221 * (1 - 1 / 12_773_440) = 220.99998269847435 -> 220
         ledger.execution_base_fee = old_price;
@@ -1660,12 +1693,12 @@ pub mod tests {
         ledger = ledger.update_execution_market(gas_used);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (220, 1_596_679)
+            (220.into(), 1_596_679.into())
         );
 
-        let old_avg = 1_597_925;
-        let old_price = 345;
-        let gas_used = 1_597_815;
+        let old_avg = 1_597_925.into();
+        let old_price = 345.into();
+        let gas_used = 1_597_815.into();
         // 3) G_avg = (1597815 + 9*1597925)/10 = 1597914
         // price = 345 * (1 + 1234 / 12_773_440) = 345.0333293145777 -> 345
         ledger.execution_base_fee = old_price;
@@ -1673,12 +1706,12 @@ pub mod tests {
         ledger = ledger.update_execution_market(gas_used);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (345, 1_597_914)
+            (345.into(), 1_597_914.into())
         );
 
-        let old_avg = 1_592_354;
-        let old_price = 517;
-        let gas_used = 1_592_404;
+        let old_avg = 1_592_354.into();
+        let old_price = 517.into();
+        let gas_used = 1_592_404.into();
         // 4) G_avg = (1592404 + 9*1592354)/10 = 1592359
         // price = 517 * (1 - 4321 / 12_773_440) = 516.8251092109878 -> 516
         ledger.execution_base_fee = old_price;
@@ -1686,12 +1719,12 @@ pub mod tests {
         ledger = ledger.update_execution_market(gas_used);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (516, 1_592_359)
+            (516.into(), 1_592_359.into())
         );
 
-        let old_avg = 1_604_466;
-        let old_price = 999;
-        let gas_used = 1_604_376;
+        let old_avg = 1_604_466.into();
+        let old_price = 999.into();
+        let gas_used = 1_604_376.into();
         // 5) G_avg = (1604376 + 9*1604466)/10 = 1604457
         // price = 999 * (1 + 7777 / 12_773_440) = 999.6082326295813 -> 999
         ledger.execution_base_fee = old_price;
@@ -1699,7 +1732,7 @@ pub mod tests {
         ledger = ledger.update_execution_market(gas_used);
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (999, 1_604_457)
+            (999.into(), 1_604_457.into())
         );
     }
 }

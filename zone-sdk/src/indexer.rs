@@ -165,6 +165,11 @@ impl ZoneIndexer {
             for block in blocks {
                 let block_slot: u64 = block.header.slot.into();
 
+                println!(
+                    "a block received: slot:{block_slot}, txs:{}",
+                    block.transactions.len()
+                );
+
                 for tx in &block.transactions {
                     for op in &tx.mantle_tx.ops {
                         if let Op::ChannelInscribe(inscribe) = op

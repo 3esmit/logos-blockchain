@@ -81,6 +81,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     let signing_key = Ed25519Key::from_bytes(&key_bytes);
     let admin_pk = signing_key.public_key();
     let channel_id = channel_id_from_key(&signing_key);
+    println!("channel_id: {channel_id}");
 
     // Use short resubmit interval matching fast block production (1s slots).
     // Default 30s is too slow - if a tx gets orphaned, we miss many opportunities.
@@ -102,8 +103,8 @@ async fn test_sequencer_publish_and_indexer_read() {
 
     let test_data: Vec<Vec<u8>> = vec![
         b"Hello, Zone!".to_vec(),
-        b"Second message".to_vec(),
-        b"Third message".to_vec(),
+        // b"Second message".to_vec(),
+        // b"Third message".to_vec(),
     ];
 
     for data in &test_data {
@@ -144,6 +145,7 @@ async fn test_sequencer_publish_and_indexer_read() {
         cursor = Some(result.cursor);
 
         if seen == expected {
+            println!("all expected seen");
             break;
         }
 

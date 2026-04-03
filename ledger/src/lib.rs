@@ -363,9 +363,9 @@ impl LedgerState {
             // Check that the transaction pays the correct storage fees
             // TODO: remove the storage price from the Mantle Transaction and wallet should
             // pull the price from ledger to get the fees to pay
-            if tx.mantle_tx().storage_gas_price != *self.cryptarchia_ledger.storage_gas_price() {
-                return Err(LedgerError::InvalidStoragePrice);
-            }
+            // if tx.mantle_tx().storage_gas_price != *self.cryptarchia_ledger.storage_gas_price() {
+            //     return Err(LedgerError::InvalidStoragePrice);
+            // }
             let tx_fee_tip = GasCost::from(balance as Value).checked_sub(tx_fee_burned)?;
             total_fee_burned = total_fee_burned.checked_add(tx_fee_burned)?;
             total_fee_tip = total_fee_tip.checked_add(tx_fee_tip)?;

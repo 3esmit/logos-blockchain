@@ -222,6 +222,7 @@ where
                 crate::metrics::chainsync_observe_download_blocks_err();
             })
             .map_err(Error::BlockProvider)?;
+        debug!(?peer, ?target, "a download initiated");
 
         Ok(Some(Download::new(peer, target, stream)))
     }
@@ -302,11 +303,7 @@ where
         NetAdapter::PeerId: 'a,
         NetAdapter::Block: 'a,
     {
-        debug!(
-            "Handling a block received from {:?}: {:?}",
-            download.peer(),
-            block
-        );
+        debug!("Handling a block received from {:?}", download.peer());
 
         self.block_processor
             .process_block(block)

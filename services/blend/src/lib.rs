@@ -151,7 +151,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_secs(60)),
+            None,
             MembershipService<EdgeService>,
             PreloadKmsService<_>
         )

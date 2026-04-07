@@ -378,7 +378,7 @@ where
         // Wait for other service (except ChainLeader) to become ready, with timeout.
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            None,
             BlendService,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,

@@ -33,12 +33,7 @@ where
             ServiceData<Message = BackendNetworkMsg<Adapter::Backend, RuntimeServiceId>>,
         RuntimeServiceId: AsServiceId<NetworkService> + Debug + Display + Send + Sync + 'static,
     {
-        wait_until_services_are_ready!(
-            &overwatch_handle,
-            Some(Duration::from_secs(60)),
-            NetworkService
-        )
-        .await?;
+        wait_until_services_are_ready!(&overwatch_handle, None, NetworkService).await?;
         let relay = overwatch_handle.relay::<NetworkService>().await?;
         let adapter = Adapter::new(relay);
         Ok(Self {

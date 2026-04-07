@@ -253,7 +253,7 @@ where
 
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            None,
             lb_storage_service::StorageService<_, _>,
             Cryptarchia,
             Kms

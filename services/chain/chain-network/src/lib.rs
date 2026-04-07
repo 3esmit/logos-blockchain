@@ -252,7 +252,7 @@ where
 
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            None,
             Cryptarchia,
             NetworkService<_, _>,
             TxMempoolService<_, _, _, _>,

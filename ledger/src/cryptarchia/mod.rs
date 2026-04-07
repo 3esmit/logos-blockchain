@@ -599,7 +599,7 @@ impl LedgerState {
             average_execution_gas: 0.into(),
             execution_base_fee: 0.into(),
             storage_gas_ema: 0.into(),
-            storage_gas_price: 1.into(),
+            storage_gas_price: 0.into(),
             storage_gas_consumed_in_epoch: 0.into(),
         }
     }

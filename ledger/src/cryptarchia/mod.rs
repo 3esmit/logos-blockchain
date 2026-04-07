@@ -9,6 +9,7 @@ use lb_core::{
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
+        genesis_tx::GENESIS_STORAGE_GAS_PRICE,
         ops::transfer::TransferOp,
     },
     proofs::leader_proof::{self, LeaderPublic},
@@ -599,7 +600,7 @@ impl LedgerState {
             average_execution_gas: 0.into(),
             execution_base_fee: 0.into(),
             storage_gas_ema: 0.into(),
-            storage_gas_price: 1.into(),
+            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             storage_gas_consumed_in_epoch: 0.into(),
         }
     }
@@ -891,7 +892,7 @@ pub mod tests {
             block_density,
             execution_base_fee: 0.into(),
             storage_gas_ema: 0.into(),
-            storage_gas_price: 1.into(),
+            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             storage_gas_consumed_in_epoch: 0.into(),
         }
     }
@@ -1256,7 +1257,7 @@ pub mod tests {
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op.clone())],
             execution_gas_price: 1.into(),
-            storage_gas_price: 1.into(),
+            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         };
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap();
         (

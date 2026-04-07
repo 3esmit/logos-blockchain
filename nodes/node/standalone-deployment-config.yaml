@@ -57,7 +57,7 @@ cryptarchia:
             parent: "0000000000000000000000000000000000000000000000000000000000000000"
             signer: "0000000000000000000000000000000000000000000000000000000000000000"
       execution_gas_price: 0
-      storage_gas_price: 0
+      storage_gas_price: 1
     ops_proofs:
       - !ZkSig
         pi_a: [

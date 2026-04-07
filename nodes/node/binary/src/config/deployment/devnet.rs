@@ -121,7 +121,7 @@ cryptarchia:
           zk_id: ea7c784a570634bb4afb67553336984a9ce40eec02ed3d9249bd6d093b281f30
           locked_note_id: f31739eb4397e7e117a6422d84eb89388765c86d4d2a912625a6d821a4bbe701
       execution_gas_price: 0
-      storage_gas_price: 0
+      storage_gas_price: 1
     ops_proofs:
     - !ZkSig
         pi_a: [

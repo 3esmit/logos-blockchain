@@ -755,7 +755,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
             1.into(),
-            1.into(),
+            0.into(),
         );
         let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
@@ -764,7 +764,7 @@ mod tests {
             vec![output_note],
             &[sk],
             1.into(),
-            1.into(),
+            0.into(),
         );
 
         // Create a dummy proof (using same structure as in cryptarchia tests)
@@ -1367,12 +1367,14 @@ mod tests {
 
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
+        // Build a tx whose storage_gas_price (1) does NOT match the genesis
+        // ledger's storage_gas_price (0), so it must be rejected.
         let tx = create_tx(
             vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
             1.into(),
-            0.into(),
+            1.into(),
         );
         let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
@@ -1381,7 +1383,7 @@ mod tests {
             vec![output_note],
             &[sk],
             1.into(),
-            0.into(),
+            1.into(),
         );
 
         let result = ledger
@@ -1402,9 +1404,9 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
             1.into(),
-            1.into(),
+            0.into(),
         );
-        // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
+        // Pays 2705 fees = 2705 execution base fee + 0 execution tip + 0 storage
         let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(
@@ -1412,7 +1414,7 @@ mod tests {
             vec![output_note],
             &[sk],
             1.into(),
-            1.into(),
+            0.into(),
         );
 
         let result = ledger
@@ -1443,10 +1445,9 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
             1.into(),
-            1.into(),
+            0.into(),
         );
-        // The tx ays 2925 fees = 2705 execution base fee + 0 execution tip + 220
-        // storage
+        // The tx pays 2705 fees = 2705 execution base fee + 0 execution tip + 0 storage
         let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(
@@ -1454,7 +1455,7 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
             1.into(),
-            1.into(),
+            0.into(),
         );
 
         let result = ledger
@@ -1468,9 +1469,9 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
             2.into(),
-            1.into(),
+            0.into(),
         );
-        // The tx ays 5630 fees = 2705 execution base fee + 2705 execution tip + 220
+        // The tx pays 5410 fees = 2705 execution base fee + 2705 execution tip + 0
         // storage
         let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx).unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
@@ -1479,7 +1480,7 @@ mod tests {
             vec![output_note],
             &[sk],
             2.into(),
-            1.into(),
+            0.into(),
         );
         let result = ledger
             .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));

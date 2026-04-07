@@ -1034,8 +1034,8 @@ where
             .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
     }
 
-    /// Retrieves the blocks in the range from `from` to `to` from the storage.
-    /// Both `from` and `to` are included in the range.
+    /// Retrieves the blocks in the range from `from` (exclusive) to `to`
+    /// (inclusive) from the storage.
     /// This is implemented here, and not as a method of `StorageAdapter`, to
     /// simplify the panic and error message handling.
     ///
@@ -1052,7 +1052,8 @@ where
     ///
     /// # Returns
     ///
-    /// A vector of blocks in the range from `from` to `to`.
+    /// A vector of blocks in the range from `from` (exclusive) to `to`
+    /// (inclusive).
     /// If no blocks are found, returns an empty vector.
     /// If any of the [`HeaderId`]s are invalid, returns an error with the first
     /// invalid header id.
@@ -1061,9 +1062,10 @@ where
         to: HeaderId,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) -> Vec<Block<Tx>> {
-        // Due to the blocks traversal order, this yields `to..from` order
+        // Due to the blocks traversal order, this yields `[to..from)` order
         let blocks = futures::stream::unfold(to, async |header_id| {
             if header_id == from {
+                // Don't load the `from` block since the range is exclusive of `from`.
                 None
             } else {
                 let block = storage_adapter
@@ -1077,7 +1079,7 @@ where
             }
         });
 
-        // To avoid confusion, the order is reversed so it fits the natural `from..to`
+        // To avoid confusion, the order is reversed so it fits the natural `(from..to]`
         // order
         blocks.collect::<Vec<_>>().await.into_iter().rev().collect()
     }
@@ -1118,13 +1120,10 @@ where
             self.state.lib_block_length,
         );
 
-        // We reapply blocks here instead of saving ledger states to correcly make use
-        // of structural sharing If forking is low, this might not be necessary
+        // Load blocks from LIB (exclusive) to tip (inclusive) from storage.
+        // These blocks will be applied to `cryptarchia` below.
         let blocks =
             Self::get_blocks_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
-
-        // Skip LIB block since it's already applied
-        let blocks = blocks.into_iter().skip(1);
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip();

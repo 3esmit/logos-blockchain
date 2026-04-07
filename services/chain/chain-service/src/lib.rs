@@ -1075,6 +1075,10 @@ where
                         panic!("Could not retrieve block {to} from storage during recovery")
                     });
                 let parent_header_id = block.header().parent();
+                debug!(
+                    target: LOG_TARGET, id = ?header_id, parent = ?parent_header_id,
+                    "loaded block from storage",
+                );
                 Some((block, parent_header_id))
             }
         });

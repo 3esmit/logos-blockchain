@@ -39,7 +39,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::oneshot;
-use tracing::{Level, debug, error, info, instrument, span, trace};
+use tracing::{Level, debug, error, info, span, trace};
 use tracing_futures::Instrument as _;
 
 pub use crate::{
@@ -598,7 +598,6 @@ where
 /// Try to add a [`Block`] to [`Cryptarchia`].
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
-#[instrument(level = "debug", skip(cryptarchia, mempool_adapter))]
 async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceId>(
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,

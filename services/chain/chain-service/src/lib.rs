@@ -55,7 +55,7 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
     time::Instant,
 };
-use tracing::{Level, debug, error, info, instrument, span, trace, warn};
+use tracing::{Level, debug, error, info, span, trace, warn};
 use tracing_futures::Instrument as _;
 
 pub use crate::bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig};
@@ -906,11 +906,6 @@ where
     /// A [`Block`] is only added if it's valid.
     /// Otherwise, the [`Cryptarchia`] is unchanged and an error is returned.
     #[expect(clippy::allow_attributes_without_reason)]
-    #[instrument(
-        level = "debug",
-        skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
-        fields(block_id = %block.header().id(), tx_count = block.transactions().count(), current_slot = ?current_slot)
-    )]
     async fn process_block(
         cryptarchia: &mut Cryptarchia,
         block: Block<Tx>,

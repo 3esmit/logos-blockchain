@@ -599,10 +599,6 @@ where
         clippy::too_many_arguments,
         reason = "All arguments are required for proposing a block"
     )]
-    #[instrument(
-        level = "debug",
-        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key)
-    )]
     async fn propose_block(
         parent: HeaderId,
         slot: Slot,

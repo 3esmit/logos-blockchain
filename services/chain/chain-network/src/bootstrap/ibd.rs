@@ -13,7 +13,7 @@ use lb_core::{
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     Error as ChainError, IbdConfig,
@@ -127,6 +127,7 @@ where
             return Ok(self.block_processor);
         }
 
+        info!("starting IBD with {} peers", config.peers.len());
         let downloads = self.initiate_downloads(config).await?;
         self.proceed_downloads(downloads).await
     }
@@ -202,6 +203,11 @@ where
         let initial_cryptarchia_info = self.block_processor.info().await?;
 
         // Request a block stream.
+        debug!(
+            ?target, local_tip = ?initial_cryptarchia_info.tip, local_tip_height = initial_cryptarchia_info.height,
+            local_lib = ?initial_cryptarchia_info.lib, ?peer,
+            "requesting blocks from peer",
+        );
         let stream = self
             .network
             .request_blocks_from_peer(

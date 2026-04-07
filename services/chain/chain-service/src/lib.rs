@@ -1095,6 +1095,7 @@ where
     /// * `ledger_config` - The ledger configuration.
     /// * `relays` - The relays object containing all the necessary relays for
     ///   the consensus.
+    #[expect(clippy::cognitive_complexity, reason = "logs")]
     async fn initialize_cryptarchia(
         &self,
         bootstrap_config: &BootstrapConfig,
@@ -1102,6 +1103,11 @@ where
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         current_slot: Slot,
     ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
+        info!(
+            target: LOG_TARGET, tip = ?self.state.tip, lib = ?self.state.lib, lib_height = self.state.lib_block_length, genesis = ?self.state.genesis_id,
+            "initializing cryptarchia from state recovery",
+        );
+
         let lib_id = self.state.lib;
         let genesis_id = self.state.genesis_id;
         let state = choose_engine_state(
@@ -1122,8 +1128,13 @@ where
 
         // Load blocks from LIB (exclusive) to tip (inclusive) from storage.
         // These blocks will be applied to `cryptarchia` below.
+        info!(
+            target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
+            "loading blocks from storage: (lib, tip]",
+        );
         let blocks =
             Self::get_blocks_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
+        info!(target: LOG_TARGET, "loaded {} blocks from storage: (lib, tip]", blocks.len());
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip();
@@ -1138,7 +1149,8 @@ where
         Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip, relays, None).await;
 
         let mut pruned_blocks = PrunedBlocks::new();
-        for block in blocks {
+        let n_blocks = blocks.len();
+        for (i, block) in blocks.into_iter().enumerate() {
             match Self::process_block(
                 &mut cryptarchia,
                 block,
@@ -1150,6 +1162,7 @@ where
             .await
             {
                 Ok((new_pruned_blocks, _)) => {
+                    debug!(target: LOG_TARGET, "{}/{} blocks applied during initialization", i + 1, n_blocks);
                     pruned_blocks.extend(&new_pruned_blocks);
                 }
                 Err(e) => {
@@ -1157,6 +1170,11 @@ where
                 }
             }
         }
+
+        info!(
+            target: LOG_TARGET, tip_height = cryptarchia.consensus.tip_branch().length(), lib_height = cryptarchia.consensus.lib_branch().length(),
+            "{n_blocks} blocks recovered. finishing initialization",
+        );
 
         (cryptarchia, pruned_blocks)
     }

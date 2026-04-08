@@ -19,7 +19,7 @@ use crate::{
     Error as ChainError, IbdConfig,
     bootstrap::download::{Delay, Download, Downloads, DownloadsOutput},
     mempool::adapter::MempoolAdapter,
-    network::NetworkAdapter,
+    network::{BoxedStream, NetworkAdapter},
 };
 
 pub trait IbdBlockProcessor<B> {
@@ -178,19 +178,7 @@ where
         latest_downloaded_block: Option<HeaderId>,
     ) -> Result<Option<Download<NetAdapter::PeerId, NetAdapter::Block>>, Error> {
         // Get the most recent peer's tip.
-        let tip_response = self
-            .network
-            .request_tip(peer)
-            .await
-            .map_err(Error::BlockProvider)?;
-
-        // Use the peer's tip as the target for the download.
-        let target = match tip_response {
-            GetTipResponse::Tip { tip, .. } => tip,
-            GetTipResponse::Failure(reason) => {
-                return Err(Error::BlockProvider(DynError::from(reason)));
-            }
-        };
+        let target = self.fetch_download_target(peer).await?;
 
         if self.block_processor.has_processed_block(target).await? {
             debug!(
@@ -201,15 +189,47 @@ where
         }
 
         let initial_cryptarchia_info = self.block_processor.info().await?;
-
+        // Use the peer's tip as the target for the download.
         // Request a block stream.
+        let stream = self
+            .request_download_stream(
+                peer,
+                target,
+                initial_cryptarchia_info,
+                latest_downloaded_block,
+            )
+            .await?;
+        debug!(?peer, ?target, "a download initiated");
+
+        Ok(Some(Download::new(peer, target, stream)))
+    }
+
+    async fn fetch_download_target(&self, peer: NetAdapter::PeerId) -> Result<HeaderId, Error> {
+        match self
+            .network
+            .request_tip(peer)
+            .await
+            .map_err(Error::BlockProvider)?
+        {
+            GetTipResponse::Tip { tip, .. } => Ok(tip),
+            GetTipResponse::Failure(reason) => Err(Error::BlockProvider(DynError::from(reason))),
+        }
+    }
+
+    async fn request_download_stream(
+        &self,
+        peer: NetAdapter::PeerId,
+        target: HeaderId,
+        initial_cryptarchia_info: CryptarchiaInfo,
+        latest_downloaded_block: Option<HeaderId>,
+    ) -> Result<BoxedStream<Result<(HeaderId, NetAdapter::Block), DynError>>, Error> {
         debug!(
             ?target, local_tip = ?initial_cryptarchia_info.tip, local_tip_height = initial_cryptarchia_info.height,
             local_lib = ?initial_cryptarchia_info.lib, ?peer,
             "requesting blocks from peer",
         );
-        let stream = self
-            .network
+
+        self.network
             .request_blocks_from_peer(
                 peer,
                 target,
@@ -221,10 +241,7 @@ where
             .inspect_err(|_e| {
                 crate::metrics::chainsync_observe_download_blocks_err();
             })
-            .map_err(Error::BlockProvider)?;
-        debug!(?peer, ?target, "a download initiated");
-
-        Ok(Some(Download::new(peer, target, stream)))
+            .map_err(Error::BlockProvider)
     }
 
     /// Proceeds [`Downloads`] by reading/processing blocks.
@@ -444,7 +461,6 @@ mod tests {
     use tokio_stream::wrappers::BroadcastStream;
 
     use super::*;
-    use crate::network::BoxedStream;
 
     #[tokio::test]
     async fn no_peers_configured() {

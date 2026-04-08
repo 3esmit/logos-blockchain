@@ -1113,18 +1113,11 @@ where
     /// * `ledger_config` - The ledger configuration.
     /// * `relays` - The relays object containing all the necessary relays for
     ///   the consensus.
-    async fn initialize_cryptarchia(
+    fn initialize_cryptarchia_from_state(
         &self,
         bootstrap_config: &BootstrapConfig,
         ledger_config: lb_ledger::Config,
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        current_slot: Slot,
-    ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
-        info!(
-            target: LOG_TARGET, tip = ?self.state.tip, lib = ?self.state.lib, lib_height = self.state.lib_block_length, genesis = ?self.state.genesis_id,
-            "initializing cryptarchia from state recovery",
-        );
-
+    ) -> Cryptarchia {
         let lib_id = self.state.lib;
         let genesis_id = self.state.genesis_id;
         let state = choose_engine_state(
@@ -1133,7 +1126,8 @@ where
             bootstrap_config,
             self.state.last_engine_state.as_ref(),
         );
-        let mut cryptarchia = Cryptarchia::from_lib(
+
+        Cryptarchia::from_lib(
             lib_id,
             self.state.lib_ledger_state.clone(),
             genesis_id,
@@ -1141,38 +1135,53 @@ where
             state,
             self.state.lib_block_slot,
             self.state.lib_block_length,
-        );
+        )
+    }
 
-        // Stream the already applied state.
+    fn notify_initial_tip(&self, cryptarchia: &Cryptarchia) {
         let init_tip = cryptarchia.tip_branch();
-        let init_event = {
-            let lib = cryptarchia.lib_branch();
-            ProcessedBlockEvent {
-                block_id: init_tip.id(),
-                tip: init_tip.id(),
-                tip_slot: init_tip.slot(),
-                lib: lib.id(),
-                lib_slot: lib.slot(),
-            }
+        let lib = cryptarchia.lib_branch();
+        let init_event = ProcessedBlockEvent {
+            block_id: init_tip.id(),
+            tip: init_tip.id(),
+            tip_slot: init_tip.slot(),
+            lib: lib.id(),
+            lib_slot: lib.slot(),
         };
+
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
             error!("Could not notify new block to services {e}");
         }
-        Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
+    }
 
+    async fn load_recovered_block_ids(
+        &self,
+        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+    ) -> Vec<HeaderId> {
         // Phase 1: Collect only block IDs from LIB to tip.
         info!(
-            target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
+            target: LOG_TARGET, lib = ?self.state.lib, tip = ?self.state.tip,
             "loading block IDs from storage: (lib, tip]",
         );
         let ids =
-            Self::get_block_ids_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
+            Self::get_block_ids_in_range(self.state.lib, self.state.tip, relays.storage_adapter())
+                .await;
         info!(target: LOG_TARGET, "collected {} block IDs from storage: (lib, tip]", ids.len());
+        ids
+    }
 
+    async fn replay_recovered_blocks(
+        &self,
+        cryptarchia: &mut Cryptarchia,
+        block_ids: Vec<HeaderId>,
+        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+        current_slot: Slot,
+    ) -> PrunedBlocks<HeaderId> {
         // Phase 2: Load each block individually (lib→tip order) and apply it.
         let mut pruned_blocks = PrunedBlocks::new();
-        let n_blocks = ids.len();
-        for (i, id) in ids.into_iter().enumerate() {
+        let n_blocks = block_ids.len();
+
+        for (i, id) in block_ids.into_iter().enumerate() {
             let block = relays
                 .storage_adapter()
                 .get_block(&id)
@@ -1181,7 +1190,7 @@ where
                     panic!("Could not retrieve block {id:?} from storage during initialization")
                 });
             match Self::process_block(
-                &mut cryptarchia,
+                cryptarchia,
                 block,
                 current_slot,
                 relays,
@@ -1199,6 +1208,35 @@ where
                 }
             }
         }
+
+        pruned_blocks
+    }
+
+    async fn initialize_cryptarchia(
+        &self,
+        bootstrap_config: &BootstrapConfig,
+        ledger_config: lb_ledger::Config,
+        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+        current_slot: Slot,
+    ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
+        info!(
+            target: LOG_TARGET, tip = ?self.state.tip, lib = ?self.state.lib, lib_height = self.state.lib_block_length, genesis = ?self.state.genesis_id,
+            "initializing cryptarchia from state recovery",
+        );
+
+        let mut cryptarchia =
+            self.initialize_cryptarchia_from_state(bootstrap_config, ledger_config);
+
+        // Stream the already applied state.
+        self.notify_initial_tip(&cryptarchia);
+        let init_tip = cryptarchia.tip_branch().id();
+        Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip, relays, None).await;
+
+        let ids = self.load_recovered_block_ids(relays).await;
+        let n_blocks = ids.len();
+        let pruned_blocks = self
+            .replay_recovered_blocks(&mut cryptarchia, ids, relays, current_slot)
+            .await;
 
         info!(
             target: LOG_TARGET, tip_height = cryptarchia.consensus.tip_branch().length(), lib_height = cryptarchia.consensus.lib_branch().length(),

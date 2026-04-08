@@ -94,6 +94,22 @@ impl Behaviour {
         }
     }
 
+    fn log_inbound_max_capacity(connection_id: ConnectionId, peer: PeerId) {
+        tracing::trace!(target: LOG_TARGET, "Connected peer {peer:?} on connection {connection_id:?} will not be upgraded since we are already at maximum incoming connection capacity.");
+    }
+
+    fn log_inbound_small_network(connection_id: ConnectionId, peer: PeerId) {
+        tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} because membership size is too small.");
+    }
+
+    fn log_inbound_core_peer(connection_id: ConnectionId, peer: PeerId) {
+        tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?}.");
+    }
+
+    fn log_inbound_edge_upgrade(connection_id: ConnectionId, peer: PeerId) {
+        tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?}.");
+    }
+
     #[must_use]
     fn available_connection_slots(&self) -> usize {
         self.max_incoming_connections
@@ -170,25 +186,27 @@ impl NetworkBehaviour for Behaviour {
         // If the new peer makes the set of incoming connections too large, do not try
         // to upgrade the connection.
         if self.upgraded_edge_peers.len() >= self.max_incoming_connections {
-            tracing::trace!(target: LOG_TARGET, "Connected peer {peer:?} on connection {connection_id:?} will not be upgraded since we are already at maximum incoming connection capacity.");
+            Self::log_inbound_max_capacity(connection_id, peer);
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
         // Allow only inbound connections from edge nodes, if the Blend network is large
         // enough.
-        Ok(if !self.is_network_large_enough() {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} because membership size is too small.");
-            Either::Right(DummyConnectionHandler)
-        } else if self.current_membership.contains(&peer) {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?}.");
-            Either::Right(DummyConnectionHandler)
-        } else {
-            tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?}.");
-            Either::Left(ConnectionHandler::new(
-                self.connection_timeout,
-                self.protocol_name.clone(),
-            ))
-        })
+        if !self.is_network_large_enough() {
+            Self::log_inbound_small_network(connection_id, peer);
+            return Ok(Either::Right(DummyConnectionHandler));
+        }
+
+        if self.current_membership.contains(&peer) {
+            Self::log_inbound_core_peer(connection_id, peer);
+            return Ok(Either::Right(DummyConnectionHandler));
+        }
+
+        Self::log_inbound_edge_upgrade(connection_id, peer);
+        Ok(Either::Left(ConnectionHandler::new(
+            self.connection_timeout,
+            self.protocol_name.clone(),
+        )))
     }
 
     fn handle_established_outbound_connection(

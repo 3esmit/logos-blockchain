@@ -26,7 +26,10 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_libp2p::{DialOpts, SwarmEvent};
-use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
+use libp2p::{
+    Multiaddr, PeerId, Swarm, SwarmBuilder,
+    swarm::{ConnectionId, dial_opts::PeerCondition},
+};
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};
 
@@ -284,8 +287,7 @@ where
     fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) {
         match event {
             SwarmEvent::ConnectionEstablished { .. } | SwarmEvent::ConnectionClosed { .. } => {
-                let connected_count = self.swarm.connected_peers().count();
-                metrics::peers_connected(connected_count);
+                self.update_connected_peers_metric();
             }
             SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithCore(
                 e,
@@ -305,32 +307,46 @@ where
                 connection_id,
                 error,
             } => {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "Dialing error for peer: {peer_id:?} on connection: {connection_id:?}. Error: {error:?}"
-                );
-                // We don't retry if `peer_id` is `None` or if we've achieved the maximum number
-                // of retries for this peer.
-                let Some(peer_id) = peer_id else {
-                    self.check_and_dial_new_peers_except(None);
-                    return;
-                };
-
-                match self.retry_dial(peer_id) {
-                    SessionDialAttempt::PreviousSession => {
-                        tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials. No retry will be performed.");
-                    }
-                    SessionDialAttempt::OngoingSession(Some(_)) => {
-                        self.check_and_dial_new_peers_except(Some(peer_id));
-                    }
-                    // Retry in progress.
-                    SessionDialAttempt::OngoingSession(None) => {}
-                }
+                self.handle_outgoing_connection_error(peer_id, connection_id, &error);
             }
             _ => {
                 tracing::trace!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
                 tracing::trace!(counter.ignored_event = 1);
             }
+        }
+    }
+
+    fn update_connected_peers_metric(&self) {
+        let connected_count = self.swarm.connected_peers().count();
+        metrics::peers_connected(connected_count);
+    }
+
+    fn handle_outgoing_connection_error(
+        &mut self,
+        peer_id: Option<PeerId>,
+        connection_id: ConnectionId,
+        error: &libp2p::swarm::DialError,
+    ) {
+        tracing::warn!(
+            target: LOG_TARGET,
+            "Dialing error for peer: {peer_id:?} on connection: {connection_id:?}. Error: {error:?}"
+        );
+        // We don't retry if `peer_id` is `None` or if we've achieved the maximum number
+        // of retries for this peer.
+        let Some(peer_id) = peer_id else {
+            self.check_and_dial_new_peers_except(None);
+            return;
+        };
+
+        match self.retry_dial(peer_id) {
+            SessionDialAttempt::PreviousSession => {
+                tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials. No retry will be performed.");
+            }
+            SessionDialAttempt::OngoingSession(Some(_)) => {
+                self.check_and_dial_new_peers_except(Some(peer_id));
+            }
+            // Retry in progress.
+            SessionDialAttempt::OngoingSession(None) => {}
         }
     }
 

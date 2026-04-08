@@ -59,45 +59,59 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
         match self.swarm.broadcast(&topic, message.to_vec()) {
             Ok(id) => {
-                tracing::trace!("Broadcasted message with id: {id} to topic: {topic}");
-                // self-notification because libp2p doesn't do it
-                if self.swarm.is_subscribed(&topic) {
-                    log_error!(self.pubsub_messages_tx.send(gossipsub::Message {
-                        source: None,
-                        data: message.into(),
-                        sequence_number: None,
-                        topic: topic_hash(&topic),
-                    }));
-                }
+                self.handle_broadcast_success(&topic, message, &id);
             }
             Err(gossipsub::PublishError::InsufficientPeers) if retry_count < MAX_RETRY => {
-                let wait = exp_backoff(retry_count);
-                tracing::trace!(
-                    "failed to broadcast message to topic due to insufficient peers, trying again in {wait:?}"
-                );
-
-                let commands_tx = self.commands_tx.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(wait).await;
-                    let Some(new_retry_count) = retry_count.checked_add(1) else {
-                        tracing::error!("retry count overflow.");
-                        return;
-                    };
-
-                    commands_tx
-                        .send(Command::PubSub(PubSubCommand::RetryBroadcast {
-                            topic,
-                            message,
-                            retry_count: new_retry_count,
-                        }))
-                        .await
-                        .unwrap_or_else(|_| tracing::error!("could not schedule retry"));
-                });
+                self.schedule_retry(topic, message, retry_count);
             }
             Err(e) => {
                 tracing::error!("failed to broadcast message to topic: {topic} {e:?}");
             }
         }
+    }
+
+    fn handle_broadcast_success(
+        &mut self,
+        topic: &str,
+        message: Box<[u8]>,
+        id: &gossipsub::MessageId,
+    ) {
+        tracing::trace!("Broadcasted message with id: {id} to topic: {topic}");
+        // self-notification because libp2p doesn't do it
+        if self.swarm.is_subscribed(topic) {
+            log_error!(self.pubsub_messages_tx.send(gossipsub::Message {
+                source: None,
+                data: message.into(),
+                sequence_number: None,
+                topic: topic_hash(topic),
+            }));
+        }
+    }
+
+    fn schedule_retry(&self, topic: Topic, message: Box<[u8]>, retry_count: usize) {
+        let wait = exp_backoff(retry_count);
+        tracing::trace!(
+            "failed to broadcast message to topic due to insufficient peers, trying again in {wait:?}"
+        );
+
+        let commands_tx = self.commands_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let Some(new_retry_count) = retry_count.checked_add(1) else {
+                tracing::error!("retry count overflow.");
+                return;
+            };
+
+            // Retry in progress.
+            commands_tx
+                .send(Command::PubSub(PubSubCommand::RetryBroadcast {
+                    topic,
+                    message,
+                    retry_count: new_retry_count,
+                }))
+                .await
+                .unwrap_or_else(|_| tracing::error!("could not schedule retry"));
+        });
     }
 
     pub(super) fn handle_gossipsub_event(&self, event: gossipsub::Event) {

@@ -13,51 +13,82 @@ use crate::behaviour::nat::state_machine::{
 impl OnEvent for State<MappedPublic> {
     fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
         match event {
-            Event::ExternalAddressConfirmed(addr) | Event::AutonatClientTestOk(addr)
-                if self.state.external_address() == &addr =>
-            {
-                command_tx.force_send(Command::ScheduleAutonatClientTest(addr));
-                self
+            Event::ExternalAddressConfirmed(addr) => {
+                (*self).on_external_address_confirmed(addr, command_tx)
             }
-            Event::AutonatClientTestFailed(addr) if self.state.external_address() == &addr => {
-                self.boxed(MappedPublic::into_test_if_public)
-            }
+            Event::AutonatClientTestOk(addr) => (*self).on_autonat_client_test_ok(addr, command_tx),
+            Event::AutonatClientTestFailed(addr) => (*self).on_autonat_client_test_failed(&addr),
             Event::AddressMappingFailed(addr) if self.state.external_address() == &addr => {
                 self.boxed(MappedPublic::into_private)
             }
             Event::DefaultGatewayChanged { local_address, .. } => {
-                if let Some(addr) = local_address {
-                    command_tx.force_send(Command::MapAddress(addr));
-                    self.boxed(MappedPublic::into_try_map_address)
-                } else {
-                    self.boxed(MappedPublic::into_private)
-                }
-            }
-            Event::ExternalAddressConfirmed(addr) => {
-                warn!(
-                    "State<MappedPublic>: ignoring external address confirmation for {} (expected {}).",
-                    addr,
-                    self.state.external_address(),
-                );
-                self
-            }
-            Event::AutonatClientTestOk(addr) => {
-                warn!(
-                    "State<MappedPublic>: ignoring autonat success for {} (expected {}).",
-                    addr,
-                    self.state.external_address(),
-                );
-                self
-            }
-            Event::AutonatClientTestFailed(addr) => {
-                warn!(
-                    "State<MappedPublic>: Ignoring failed autonat test for mismatched address {} (expected {}).",
-                    addr,
-                    self.state.external_address(),
-                );
-                self
+                (*self).on_default_gateway_changed(local_address, command_tx)
             }
             _ => self,
+        }
+    }
+}
+
+impl State<MappedPublic> {
+    fn on_external_address_confirmed(
+        self,
+        addr: libp2p::Multiaddr,
+        command_tx: &CommandTx,
+    ) -> Box<dyn OnEvent> {
+        if self.state.external_address() == &addr {
+            command_tx.force_send(Command::ScheduleAutonatClientTest(addr));
+        } else {
+            warn!(
+                "State<MappedPublic>: ignoring external address confirmation for {} (expected {}).",
+                addr,
+                self.state.external_address(),
+            );
+        }
+
+        Box::new(self)
+    }
+
+    fn on_autonat_client_test_ok(
+        self,
+        addr: libp2p::Multiaddr,
+        command_tx: &CommandTx,
+    ) -> Box<dyn OnEvent> {
+        if self.state.external_address() == &addr {
+            command_tx.force_send(Command::ScheduleAutonatClientTest(addr));
+        } else {
+            warn!(
+                "State<MappedPublic>: ignoring autonat success for {} (expected {}).",
+                addr,
+                self.state.external_address(),
+            );
+        }
+
+        Box::new(self)
+    }
+
+    fn on_autonat_client_test_failed(self, addr: &libp2p::Multiaddr) -> Box<dyn OnEvent> {
+        if self.state.external_address() == addr {
+            self.boxed(MappedPublic::into_test_if_public)
+        } else {
+            warn!(
+                "State<MappedPublic>: Ignoring failed autonat test for mismatched address {} (expected {}).",
+                addr,
+                self.state.external_address(),
+            );
+            Box::new(self)
+        }
+    }
+
+    fn on_default_gateway_changed(
+        self,
+        local_address: Option<libp2p::Multiaddr>,
+        command_tx: &CommandTx,
+    ) -> Box<dyn OnEvent> {
+        if let Some(addr) = local_address {
+            command_tx.force_send(Command::MapAddress(addr));
+            self.boxed(MappedPublic::into_try_map_address)
+        } else {
+            self.boxed(MappedPublic::into_private)
         }
     }
 }

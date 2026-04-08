@@ -252,41 +252,14 @@ where
     pub async fn tick(&mut self, new_tick: SlotTick) -> Option<EpochEvent> {
         // We try to validate the new tick, else we restore the last valid one that we
         // had.
-        let validated_slot_tick = if let Some(last_slot_tick) = self.last_processed_tick.take() {
-            last_slot_tick.transition_to(new_tick).inspect_err(|()| {
-                tracing::error!(target: LOG_TARGET, "Slot ticks are assumed to be always increasing, and epoch ticks are assumed to never be decreasing.");
-                self.last_processed_tick = Some(last_slot_tick);
-            }).ok()?
-        } else {
-            new_tick.into()
-        };
+        let validated_slot_tick = self.validate_slot_tick(new_tick)?;
         self.last_processed_tick = Some(validated_slot_tick);
 
-        if let Some(last_processed_epoch) = self
-            .epoch_tracking_state
-            .as_ref()
-            .map(EpochTrackingState::last_processed_epoch)
-            && last_processed_epoch == new_tick.epoch
-        {
-            tracing::trace!(target: LOG_TARGET, "New slot for same epoch. Skipping...");
-            // We know we're in the same epoch, so we only check if the previous epoch is
-            // expired, and notify consumers about it.
-            if self.check_and_consume_past_epoch_transition_period(validated_slot_tick) {
-                return Some(EpochEvent::OldEpochTransitionPeriodExpired);
-            }
-            return None;
+        if self.is_same_epoch(new_tick) {
+            return self.handle_same_epoch_tick(validated_slot_tick);
         }
 
-        tracing::debug!(target: LOG_TARGET, "Found epoch unseen before. Retrieving its state...");
-        let Some(epoch_state) = self
-            .chain_service
-            .get_epoch_state_for_slot(new_tick.slot)
-            .await
-        else {
-            tracing::warn!(target: LOG_TARGET, "Failed to get epoch state for slot.  Skipping...");
-            return None;
-        };
-        tracing::debug!(target: LOG_TARGET, "Retrieved epoch state for unseen epoch: {:?}.", epoch_state);
+        let epoch_state = self.fetch_epoch_state(new_tick).await?;
 
         // This is true if epochs are shorter than transition periods. It's not likely
         // to happen in production, but we must still account for this
@@ -319,12 +292,59 @@ where
         let epoch_event = if should_notify_about_two_epochs_back
             || self.check_and_consume_past_epoch_transition_period(validated_slot_tick)
         {
-            EpochEvent::NewEpochAndOldEpochTransitionExpired((epoch_state.into(), new_tick.epoch))
+            EpochEvent::NewEpochAndOldEpochTransitionExpired((epoch_state, new_tick.epoch))
         } else {
-            EpochEvent::NewEpoch((epoch_state.into(), new_tick.epoch))
+            EpochEvent::NewEpoch((epoch_state, new_tick.epoch))
         };
 
         Some(epoch_event)
+    }
+
+    fn validate_slot_tick(&mut self, new_tick: SlotTick) -> Option<ValidatedSlotTick> {
+        self.last_processed_tick.take().map_or_else(
+            || Some(new_tick.into()),
+            |last_slot_tick| {
+                last_slot_tick
+                    .transition_to(new_tick)
+                    .inspect_err(|()| {
+                        tracing::error!(target: LOG_TARGET, "Slot ticks are assumed to be always increasing, and epoch ticks are assumed to never be decreasing.");
+                        self.last_processed_tick = Some(last_slot_tick);
+                    })
+                    .ok()
+            },
+        )
+    }
+
+    fn is_same_epoch(&self, new_tick: SlotTick) -> bool {
+        self.epoch_tracking_state
+            .as_ref()
+            .map(EpochTrackingState::last_processed_epoch)
+            .is_some_and(|last_processed_epoch| last_processed_epoch == new_tick.epoch)
+    }
+
+    fn handle_same_epoch_tick(
+        &mut self,
+        validated_slot_tick: ValidatedSlotTick,
+    ) -> Option<EpochEvent> {
+        tracing::trace!(target: LOG_TARGET, "New slot for same epoch. Skipping...");
+        // We know we're in the same epoch, so we only check if the previous epoch is
+        // expired, and notify consumers about it.
+        self.check_and_consume_past_epoch_transition_period(validated_slot_tick)
+            .then_some(EpochEvent::OldEpochTransitionPeriodExpired)
+    }
+
+    async fn fetch_epoch_state(&self, new_tick: SlotTick) -> Option<LeaderInputsMinusQuota> {
+        tracing::debug!(target: LOG_TARGET, "Found epoch unseen before. Retrieving its state...");
+        let Some(epoch_state) = self
+            .chain_service
+            .get_epoch_state_for_slot(new_tick.slot)
+            .await
+        else {
+            tracing::warn!(target: LOG_TARGET, "Failed to get epoch state for slot.  Skipping...");
+            return None;
+        };
+        tracing::debug!(target: LOG_TARGET, "Retrieved epoch state for unseen epoch: {:?}.", epoch_state);
+        Some(epoch_state.into())
     }
 
     // If we have witnessed a new epoch being transitioned and we have passed its

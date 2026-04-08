@@ -27,35 +27,8 @@ where
 {
     pub async fn new(overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Result<Self, Error> {
         let service_id = <RuntimeServiceId as AsServiceId<Service>>::SERVICE_ID;
-        info!(target = LOG_TARGET, "Starting service {service_id:}");
-        overwatch_handle
-            .start_service::<Service>()
-            .await
-            .map_err(|e| Error::Overwatch(Box::new(e)))?;
-
-        info!(
-            target = LOG_TARGET,
-            "Waiting until service {service_id:} is ready"
-        );
-        if let Err(e) = wait_until_services_are_ready!(
-            &overwatch_handle,
-            Some(Duration::from_secs(60)),
-            Service
-        )
-        .await
-        {
-            debug!(target: LOG_TARGET, "Service took too long to start. Shutting it down again...");
-            kill_service(&overwatch_handle).await;
-            return Err(e.into());
-        }
-
-        let relay = match overwatch_handle.relay::<Service>().await {
-            Ok(relay) => relay,
-            Err(e) => {
-                kill_service(&overwatch_handle).await;
-                return Err(e.into());
-            }
-        };
+        Self::start_and_wait_ready(&overwatch_handle, service_id).await?;
+        let relay = Self::get_relay_or_shutdown(&overwatch_handle).await?;
 
         Ok(Self {
             relay,
@@ -85,6 +58,44 @@ where
             .wait_for(ServiceStatus::Stopped, Some(timeout))
             .await
             .map(|_| ())
+    }
+
+    async fn start_and_wait_ready(
+        overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        service_id: RuntimeServiceId,
+    ) -> Result<(), Error> {
+        info!(target = LOG_TARGET, "Starting service {service_id:}");
+        overwatch_handle
+            .start_service::<Service>()
+            .await
+            .map_err(|e| Error::Overwatch(Box::new(e)))?;
+
+        info!(
+            target = LOG_TARGET,
+            "Waiting until service {service_id:} is ready"
+        );
+        if let Err(e) =
+            wait_until_services_are_ready!(overwatch_handle, Some(Duration::from_secs(60)), Service)
+                .await
+        {
+            debug!(target: LOG_TARGET, "Service took too long to start. Shutting it down again...");
+            kill_service(overwatch_handle).await;
+            return Err(e.into());
+        }
+
+        Ok(())
+    }
+
+    async fn get_relay_or_shutdown(
+        overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+    ) -> Result<OutboundRelay<Service::Message>, Error> {
+        match overwatch_handle.relay::<Service>().await {
+            Ok(relay) => Ok(relay),
+            Err(e) => {
+                kill_service(overwatch_handle).await;
+                Err(e.into())
+            }
+        }
     }
 }
 

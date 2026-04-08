@@ -350,6 +350,77 @@ impl Behaviour {
             waker.wake_by_ref();
         }
     }
+
+    fn poll_sending_block_requests(&mut self, cx: &mut Context<'_>) -> bool {
+        if let Poll::Ready(Some(result)) = self.sending_block_requests.poll_next_unpin(cx) {
+            match result {
+                Ok(request_stream) => {
+                    self.handle_blocks_request_available(request_stream);
+                }
+                Err(e) => {
+                    error!("Error while processing block download request: {}", e);
+                }
+            }
+
+            return true;
+        }
+
+        false
+    }
+
+    fn poll_sending_tip_requests(&mut self, cx: &mut Context<'_>) -> bool {
+        if let Poll::Ready(Some(result)) = self.sending_tip_requests.poll_next_unpin(cx) {
+            match result {
+                Ok(request_stream) => {
+                    self.handle_tip_request_available(request_stream);
+                }
+                Err(e) => {
+                    error!("Error while processing tip request: {}", e);
+                }
+            }
+
+            return true;
+        }
+
+        false
+    }
+
+    fn poll_sending_responses(&mut self, cx: &mut Context<'_>) -> bool {
+        if let Poll::Ready(Some(result)) = self.sending_block_responses.poll_next_unpin(cx) {
+            if let Err(e) = result {
+                error!("Sending response failed: {}", e);
+            }
+
+            self.try_notify_waker();
+
+            return true;
+        }
+
+        if let Poll::Ready(Some(result)) = self.sending_tip_responses.poll_next_unpin(cx) {
+            if let Err(e) = result {
+                error!("Sending response failed: {}", e);
+            }
+
+            self.try_notify_waker();
+            return true;
+        }
+
+        false
+    }
+
+    fn poll_receiving_requests(&mut self, cx: &mut Context<'_>) -> Option<Poll<ToSwarmEvent>> {
+        if let Poll::Ready(Some(result)) = self.receiving_requests.poll_next_unpin(cx) {
+            return Some(match result {
+                Ok(request_stream) => self.handle_request_ready(request_stream),
+                Err(e) => {
+                    error!("Error while processing incoming request: {}", e);
+                    Poll::Pending
+                }
+            });
+        }
+
+        None
+    }
 }
 
 impl NetworkBehaviour for Behaviour {
@@ -441,29 +512,11 @@ impl NetworkBehaviour for Behaviour {
             debug!("Incoming stream closed");
         }
 
-        if let Poll::Ready(Some(result)) = self.sending_block_requests.poll_next_unpin(cx) {
-            match result {
-                Ok(request_stream) => {
-                    self.handle_blocks_request_available(request_stream);
-                }
-                Err(e) => {
-                    error!("Error while processing block download request: {}", e);
-                }
-            }
-
+        if self.poll_sending_block_requests(cx) {
             return Poll::Pending;
         }
 
-        if let Poll::Ready(Some(result)) = self.sending_tip_requests.poll_next_unpin(cx) {
-            match result {
-                Ok(request_stream) => {
-                    self.handle_tip_request_available(request_stream);
-                }
-                Err(e) => {
-                    error!("Error while processing tip request: {}", e);
-                }
-            }
-
+        if self.poll_sending_tip_requests(cx) {
             return Poll::Pending;
         }
 
@@ -475,32 +528,12 @@ impl NetworkBehaviour for Behaviour {
             return Poll::Pending;
         }
 
-        if let Poll::Ready(Some(result)) = self.sending_block_responses.poll_next_unpin(cx) {
-            if let Err(e) = result {
-                error!("Sending response failed: {}", e);
-            }
-
-            self.try_notify_waker();
-
+        if self.poll_sending_responses(cx) {
             return Poll::Pending;
         }
 
-        if let Poll::Ready(Some(result)) = self.sending_tip_responses.poll_next_unpin(cx) {
-            if let Err(e) = result {
-                error!("Sending response failed: {}", e);
-            }
-
-            self.try_notify_waker();
-            return Poll::Pending;
-        }
-
-        if let Poll::Ready(Some(result)) = self.receiving_requests.poll_next_unpin(cx) {
-            match result {
-                Ok(request_stream) => return self.handle_request_ready(request_stream),
-                Err(e) => {
-                    error!("Error while processing incoming request: {}", e);
-                }
-            }
+        if let Some(result) = self.poll_receiving_requests(cx) {
+            return result;
         }
 
         if let Poll::Ready(Some((peer_id, stream))) = self.incoming_streams.poll_next_unpin(cx) {

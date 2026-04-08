@@ -9,42 +9,56 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     pub(super) fn handle_identify_event(&mut self, event: identify::Event) {
         match event {
             identify::Event::Received { peer_id, info, .. } => {
-                tracing::trace!(
-                    "Identified peer {} with addresses {:?}",
-                    peer_id,
-                    info.listen_addrs
-                );
-                let kad_protocol_names = self
-                    .swarm
-                    .get_kademlia_protocol_names()
-                    .collect::<HashSet<_>>();
-                if info
-                    .protocols
-                    .iter()
-                    .any(|p| kad_protocol_names.contains(&p))
-                {
-                    tracing::trace!(
-                        "Adding discovered node to Kademlia, seen addresses: {:?}",
-                        info.listen_addrs
-                    );
-                    // we need to add the peer to the kademlia routing table
-                    // in order to enable peer discovery
-                    for addr in &info.listen_addrs {
-                        if !is_kademlia_candidate_address(addr) {
-                            tracing::trace!(
-                                "Skipping non-routable identify address for Kademlia: {}",
-                                addr
-                            );
-                            continue;
-                        }
-                        self.swarm.kademlia_add_address(peer_id, addr);
-                    }
-                }
+                self.handle_identify_received_event(peer_id, &info);
             }
             event => {
                 tracing::trace!("Identify event: {:?}", event);
             }
         }
+    }
+
+    fn handle_identify_received_event(
+        &mut self,
+        peer_id: lb_libp2p::PeerId,
+        info: &identify::Info,
+    ) {
+        tracing::trace!(
+            "Identified peer {} with addresses {:?}",
+            peer_id,
+            info.listen_addrs
+        );
+
+        if !self.supports_kademlia(info) {
+            return;
+        }
+
+        tracing::trace!(
+            "Adding discovered node to Kademlia, seen addresses: {:?}",
+            info.listen_addrs
+        );
+
+        // we need to add the peer to the kademlia routing table
+        // in order to enable peer discovery
+        for addr in &info.listen_addrs {
+            if !is_kademlia_candidate_address(addr) {
+                tracing::trace!(
+                    "Skipping non-routable identify address for Kademlia: {}",
+                    addr
+                );
+                continue;
+            }
+            self.swarm.kademlia_add_address(peer_id, addr);
+        }
+    }
+
+    fn supports_kademlia(&self, info: &identify::Info) -> bool {
+        let kad_protocol_names = self
+            .swarm
+            .get_kademlia_protocol_names()
+            .collect::<HashSet<_>>();
+        info.protocols
+            .iter()
+            .any(|p| kad_protocol_names.contains(&p))
     }
 }
 

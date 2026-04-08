@@ -380,31 +380,24 @@ where
     loop {
         tokio::select! {
             Some(SessionEvent::NewSession(new_session_info)) = remaining_session_stream.next() => {
-                match handle_new_session(&new_session_info, settings.clone(), &mut current_pol_info_and_message_handler, overwatch_handle.clone()) {
-                    Err(Error::NetworkIsTooSmall(_)) => {
-                        info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        error!(target: LOG_TARGET, "Error when handling new session: {e:?}, edge service shutting down.");
-                        return Err(e);
-                    }
-                    Ok(()) => {
-                        // We need to keep track of this for now because message handlers are initialized with a membership info. Exposing a simple `rotate_epoch` will allow us to avoid tracking this value here.
-                        current_membership_info = new_session_info;
-                    }
+                if let Some(updated_membership_info) = handle_run_new_session_event(
+                    &new_session_info,
+                    settings.clone(),
+                    &mut current_pol_info_and_message_handler,
+                    overwatch_handle.clone(),
+                )? {
+                    current_membership_info = updated_membership_info;
+                } else {
+                    return Ok(());
                 }
             }
             Some(message) = incoming_message_stream.next() => {
-                // TODO: Investigate why secret PoL info at times arrives after the block proposal.
-                let Some(handler) = current_pol_info_and_message_handler.as_mut().map(|(_, handler)| handler) else {
-                    tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
-                    continue;
-                };
-                let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
-                for _ in 0..message_copies {
-                    handler.handle_message_to_blend(message.clone()).await;
-                }
+                handle_run_incoming_message(
+                    &message,
+                    &settings,
+                    &mut current_pol_info_and_message_handler,
+                )
+                .await;
             }
             Some(clock_tick) = clock_stream.next() => {
                 handle_clock_event(clock_tick, &mut epoch_handler, &mut current_pol_info_and_message_handler).await;
@@ -413,6 +406,69 @@ where
                 handle_new_secret_epoch_info(&new_secret_pol_info, settings.clone(), overwatch_handle, &current_membership_info, &mut current_pol_info_and_message_handler);
             }
         }
+    }
+}
+
+fn handle_run_new_session_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
+    new_session_info: &MembershipInfo<NodeId>,
+    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+    current_pol_info_and_message_handler: &mut Option<
+        EpochInfoAndHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
+    >,
+    overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+) -> Result<Option<MembershipInfo<NodeId>>, Error>
+where
+    Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    NodeId: Clone + Eq + Hash + Send + 'static,
+    ProofsGenerator: LeaderProofsGenerator,
+    RuntimeServiceId: Clone,
+{
+    match handle_new_session(
+        new_session_info,
+        settings,
+        current_pol_info_and_message_handler,
+        overwatch_handle,
+    ) {
+        // We need to keep track of this for now because message handlers are initialized with a
+        // membership info. Exposing a simple `rotate_epoch` will allow us to avoid tracking this
+        // value here.
+        Ok(()) => Ok(Some(new_session_info.clone())),
+        Err(Error::NetworkIsTooSmall(_)) => {
+            info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
+            Ok(None)
+        }
+        Err(e) => {
+            error!(target: LOG_TARGET, "Error when handling new session: {e:?}, edge service shutting down.");
+            Err(e)
+        }
+    }
+}
+
+async fn handle_run_incoming_message<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
+    message: &[u8],
+    settings: &RunningSettings<Backend, NodeId, RuntimeServiceId>,
+    current_pol_info_and_message_handler: &mut Option<
+        EpochInfoAndHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
+    >,
+) where
+    Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync,
+    NodeId: Clone + Eq + Hash + Send + 'static,
+    ProofsGenerator: LeaderProofsGenerator + Send,
+    RuntimeServiceId: Clone,
+{
+    // TODO: Investigate why secret PoL info at times arrives after the block
+    // proposal.
+    let Some(handler) = current_pol_info_and_message_handler
+        .as_mut()
+        .map(|(_, handler)| handler)
+    else {
+        tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
+        return;
+    };
+
+    let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
+    for _ in 0..message_copies {
+        handler.handle_message_to_blend(message.to_vec()).await;
     }
 }
 

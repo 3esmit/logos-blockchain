@@ -716,14 +716,36 @@ where
             RuntimeServiceId,
         >,
     ) {
+        if !Self::apply_block_proposal(&block, chain_network_api).await {
+            return;
+        }
+
+        Self::publish_block_proposal(block, proposal_strategy).await;
+    }
+
+    async fn apply_block_proposal(
+        block: &Block<Mempool::Item>,
+        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
+    ) -> bool {
         if let Err(e) = chain_network_api
             .apply_block_and_reconcile_mempool(block.clone())
             .await
         {
             error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
-            return;
+            return false;
         }
+        true
+    }
 
+    async fn publish_block_proposal(
+        block: Block<Mempool::Item>,
+        proposal_strategy: BlockProposalStrategy<
+            '_,
+            BlendService,
+            NetworkAdapter,
+            RuntimeServiceId,
+        >,
+    ) {
         match proposal_strategy {
             BlockProposalStrategy::Blend(blend_adapter) => {
                 debug!(target: LOG_TARGET, "Successfully applied our own proposed block. Publishing it to the blend network: {:?}", block.header().id());

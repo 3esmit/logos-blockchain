@@ -62,12 +62,53 @@ pub struct RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
     leader_proofs_generator: Option<RealLeaderProofsGenerator>,
 }
 
-impl<CorePoQGenerator> RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
+impl<CorePoQGenerator> RealCoreAndLeaderProofsGenerator<CorePoQGenerator>
+where
+    CorePoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
+{
     #[cfg(test)]
     pub const fn override_settings(&mut self, new_settings: ProofsGeneratorSettings) {
         self.core_proofs_generator.settings = new_settings;
         if let Some(leader_proofs_generator) = &mut self.leader_proofs_generator {
             leader_proofs_generator.settings = new_settings;
+        }
+    }
+
+    fn rotate_core_epoch(&mut self, new_epoch_public: LeaderInputs, new_epoch: Epoch) {
+        match self.core_proofs_generator.current_epoch().cmp(&new_epoch) {
+            Ordering::Less => {
+                tracing::info!(target: LOG_TARGET, "Rotating epoch...");
+                self.core_proofs_generator.rotate_epoch(new_epoch_public);
+            }
+            Ordering::Equal => {
+                tracing::debug!(target: LOG_TARGET, "Core proofs generator already on the new epoch, ignoring the new public epoch info received.");
+            }
+            Ordering::Greater => {
+                panic!(
+                    "Public epoch info should never provide an epoch smaller than what the core proofs generator returns as current, as the public epoch info should never lag behind."
+                );
+            }
+        }
+    }
+
+    fn rotate_leader_epoch(&mut self, new_epoch: Epoch) {
+        let Some(leader_proofs_generator) = self.leader_proofs_generator.take() else {
+            return;
+        };
+
+        match leader_proofs_generator.current_epoch().cmp(&new_epoch) {
+            Ordering::Less => {
+                tracing::debug!(target: LOG_TARGET, "Stopping old epoch leadership proofs generator until new secret PoL info is provided.");
+            }
+            Ordering::Equal => {
+                tracing::debug!(target: LOG_TARGET, "Leadership proofs generator already on the new epoch, ignoring the new public epoch info received.");
+                self.leader_proofs_generator = Some(leader_proofs_generator);
+            }
+            Ordering::Greater => {
+                panic!(
+                    "Secret PoL info for new epoch should never provide an epoch greater than what the public epoch info returns, as the two should always be yielded together, or at most the secret PoL info would lag behind if the node has no or close to no stake."
+                );
+            }
         }
     }
 }
@@ -95,39 +136,8 @@ where
     // generator if it's still on the previous epoch. If not, `rotate_epoch` is
     // effectively a no-op.
     fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, new_epoch: Epoch) {
-        match self.core_proofs_generator.current_epoch().cmp(&new_epoch) {
-            Ordering::Less => {
-                tracing::info!(target: LOG_TARGET, "Rotating epoch...");
-                self.core_proofs_generator.rotate_epoch(new_epoch_public);
-            }
-            Ordering::Equal => {
-                tracing::debug!(target: LOG_TARGET, "Core proofs generator already on the new epoch, ignoring the new public epoch info received.");
-            }
-            Ordering::Greater => {
-                panic!(
-                    "Public epoch info should never provide an epoch smaller than what the core proofs generator returns as current, as the public epoch info should never lag behind."
-                );
-            }
-        }
-
-        let Some(leader_proofs_generator) = self.leader_proofs_generator.take() else {
-            return;
-        };
-
-        match leader_proofs_generator.current_epoch().cmp(&new_epoch) {
-            Ordering::Less => {
-                tracing::debug!(target: LOG_TARGET, "Stopping old epoch leadership proofs generator until new secret PoL info is provided.");
-            }
-            Ordering::Equal => {
-                tracing::debug!(target: LOG_TARGET, "Leadership proofs generator already on the new epoch, ignoring the new public epoch info received.");
-                self.leader_proofs_generator = Some(leader_proofs_generator);
-            }
-            Ordering::Greater => {
-                panic!(
-                    "Secret PoL info for new epoch should never provide an epoch greater than what the public epoch info returns, as the two should always be yielded together, or at most the secret PoL info would lag behind if the node has no or close to no stake."
-                );
-            }
-        }
+        self.rotate_core_epoch(new_epoch_public, new_epoch);
+        self.rotate_leader_epoch(new_epoch);
     }
 
     // Creates a new leader proofs generator with the provided public+private

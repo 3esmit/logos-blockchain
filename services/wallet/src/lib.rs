@@ -383,7 +383,6 @@ where
         }
     }
 
-    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -409,72 +408,31 @@ where
                 funding_pks,
                 resp_tx,
             } => {
-                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
-                    Ok(tip) => tip,
-                    Err(err) => {
-                        Self::send_err(resp_tx, err);
-                        return;
-                    }
-                };
-
-                let funded = match state.wallet().fund_tx::<MainnetGasConstants>(
+                Self::handle_fund_tx_message(
                     tip,
-                    &tx_builder,
+                    tx_builder,
                     change_pk,
                     funding_pks,
-                ) {
-                    Ok(funded) => funded,
-                    Err(err) => {
-                        Self::send_err(resp_tx, WalletServiceError::from(err));
-                        return;
-                    }
-                };
-
-                if resp_tx
-                    .send(Ok(TipResponse {
-                        tip,
-                        response: funded,
-                    }))
-                    .is_err()
-                {
-                    error!("Failed to respond to FundTx");
-                }
+                    resp_tx,
+                    state.wallet(),
+                    cryptarchia,
+                )
+                .await;
             }
             WalletMsg::SignTx {
                 tip,
                 tx_builder,
                 resp_tx,
             } => {
-                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
-                    Ok(tip) => tip,
-                    Err(err) => {
-                        Self::send_err(resp_tx, err);
-                        return;
-                    }
-                };
-
-                let ledger = match cryptarchia.get_ledger_state(tip).await {
-                    Ok(Some(ledger)) => ledger,
-                    Ok(None) => {
-                        Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
-                        return;
-                    }
-                    Err(err) => {
-                        Self::send_err(resp_tx, WalletServiceError::from(err));
-                        return;
-                    }
-                };
-
-                let resp = Self::sign_tx(tx_builder, ledger, kms, state.wallet())
-                    .await
-                    .map(|signed_tx| TipResponse {
-                        tip,
-                        response: signed_tx,
-                    });
-
-                if resp_tx.send(resp).is_err() {
-                    error!("Failed to respond to SignTx");
-                }
+                Self::handle_sign_tx_message(
+                    tip,
+                    tx_builder,
+                    resp_tx,
+                    state.wallet(),
+                    cryptarchia,
+                    kms,
+                )
+                .await;
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, state.wallet(), cryptarchia).await;
@@ -497,6 +455,83 @@ where
             WalletMsg::GetGasContext { block_id, resp_tx } => {
                 Self::get_gas_context(block_id, resp_tx, cryptarchia).await;
             }
+        }
+    }
+
+    async fn handle_fund_tx_message(
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
+        wallet: &Wallet,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+            Ok(tip) => tip,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
+        let funded =
+            match wallet.fund_tx::<MainnetGasConstants>(tip, &tx_builder, change_pk, funding_pks) {
+                Ok(funded) => funded,
+                Err(err) => {
+                    Self::send_err(resp_tx, WalletServiceError::from(err));
+                    return;
+                }
+            };
+
+        if resp_tx
+            .send(Ok(TipResponse {
+                tip,
+                response: funded,
+            }))
+            .is_err()
+        {
+            error!("Failed to respond to FundTx");
+        }
+    }
+
+    async fn handle_sign_tx_message(
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        resp_tx: Sender<Result<TipResponse<SignedMantleTx>, WalletServiceError>>,
+        wallet: &Wallet,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) {
+        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+            Ok(tip) => tip,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+
+        let ledger = match cryptarchia.get_ledger_state(tip).await {
+            Ok(Some(ledger)) => ledger,
+            Ok(None) => {
+                Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
+                return;
+            }
+            Err(err) => {
+                Self::send_err(resp_tx, WalletServiceError::from(err));
+                return;
+            }
+        };
+
+        let resp = Self::sign_tx(tx_builder, ledger, kms, wallet)
+            .await
+            .map(|signed_tx| TipResponse {
+                tip,
+                response: signed_tx,
+            });
+
+        if resp_tx.send(resp).is_err() {
+            error!("Failed to respond to SignTx");
         }
     }
 
@@ -997,26 +1032,58 @@ where
         };
 
         let wallet_block = WalletBlock::from(block);
+        Self::apply_new_wallet_block(
+            wallet_block,
+            header_id,
+            state,
+            storage_adapter,
+            cryptarchia_api,
+        )
+        .await;
+    }
+
+    async fn apply_new_wallet_block(
+        wallet_block: WalletBlock,
+        header_id: HeaderId,
+        state: &mut ServiceState<'_>,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
         match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(block_id=?wallet_block.id, "Applied block to wallet");
             }
             Err(WalletError::UnknownBlock(block_id)) => {
-                debug!(block_id = ?block_id, "Missing block in wallet, backfilling");
-                if let Err(e) = Self::backfill_missing_blocks(
+                Self::backfill_wallet_block(
                     wallet_block.id,
+                    block_id,
+                    header_id,
                     state,
                     storage_adapter,
                     cryptarchia_api,
                 )
-                .await
-                {
-                    error!(block_id=?header_id, err=%e, "Failed to backfill missing block to wallet");
-                }
+                .await;
             }
             Err(e) => {
                 error!(err=%e, "unexexpected error while applying block to wallet");
             }
+        }
+    }
+
+    async fn backfill_wallet_block(
+        wallet_block_id: HeaderId,
+        missing_block_id: HeaderId,
+        header_id: HeaderId,
+        state: &mut ServiceState<'_>,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        debug!(block_id = ?missing_block_id, "Missing block in wallet, backfilling");
+        if let Err(e) =
+            Self::backfill_missing_blocks(wallet_block_id, state, storage_adapter, cryptarchia_api)
+                .await
+        {
+            error!(block_id=?header_id, err=%e, "Failed to backfill missing block to wallet");
         }
     }
 

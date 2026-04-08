@@ -126,6 +126,25 @@ where
         current_tip: HeaderId,
         lib: HeaderId,
     ) -> Result<(), OrphanEnqueueError> {
+        self.ensure_queue_has_capacity(block_id)?;
+        self.ensure_not_downloading(block_id)?;
+        self.ensure_not_queued(block_id)?;
+
+        self.pending_orphans_queue
+            .insert(block_id, OrphanInfo::new(block_id, current_tip, lib));
+        debug!(
+            target: LOG_TARGET,
+            ?block_id, ?current_tip, ?lib, queue_size = self.pending_orphans_queue.len(),
+            "Orphan block enqueued for sync"
+        );
+
+        metrics::orphan_blocks_enqueued_total();
+        metrics::orphan_blocks_pending(self.pending_orphans_queue.len());
+        self.wake();
+        Ok(())
+    }
+
+    fn ensure_queue_has_capacity(&self, block_id: HeaderId) -> Result<(), OrphanEnqueueError> {
         if self.pending_orphans_queue.len() >= self.max_pending_orphans.get() {
             warn!(
                 target: LOG_TARGET,
@@ -141,6 +160,10 @@ where
             });
         }
 
+        Ok(())
+    }
+
+    fn ensure_not_downloading(&self, block_id: HeaderId) -> Result<(), OrphanEnqueueError> {
         if let DownloaderState::Downloading(download) = &self.state
             && download.orphan_block_id() == block_id
         {
@@ -148,26 +171,22 @@ where
             return Err(OrphanEnqueueError::AlreadyDownloading);
         }
 
+        Ok(())
+    }
+
+    fn ensure_not_queued(&self, block_id: HeaderId) -> Result<(), OrphanEnqueueError> {
         if self.pending_orphans_queue.contains_key(&block_id) {
             debug!(target: LOG_TARGET, ?block_id, "Orphan block is already in the queue, skipping enqueue");
             return Err(OrphanEnqueueError::AlreadyInQueue);
         }
 
-        self.pending_orphans_queue
-            .insert(block_id, OrphanInfo::new(block_id, current_tip, lib));
-        debug!(
-            target: LOG_TARGET,
-            ?block_id, ?current_tip, ?lib, queue_size = self.pending_orphans_queue.len(),
-            "Orphan block enqueued for sync"
-        );
+        Ok(())
+    }
 
-        metrics::orphan_blocks_enqueued_total();
-        metrics::orphan_blocks_pending(self.pending_orphans_queue.len());
-
+    fn wake(&self) {
         if let Some(waker) = &self.waker {
             waker.wake_by_ref();
         }
-        Ok(())
     }
 
     fn dequeue_next_orphan(&mut self) -> Option<OrphanInfo> {
@@ -243,6 +262,157 @@ where
         self.dequeue_next_orphan()
             .map(|orphan_info| (orphan_info, HashSet::new()))
     }
+
+    fn start_download_request(&mut self, orphan_info: OrphanInfo, known_blocks: HashSet<HeaderId>) {
+        debug!(target: LOG_TARGET, ?orphan_info, ?known_blocks, "Starting new orphan block download");
+        let request_blocks_stream_fut = Self::request_blocks_stream(
+            self.network_adapter.clone(),
+            orphan_info,
+            known_blocks,
+            Instant::now(),
+        );
+
+        self.state = DownloaderState::Requesting(Box::pin(request_blocks_stream_fut));
+        self.wake();
+    }
+
+    fn poll_idle_state(&mut self) -> Poll<Option<NetAdapter::Block>> {
+        let Some((orphan_info, known_blocks)) = self.get_next_stream_input() else {
+            return Poll::Pending;
+        };
+
+        self.start_download_request(orphan_info, known_blocks);
+        Poll::Pending
+    }
+
+    fn poll_requesting_state(
+        &mut self,
+        mut request: PendingNetworkRequest<NetAdapter::Block>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<NetAdapter::Block>> {
+        match request.as_mut().poll(cx) {
+            Poll::Ready(Ok(download)) => {
+                self.state = DownloaderState::Downloading(download);
+                self.wake();
+                Poll::Pending
+            }
+            Poll::Ready(Err(e)) => {
+                error!(target: LOG_TARGET, "Error while starting download: {e}");
+                self.state = DownloaderState::Idle;
+                self.wake();
+                Poll::Pending
+            }
+            Poll::Pending => {
+                self.state = DownloaderState::Requesting(request);
+                Poll::Pending
+            }
+        }
+    }
+
+    fn handle_downloaded_block(
+        &mut self,
+        mut download: ActiveDownload<NetAdapter::Block>,
+        block_id: HeaderId,
+        block: NetAdapter::Block,
+    ) -> Poll<Option<NetAdapter::Block>> {
+        download.last_block_id = Some(block_id);
+        download.total_blocks_received = download
+            .total_blocks_received
+            .checked_add(1)
+            .expect("Block count overflow");
+
+        metrics::orphan_blocks_received_total();
+
+        if download.orphan_info.orphan_id == block_id {
+            debug!(
+                target: LOG_TARGET,
+                ?block_id,
+                total_blocks_received = download.total_blocks_received,
+                "Sync for orphan block completed"
+            );
+            metrics::orphan_observe_parent_fetch_ok(download.download_started_at.elapsed());
+            self.state = DownloaderState::Idle;
+        } else {
+            self.state = DownloaderState::Downloading(download);
+        }
+
+        self.remove_orphan(&block_id);
+        self.wake();
+        Poll::Ready(Some(block))
+    }
+
+    fn handle_completed_stream(
+        &mut self,
+        download: &mut ActiveDownload<NetAdapter::Block>,
+    ) -> Poll<Option<NetAdapter::Block>> {
+        download.block_stream = None;
+
+        if let Some(last_block_id) = download.last_block_id {
+            let orphan_info = download.orphan_info.clone();
+            let known_blocks = HashSet::from([last_block_id]);
+            let download_started_at = download.download_started_at;
+
+            debug!(
+                target: LOG_TARGET, ?orphan_info, ?known_blocks,
+                "Previous stream ended, requesting next stream for remaining blocks"
+            );
+
+            let request_blocks_stream_fut = Self::request_blocks_stream(
+                self.network_adapter.clone(),
+                orphan_info,
+                known_blocks,
+                download_started_at,
+            );
+
+            self.state = DownloaderState::Requesting(Box::pin(request_blocks_stream_fut));
+            self.wake();
+        } else {
+            debug!(
+                target: LOG_TARGET,
+                orphan_info = ?download.orphan_info,
+                "No blocks received for this orphan, ending sync"
+            );
+            let orphan_id = download.orphan_block_id();
+            self.remove_orphan(&orphan_id);
+
+            self.state = DownloaderState::Idle;
+            metrics::orphan_blocks_fetch_failed_total();
+            metrics::orphan_blocks_pending(self.pending_orphans_queue.len());
+        }
+
+        Poll::Pending
+    }
+
+    fn poll_downloading_state(
+        &mut self,
+        mut download: ActiveDownload<NetAdapter::Block>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<NetAdapter::Block>> {
+        let Some(block_stream) = download.block_stream.as_mut() else {
+            self.state = DownloaderState::Idle;
+            return Poll::Pending;
+        };
+
+        match block_stream.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok((block_id, block)))) => {
+                self.handle_downloaded_block(download, block_id, block)
+            }
+            Poll::Ready(Some(Err(e))) => {
+                error!(target: LOG_TARGET, "Error while fetching blocks: {e}");
+
+                self.state = DownloaderState::Idle;
+                metrics::orphan_blocks_fetch_failed_total();
+
+                self.wake();
+                Poll::Pending
+            }
+            Poll::Ready(None) => self.handle_completed_stream(&mut download),
+            Poll::Pending => {
+                self.state = DownloaderState::Downloading(download);
+                Poll::Pending
+            }
+        }
+    }
 }
 
 impl<NetAdapter, RuntimeServiceId> Stream for OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>
@@ -253,134 +423,13 @@ where
 {
     type Item = NetAdapter::Block;
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "state machine logic kept in one place for readability; refactor can follow separately"
-    )]
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.waker = Some(cx.waker().clone());
 
-        match &mut self.state {
-            DownloaderState::Idle => {
-                let Some((orphan_info, known_blocks)) = self.get_next_stream_input() else {
-                    return Poll::Pending;
-                };
-
-                debug!(target: LOG_TARGET, ?orphan_info, ?known_blocks, "Starting new orphan block download");
-                let request_blocks_stream_fut = Self::request_blocks_stream(
-                    self.network_adapter.clone(),
-                    orphan_info,
-                    known_blocks,
-                    Instant::now(),
-                );
-
-                self.state = DownloaderState::Requesting(Box::pin(request_blocks_stream_fut));
-
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-            DownloaderState::Requesting(request) => match request.as_mut().poll(cx) {
-                Poll::Ready(Ok(download)) => {
-                    self.state = DownloaderState::Downloading(download);
-
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Poll::Ready(Err(e)) => {
-                    error!(target: LOG_TARGET, "Error while starting download: {e}");
-                    self.state = DownloaderState::Idle;
-
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Poll::Pending => Poll::Pending,
-            },
-            DownloaderState::Downloading(download) => {
-                let Some(block_stream) = download.block_stream.as_mut() else {
-                    self.state = DownloaderState::Idle;
-                    return Poll::Pending;
-                };
-
-                match block_stream.poll_next_unpin(cx) {
-                    Poll::Ready(Some(Ok((block_id, block)))) => {
-                        download.last_block_id = Some(block_id);
-                        download.total_blocks_received = download
-                            .total_blocks_received
-                            .checked_add(1)
-                            .expect("Block count overflow");
-
-                        metrics::orphan_blocks_received_total();
-
-                        if download.orphan_info.orphan_id == block_id {
-                            debug!(
-                                target: LOG_TARGET,
-                                ?block_id,
-                                total_blocks_received = download.total_blocks_received,
-                                "Sync for orphan block completed"
-                            );
-                            metrics::orphan_observe_parent_fetch_ok(
-                                download.download_started_at.elapsed(),
-                            );
-                            self.state = DownloaderState::Idle;
-                        }
-
-                        self.remove_orphan(&block_id);
-
-                        cx.waker().wake_by_ref();
-                        Poll::Ready(Some(block))
-                    }
-                    Poll::Ready(Some(Err(e))) => {
-                        error!(target: LOG_TARGET, "Error while fetching blocks: {e}");
-
-                        self.state = DownloaderState::Idle;
-                        metrics::orphan_blocks_fetch_failed_total();
-
-                        cx.waker().wake_by_ref();
-                        Poll::Pending
-                    }
-                    Poll::Ready(None) => {
-                        download.block_stream = None;
-
-                        if let Some(last_block_id) = download.last_block_id {
-                            let orphan_info = download.orphan_info.clone();
-                            let known_blocks = HashSet::from([last_block_id]);
-                            let download_started_at = download.download_started_at;
-
-                            debug!(
-                                target: LOG_TARGET, ?orphan_info, ?known_blocks,
-                                "Previous stream ended, requesting next stream for remaining blocks"
-                            );
-
-                            let request_blocks_stream_fut = Self::request_blocks_stream(
-                                self.network_adapter.clone(),
-                                orphan_info,
-                                known_blocks,
-                                download_started_at,
-                            );
-
-                            self.state =
-                                DownloaderState::Requesting(Box::pin(request_blocks_stream_fut));
-
-                            cx.waker().wake_by_ref();
-                        } else {
-                            debug!(
-                                target: LOG_TARGET,
-                                orphan_info = ?download.orphan_info,
-                                "No blocks received for this orphan, ending sync"
-                            );
-                            let orphan_id = download.orphan_block_id();
-                            self.remove_orphan(&orphan_id);
-
-                            self.state = DownloaderState::Idle;
-                            metrics::orphan_blocks_fetch_failed_total();
-                            metrics::orphan_blocks_pending(self.pending_orphans_queue.len());
-                        }
-
-                        Poll::Pending
-                    }
-                    Poll::Pending => Poll::Pending,
-                }
-            }
+        match std::mem::replace(&mut self.state, DownloaderState::Idle) {
+            DownloaderState::Idle => self.poll_idle_state(),
+            DownloaderState::Requesting(request) => self.poll_requesting_state(request, cx),
+            DownloaderState::Downloading(download) => self.poll_downloading_state(download, cx),
         }
     }
 }

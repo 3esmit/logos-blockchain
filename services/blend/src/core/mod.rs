@@ -18,6 +18,7 @@ use lb_blend::{
         Error as MessageError, PayloadType,
         encap::{
             ProofsVerifier as ProofsVerifierTrait,
+            decapsulated::DecapsulatedMessage,
             encapsulated::EncapsulatedMessage,
             validated::{
                 EncapsulatedMessageWithVerifiedPublicHeader,
@@ -509,7 +510,6 @@ where
 }
 
 /// Initialize the components for the [`BlendService`].
-#[expect(clippy::too_many_lines, reason = "Need to initialize many components")]
 #[expect(
     clippy::too_many_arguments,
     reason = "Need to initialize many components."
@@ -576,85 +576,19 @@ where
     let session_stream = async {
         let config = blend_config.clone();
         let zk_sk_id = config.zk.secret_key_kms_id.clone();
-        membership_stream.map(
-            move |MembershipInfo {
-                      membership,
-                      session_number,
-                      zk,
-                  }| {
-                // This can be empty in case of an empty membership set.
-                let Some(ZkInfo {
-                    root,
-                    core_and_path_selectors,
-                }) = zk
-                else {
-                    return MaybeEmptyCoreSessionInfo::Empty {
-                        session: session_number,
-                    };
-                };
-                CoreSessionInfo {
-                    public: CoreSessionPublicInfo {
-                        poq_core_public_inputs: CoreInputs {
-                            quota: config.session_core_quota(membership.size()),
-                            zk_root: root,
-                        },
-                        membership,
-                        session: session_number,
-                    },
-                    core_poq_generator: kms_adapter.core_poq_generator(
-                        zk_sk_id.clone(),
-                        Box::new(
-                            core_and_path_selectors
-                                .expect("Core merkle path should be present for a core node."),
-                        ),
-                    ),
-                }
-                .into()
-            },
-        )
+        membership_stream.map(move |membership_info| {
+            build_initial_session_event(&config, &kms_adapter, &zk_sk_id, membership_info)
+        })
     }
     .await;
-    let (current_membership_info, remaining_session_stream) = Box::pin(
-        UninitializedSessionEventStream::new(
-            session_stream,
-            FIRST_STREAM_ITEM_READY_TIMEOUT,
-            blend_config.time.session_transition_period(),
-        )
-        .await_first_ready(),
+    let (current_membership_info, remaining_session_stream) = await_initial_core_session(
+        session_stream,
+        blend_config.time.session_transition_period(),
     )
-    .await
-    .map(|(membership_info, remaining_session_stream)| {
-        let MaybeEmptyCoreSessionInfo::NonEmpty(core_session_info) = membership_info else {
-            panic!("First retrieved session for Blend core startup must be available.");
-        };
-        (core_session_info, remaining_session_stream.fork())
-    })
-    .expect("The current session info must be available.");
-
-    let (
-        (
-            LeaderInputsMinusQuota {
-                pol_epoch_nonce,
-                pol_ledger_aged,
-                lottery_0,
-                lottery_1,
-            },
-            current_epoch,
-        ),
-        remaining_clock_stream,
-    ) = async {
-        let (clock_tick, remaining_clock_stream) =
-            UninitializedFirstReadyStream::new(clock_stream, Duration::from_secs(5))
-                .first()
-                .await
-                .expect("The clock system must be available.");
-        let Some(EpochEvent::NewEpoch(new_epoch_info)) = epoch_handler.tick(clock_tick).await
-        else {
-            panic!("First poll result of epoch stream should be a `NewEpoch` event.");
-        };
-        (new_epoch_info, remaining_clock_stream)
-    }
     .await;
+
+    let ((current_epoch_inputs, current_epoch), remaining_clock_stream) =
+        await_initial_epoch_info(clock_stream, epoch_handler).await;
 
     info!(
         target: LOG_TARGET,
@@ -662,22 +596,23 @@ where
         current_membership_info.public
     );
 
-    let current_public_info = PublicInfo {
-        epoch: LeaderInputs {
-            pol_ledger_aged,
-            pol_epoch_nonce,
-            message_quota: blend_config.session_leadership_quota(),
-            lottery_0,
-            lottery_1,
-        },
-        session: SessionInfo {
-            membership: current_membership_info.public.membership.clone(),
-            session_number: current_membership_info.public.session,
-            core_public_inputs: current_membership_info.public.poq_core_public_inputs,
-        },
-    };
+    let current_public_info = build_current_public_info(
+        &blend_config,
+        &current_membership_info,
+        current_epoch_inputs,
+    );
 
     trace!(target: LOG_TARGET, "Current public info: {:?}", current_public_info);
+
+    // Initialize the current session state. If the session matches the stored one,
+    // retrieves the tracked consumed core quota. Else, fallback to `0`.
+    let current_recovery_checkpoint = load_current_recovery_checkpoint(
+        &blend_config,
+        last_saved_state.take(),
+        &current_membership_info,
+        &current_public_info,
+        state_updater,
+    );
 
     let crypto_processor = CoreCryptographicProcessor::<
         _,
@@ -697,50 +632,12 @@ where
     )
     .expect("The initial membership should satisfy the core node condition");
 
-    // Initialize the current session state. If the session matches the stored one,
-    // retrieves the tracked consumed core quota. Else, fallback to `0`.
-    let current_recovery_checkpoint = if let Some(saved_state) = last_saved_state.take()
-        && saved_state.last_seen_session() == current_membership_info.public.session
-    {
-        tracing::trace!(
-            target: LOG_TARGET,
-            "Found recovery state for session {:?}: {saved_state:?}",
-            current_membership_info.public.session
-        );
-        saved_state
-    } else {
-        tracing::trace!(
-            target: LOG_TARGET,
-            "No recovery state found for session {:?}. Initializing a new one.",
-            current_membership_info.public.session
-        );
-
-        ServiceState::with_session(
-            current_membership_info.public.session,
-            SessionBlendingTokenCollector::new(
-                &reward::SessionInfo::new(
-                    current_membership_info.public.session,
-                    &pol_epoch_nonce,
-                    current_membership_info.public.membership.size() as u64,
-                    current_membership_info.public.poq_core_public_inputs.quota,
-                    blend_config.activity_threshold_sensitivity,
-                ).expect("Reward session info must be created successfully. Panicking since the service cannot continue with this session")
-            ),
-            None,
-            state_updater,
-        ).expect("service state should be created successfully")
-    };
-
     // If there is the old session token collector loaded from `last_saved_state`,
     // compute/submit its activity proof because we won't collect more tokens for
     // the old session after this initialization step because we are not
     // establishing connections for the old session.
-    let mut state_updater = current_recovery_checkpoint.start_updating();
-    if let Some(old_session_token_collector) = state_updater.clear_old_session_token_collector() {
-        tracing::debug!(target: LOG_TARGET, "Old session token collector loaded. Computing activity proof");
-        compute_and_submit_activity_proof(old_session_token_collector, sdp_relay).await;
-    }
-    let current_recovery_checkpoint = state_updater.commit_changes();
+    let current_recovery_checkpoint =
+        restore_old_session_token_collector(current_recovery_checkpoint, sdp_relay).await;
 
     let message_scheduler = SchedulerWrapper::new_with_initial_messages(
         SchedulerSessionInfo {
@@ -784,6 +681,208 @@ where
         backend,
         rng,
     )
+}
+
+fn build_initial_session_event<NodeId, KmsAdapter, RuntimeServiceId>(
+    config: &RunningBlendConfig<impl Clone>,
+    kms_adapter: &KmsAdapter,
+    zk_sk_id: &str,
+    MembershipInfo {
+        membership,
+        session_number,
+        zk,
+    }: MembershipInfo<NodeId>,
+) -> MaybeEmptyCoreSessionInfo<NodeId, KmsAdapter::CorePoQGenerator>
+where
+    KmsAdapter: KmsPoQAdapter<RuntimeServiceId, KeyId = String>,
+{
+    // This can be empty in case of an empty membership set.
+    let Some(ZkInfo {
+        root,
+        core_and_path_selectors,
+    }) = zk
+    else {
+        return MaybeEmptyCoreSessionInfo::Empty {
+            session: session_number,
+        };
+    };
+
+    CoreSessionInfo {
+        public: CoreSessionPublicInfo {
+            poq_core_public_inputs: CoreInputs {
+                quota: config.session_core_quota(membership.size()),
+                zk_root: root,
+            },
+            membership,
+            session: session_number,
+        },
+        core_poq_generator: kms_adapter.core_poq_generator(
+            zk_sk_id.to_owned(),
+            Box::new(
+                core_and_path_selectors
+                    .expect("Core merkle path should be present for a core node."),
+            ),
+        ),
+    }
+    .into()
+}
+
+async fn await_initial_core_session<NodeId, CorePoQGenerator>(
+    session_stream: impl Stream<Item = MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>
+    + Send
+    + Unpin
+    + 'static,
+    session_transition_period: Duration,
+) -> (
+    CoreSessionInfo<NodeId, CorePoQGenerator>,
+    impl Stream<Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>>
+    + Unpin
+    + Send
+    + 'static,
+)
+where
+    NodeId: Clone + Send + 'static,
+    CorePoQGenerator: Clone + Send + Sync + 'static,
+{
+    Box::pin(
+        UninitializedSessionEventStream::new(
+            session_stream,
+            FIRST_STREAM_ITEM_READY_TIMEOUT,
+            session_transition_period,
+        )
+        .await_first_ready(),
+    )
+    .await
+    .map(|(membership_info, remaining_session_stream)| {
+        let MaybeEmptyCoreSessionInfo::NonEmpty(core_session_info) = membership_info else {
+            panic!("First retrieved session for Blend core startup must be available.");
+        };
+        (core_session_info, remaining_session_stream.fork())
+    })
+    .expect("The current session info must be available.")
+}
+
+async fn await_initial_epoch_info<ChainService, RuntimeServiceId>(
+    clock_stream: impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static,
+    epoch_handler: &mut EpochHandler<ChainService, RuntimeServiceId>,
+) -> (
+    (LeaderInputsMinusQuota, Epoch),
+    impl Stream<Item = SlotTick> + Unpin + Send + Sync + 'static,
+)
+where
+    ChainService: ChainApi<RuntimeServiceId> + Sync,
+    RuntimeServiceId: Sync,
+{
+    let (clock_tick, remaining_clock_stream) =
+        UninitializedFirstReadyStream::new(clock_stream, Duration::from_secs(5))
+            .first()
+            .await
+            .expect("The clock system must be available.");
+    let Some(EpochEvent::NewEpoch(new_epoch_info)) = epoch_handler.tick(clock_tick).await else {
+        panic!("First poll result of epoch stream should be a `NewEpoch` event.");
+    };
+    (new_epoch_info, remaining_clock_stream)
+}
+
+fn build_current_public_info<NodeId, CorePoQGenerator>(
+    blend_config: &RunningBlendConfig<impl Clone>,
+    current_membership_info: &CoreSessionInfo<NodeId, CorePoQGenerator>,
+    current_epoch_inputs: LeaderInputsMinusQuota,
+) -> PublicInfo<NodeId>
+where
+    NodeId: Clone,
+{
+    PublicInfo {
+        epoch: build_leader_inputs(blend_config, current_epoch_inputs),
+        session: SessionInfo {
+            membership: current_membership_info.public.membership.clone(),
+            session_number: current_membership_info.public.session,
+            core_public_inputs: current_membership_info.public.poq_core_public_inputs,
+        },
+    }
+}
+
+const fn build_leader_inputs(
+    settings: &RunningBlendConfig<impl Clone>,
+    LeaderInputsMinusQuota {
+        pol_epoch_nonce,
+        pol_ledger_aged,
+        lottery_0,
+        lottery_1,
+    }: LeaderInputsMinusQuota,
+) -> LeaderInputs {
+    LeaderInputs {
+        message_quota: settings.session_leadership_quota(),
+        pol_epoch_nonce,
+        pol_ledger_aged,
+        lottery_0,
+        lottery_1,
+    }
+}
+
+fn load_current_recovery_checkpoint<BackendSettings, BroadcastSettings, NodeId, CorePoQGenerator>(
+    blend_config: &RunningBlendConfig<BackendSettings>,
+    last_saved_state: Option<ServiceState<BackendSettings, BroadcastSettings>>,
+    current_membership_info: &CoreSessionInfo<NodeId, CorePoQGenerator>,
+    current_public_info: &PublicInfo<NodeId>,
+    state_updater: StateUpdater<Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>>,
+) -> ServiceState<BackendSettings, BroadcastSettings>
+where
+    BackendSettings: Clone + Send + Sync,
+    BroadcastSettings: Clone + Debug,
+{
+    if let Some(saved_state) = last_saved_state
+        && saved_state.last_seen_session() == current_membership_info.public.session
+    {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Found recovery state for session {:?}: {saved_state:?}",
+            current_membership_info.public.session
+        );
+        return saved_state;
+    }
+
+    tracing::trace!(
+        target: LOG_TARGET,
+        "No recovery state found for session {:?}. Initializing a new one.",
+        current_membership_info.public.session
+    );
+
+    ServiceState::with_session(
+        current_membership_info.public.session,
+        SessionBlendingTokenCollector::new(
+            &reward::SessionInfo::new(
+                current_membership_info.public.session,
+                &current_public_info.epoch.pol_epoch_nonce,
+                current_membership_info.public.membership.size() as u64,
+                current_membership_info.public.poq_core_public_inputs.quota,
+                blend_config.activity_threshold_sensitivity,
+            )
+            .expect("Reward session info must be created successfully. Panicking since the service cannot continue with this session"),
+        ),
+        None,
+        state_updater,
+    )
+    .expect("service state should be created successfully")
+}
+
+async fn restore_old_session_token_collector<BackendSettings, BroadcastSettings>(
+    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
+    sdp_relay: &OutboundRelay<SdpMessage>,
+) -> ServiceState<BackendSettings, BroadcastSettings>
+where
+    BackendSettings: Clone + Send + Sync,
+    BroadcastSettings: Clone + Send + Sync,
+{
+    let mut state_updater = current_recovery_checkpoint.start_updating();
+    if let Some(old_session_token_collector) = state_updater.clear_old_session_token_collector() {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Old session token collector loaded. Computing activity proof"
+        );
+        compute_and_submit_activity_proof(old_session_token_collector, sdp_relay).await;
+    }
+    state_updater.commit_changes()
 }
 
 /// Post-initialization step that must be performed after signaling the service
@@ -1356,8 +1455,6 @@ where
         return current_recovery_checkpoint;
     };
 
-    let mut state_updater = current_recovery_checkpoint.start_updating();
-
     // Before blending the data message, we try to peel off any outer layers that
     // are addressed to us. In this case, we collect the blending tokens and we
     // blend only the remaining layers.
@@ -1365,18 +1462,62 @@ where
         cryptographic_processor.decapsulate_message_recursive(wrapped_message.clone());
 
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
-        // The outermost layer of the data message is not for us, hence we treat this as
-        // a regular data message that should be released at the next round.
-        tracing::debug!(target: LOG_TARGET, "Locally generated data message does not have its outermost layer addressed to us. Sending it out as a data message...");
-        scheduler.queue_data_message(wrapped_message.clone());
-        assert_eq!(
-            state_updater.add_unsent_data_message(wrapped_message.clone()),
-            Ok(()),
-            "There should not be another copy of the same locally-generated encapsulated data message: {wrapped_message:?}."
+        return queue_local_data_message(
+            &wrapped_message,
+            scheduler,
+            current_recovery_checkpoint.start_updating(),
         );
-        return state_updater.commit_changes();
     };
 
+    schedule_self_decapsulated_local_data_message(
+        multi_layer_decapsulation_output,
+        scheduler,
+        current_recovery_checkpoint.start_updating(),
+    )
+}
+
+fn queue_local_data_message<Rng, BackendSettings, BroadcastSettings>(
+    wrapped_message: &EncapsulatedMessageWithVerifiedPublicHeader,
+    scheduler: &mut SessionMessageScheduler<
+        Rng,
+        ProcessedMessage<BroadcastSettings>,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
+    mut state_updater: ServiceStateUpdater<BackendSettings, BroadcastSettings>,
+) -> ServiceState<BackendSettings, BroadcastSettings>
+where
+    Rng: RngCore + Clone + Send + Unpin,
+    BroadcastSettings:
+        Serialize + for<'de> Deserialize<'de> + Debug + Hash + Eq + Clone + Send + Unpin,
+    BackendSettings: Clone,
+{
+    // The outermost layer of the data message is not for us, hence we treat this as
+    // a regular data message that should be released at the next round.
+    tracing::debug!(target: LOG_TARGET, "Locally generated data message does not have its outermost layer addressed to us. Sending it out as a data message...");
+    scheduler.queue_data_message(wrapped_message.clone());
+    assert_eq!(
+        state_updater.add_unsent_data_message(wrapped_message.clone()),
+        Ok(()),
+        "There should not be another copy of the same locally-generated encapsulated data message: {wrapped_message:?}."
+    );
+    state_updater.commit_changes()
+}
+
+fn schedule_self_decapsulated_local_data_message<Rng, BackendSettings, BroadcastSettings>(
+    multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
+    scheduler: &mut SessionMessageScheduler<
+        Rng,
+        ProcessedMessage<BroadcastSettings>,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
+    mut state_updater: ServiceStateUpdater<BackendSettings, BroadcastSettings>,
+) -> ServiceState<BackendSettings, BroadcastSettings>
+where
+    Rng: RngCore + Clone + Send + Unpin,
+    BroadcastSettings:
+        Serialize + for<'de> Deserialize<'de> + Debug + Hash + Eq + Clone + Send + Unpin,
+    BackendSettings: Clone,
+{
     // It happened that the outermost `N` layers were addressed to this very same
     // node, so we collect blending tokens for those layers and propagate only the
     // remaining part.
@@ -1688,7 +1829,7 @@ fn schedule_decapsulated_incoming_message<
     >,
 ) -> (
     Option<ProcessedMessage<BroadcastSettings>>,
-    impl Iterator<Item = BlendingToken>,
+    std::vec::IntoIter<BlendingToken>,
 )
 where
     BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
@@ -1704,51 +1845,122 @@ where
 
     match decapsulated_message_type {
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
-            match fully_decapsulated_message.into_components() {
-                (PayloadType::Cover, _) => {
-                    tracing::trace!(target: LOG_TARGET, "Discarding received cover message.");
-                    (None, blending_tokens.into_iter())
-                }
-                (PayloadType::Data, serialized_data_message) => {
-                    tracing::trace!(target: LOG_TARGET, "Processing a fully decapsulated data message.");
-                    match NetworkMessage::from_bytes(&serialized_data_message) {
-                        Ok(deserialized_network_message) => {
-                            tracing::trace!(
-                                target: LOG_TARGET,
-                                "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}"
-                            );
-                            let processed_message =
-                                ProcessedMessage::from(deserialized_network_message);
-                            scheduler.schedule_processed_message(processed_message.clone());
-                            (Some(processed_message), blending_tokens.into_iter())
-                        }
-                        Err(e) => {
-                            tracing::warn!(target: LOG_TARGET, "Unrecognized data message from blend backend. Dropping: {e:?}");
-                            (None, blending_tokens.into_iter())
-                        }
-                    }
-                }
-            }
+            schedule_completed_decapsulated_message(
+                fully_decapsulated_message,
+                scheduler,
+                blending_tokens,
+            )
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
-            tracing::trace!(
-                target: LOG_TARGET,
-                "Processed encapsulated message: {remaining_encapsulated_message:?}"
-            );
-            let Ok(validated_message) =
-                cryptographic_processor.validate_message_header(*remaining_encapsulated_message)
-            else {
-                tracing::debug!(target: LOG_TARGET, "Failed to validate the header of the remaining encapsulated message after decapsulation. Dropping...");
-                return (None, blending_tokens.into_iter());
-            };
-            let processed_message = ProcessedMessage::from(validated_message);
-
-            crate::metrics::mix_packets_processed_total();
-
-            scheduler.schedule_processed_message(processed_message.clone());
-            (Some(processed_message), blending_tokens.into_iter())
+            schedule_remaining_encapsulated_message(
+                *remaining_encapsulated_message,
+                scheduler,
+                cryptographic_processor,
+                blending_tokens,
+            )
         }
     }
+}
+
+fn schedule_completed_decapsulated_message<BroadcastSettings>(
+    fully_decapsulated_message: DecapsulatedMessage,
+    scheduler: &mut impl ProcessedMessageScheduler<ProcessedMessage<BroadcastSettings>>,
+    blending_tokens: Vec<BlendingToken>,
+) -> (
+    Option<ProcessedMessage<BroadcastSettings>>,
+    std::vec::IntoIter<BlendingToken>,
+)
+where
+    BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
+{
+    match fully_decapsulated_message.into_components() {
+        (PayloadType::Cover, _) => discard_received_cover_message(blending_tokens),
+        (PayloadType::Data, serialized_data_message) => schedule_fully_decapsulated_data_message(
+            scheduler,
+            &serialized_data_message,
+            blending_tokens,
+        ),
+    }
+}
+
+fn discard_received_cover_message<BroadcastSettings>(
+    blending_tokens: Vec<BlendingToken>,
+) -> (
+    Option<ProcessedMessage<BroadcastSettings>>,
+    std::vec::IntoIter<BlendingToken>,
+) {
+    tracing::trace!(target: LOG_TARGET, "Discarding received cover message.");
+    (None, blending_tokens.into_iter())
+}
+
+fn schedule_fully_decapsulated_data_message<BroadcastSettings>(
+    scheduler: &mut impl ProcessedMessageScheduler<ProcessedMessage<BroadcastSettings>>,
+    serialized_data_message: &[u8],
+    blending_tokens: Vec<BlendingToken>,
+) -> (
+    Option<ProcessedMessage<BroadcastSettings>>,
+    std::vec::IntoIter<BlendingToken>,
+)
+where
+    BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
+{
+    tracing::trace!(target: LOG_TARGET, "Processing a fully decapsulated data message.");
+    let deserialized_network_message = match NetworkMessage::from_bytes(serialized_data_message) {
+        Ok(deserialized_network_message) => deserialized_network_message,
+        Err(error) => {
+            tracing::warn!(target: LOG_TARGET, "Unrecognized data message from blend backend. Dropping: {error:?}");
+            return (None, blending_tokens.into_iter());
+        }
+    };
+    tracing::trace!(
+        target: LOG_TARGET,
+        "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}"
+    );
+    let processed_message = ProcessedMessage::from(deserialized_network_message);
+    scheduler.schedule_processed_message(processed_message.clone());
+    (Some(processed_message), blending_tokens.into_iter())
+}
+
+fn schedule_remaining_encapsulated_message<
+    BroadcastSettings,
+    NodeId,
+    CorePoQGenerator,
+    ProofsGenerator,
+    ProofsVerifier,
+>(
+    remaining_encapsulated_message: EncapsulatedMessage,
+    scheduler: &mut impl ProcessedMessageScheduler<ProcessedMessage<BroadcastSettings>>,
+    cryptographic_processor: &CoreCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+    >,
+    blending_tokens: Vec<BlendingToken>,
+) -> (
+    Option<ProcessedMessage<BroadcastSettings>>,
+    std::vec::IntoIter<BlendingToken>,
+)
+where
+    BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
+    ProofsVerifier: ProofsVerifierTrait,
+{
+    tracing::trace!(
+        target: LOG_TARGET,
+        "Processed encapsulated message: {remaining_encapsulated_message:?}"
+    );
+    let Ok(validated_message) =
+        cryptographic_processor.validate_message_header(remaining_encapsulated_message)
+    else {
+        tracing::debug!(target: LOG_TARGET, "Failed to validate the header of the remaining encapsulated message after decapsulation. Dropping...");
+        return (None, blending_tokens.into_iter());
+    };
+    let processed_message = ProcessedMessage::from(validated_message);
+
+    crate::metrics::mix_packets_processed_total();
+
+    scheduler.schedule_processed_message(processed_message.clone());
+    (Some(processed_message), blending_tokens.into_iter())
 }
 
 /// Reacts to a new release tick as returned by the scheduler.

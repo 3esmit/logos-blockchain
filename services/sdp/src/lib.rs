@@ -325,31 +325,20 @@ where
             tracing::error!("Failed to get gas context for declaration");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(gas_context);
         let declaration_id = declaration.id();
-
-        let signed_tx = match wallet_adapter
-            .declare_tx(tx_builder, *declaration, &self.wallet_config)
+        let Some(signed_tx) = self
+            .create_declaration_tx(gas_context, *declaration, wallet_adapter)
             .await
-        {
-            Ok(tx) => tx,
-            Err(e) => {
-                tracing::error!("Failed to create declaration transaction: {:?}", e);
-                metrics::declaration_tx_failures_total();
-                return;
-            }
+        else {
+            return;
         };
 
-        if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!("Failed to post declaration to mempool: {:?}", e);
-            metrics::declaration_mempool_failures_total();
-            return;
-        }
-
-        if let Err(e) = reply_channel.send(Ok(declaration_id)) {
-            tracing::error!("Failed to send post declaration response: {:?}", e);
-        } else {
-            metrics::declaration_success_total();
+        if self.post_declaration_tx(signed_tx, mempool_adapter).await {
+            if let Err(e) = reply_channel.send(Ok(declaration_id)) {
+                tracing::error!("Failed to send post declaration response: {:?}", e);
+            } else {
+                metrics::declaration_success_total();
+            }
         }
     }
 
@@ -376,26 +365,14 @@ where
             tracing::error!("Failed to get gas context for activity");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(gas_context);
-
-        let signed_tx = match wallet_adapter
-            .active_tx(tx_builder, active_message, &self.wallet_config)
+        let Some(signed_tx) = self
+            .create_activity_tx(gas_context, active_message, wallet_adapter)
             .await
-        {
-            Ok(tx) => tx,
-            Err(e) => {
-                tracing::error!("Failed to create activity transaction: {:?}", e);
-                metrics::activity_tx_failures_total();
-                return;
-            }
+        else {
+            return;
         };
 
-        if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!("Failed to post activity to mempool: {:?}", e);
-            metrics::activity_mempool_failures_total();
-        } else {
-            metrics::activity_success_total();
-        }
+        self.post_activity_tx(signed_tx, mempool_adapter).await;
     }
 
     async fn handle_post_withdrawal(
@@ -422,31 +399,125 @@ where
             tracing::error!("Failed to get gas context for withdrawal");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(gas_context);
+        let Some(signed_tx) = self
+            .create_withdrawal_tx(gas_context, withdraw_message, wallet_adapter)
+            .await
+        else {
+            return;
+        };
 
-        let signed_tx = match wallet_adapter
-            .withdraw_tx(tx_builder, withdraw_message, &self.wallet_config)
+        if self.post_withdrawal_tx(signed_tx, mempool_adapter).await {
+            metrics::withdrawal_success_total();
+            self.current_declaration = None;
+        }
+        // TODO: how should we reset the nonce? shouldn't it be always with
+        // current_delcaration?
+    }
+
+    async fn create_declaration_tx(
+        &self,
+        gas_context: MantleTxGasContext,
+        declaration: DeclarationMessage,
+        wallet_adapter: &WalletAdapter,
+    ) -> Option<SignedMantleTx> {
+        match wallet_adapter
+            .declare_tx(
+                MantleTxBuilder::new(gas_context),
+                declaration,
+                &self.wallet_config,
+            )
             .await
         {
-            Ok(tx) => tx,
+            Ok(tx) => Some(tx),
+            Err(e) => {
+                tracing::error!("Failed to create declaration transaction: {:?}", e);
+                metrics::declaration_tx_failures_total();
+                None
+            }
+        }
+    }
+
+    async fn post_declaration_tx(
+        &self,
+        signed_tx: SignedMantleTx,
+        mempool_adapter: &MempoolAdapter,
+    ) -> bool {
+        if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
+            tracing::error!("Failed to post declaration to mempool: {:?}", e);
+            metrics::declaration_mempool_failures_total();
+            false
+        } else {
+            true
+        }
+    }
+
+    async fn create_activity_tx(
+        &self,
+        gas_context: MantleTxGasContext,
+        active_message: ActiveMessage,
+        wallet_adapter: &WalletAdapter,
+    ) -> Option<SignedMantleTx> {
+        match wallet_adapter
+            .active_tx(
+                MantleTxBuilder::new(gas_context),
+                active_message,
+                &self.wallet_config,
+            )
+            .await
+        {
+            Ok(tx) => Some(tx),
+            Err(e) => {
+                tracing::error!("Failed to create activity transaction: {:?}", e);
+                metrics::activity_tx_failures_total();
+                None
+            }
+        }
+    }
+
+    async fn post_activity_tx(&self, signed_tx: SignedMantleTx, mempool_adapter: &MempoolAdapter) {
+        if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
+            tracing::error!("Failed to post activity to mempool: {:?}", e);
+            metrics::activity_mempool_failures_total();
+        } else {
+            metrics::activity_success_total();
+        }
+    }
+
+    async fn create_withdrawal_tx(
+        &self,
+        gas_context: MantleTxGasContext,
+        withdraw_message: WithdrawMessage,
+        wallet_adapter: &WalletAdapter,
+    ) -> Option<SignedMantleTx> {
+        match wallet_adapter
+            .withdraw_tx(
+                MantleTxBuilder::new(gas_context),
+                withdraw_message,
+                &self.wallet_config,
+            )
+            .await
+        {
+            Ok(tx) => Some(tx),
             Err(e) => {
                 tracing::error!("Failed to create withdrawal transaction: {:?}", e);
                 metrics::withdrawal_tx_failures_total();
-                return;
+                None
             }
-        };
+        }
+    }
 
+    async fn post_withdrawal_tx(
+        &self,
+        signed_tx: SignedMantleTx,
+        mempool_adapter: &MempoolAdapter,
+    ) -> bool {
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post withdrawal to mempool: {:?}", e);
             metrics::withdrawal_mempool_failures_total();
-            return;
+            false
+        } else {
+            true
         }
-
-        metrics::withdrawal_success_total();
-
-        self.current_declaration = None;
-        // TODO: how should we reset the nonce? shouldn't it be always with
-        // current_delcaration?
     }
 
     fn validate_withdrawal(&self, declaration_id: &DeclarationId) -> Result<(), &'static str> {

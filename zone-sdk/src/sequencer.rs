@@ -1,8 +1,9 @@
 use std::{pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
-use lb_common_http_client::{ProcessedBlockEvent, Slot};
+use lb_common_http_client::{ApiBlock, ProcessedBlockEvent, Slot};
 use lb_core::{
+    block::Block,
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
@@ -551,26 +552,8 @@ where
     /// Ensure the blocks stream is connected. Returns `false` if not yet
     /// ready (caller should return `None`).
     async fn ensure_connected(&mut self) -> bool {
-        if self.state.is_none() {
-            match self.node.consensus_info().await {
-                Ok(info) => {
-                    info!(
-                        "Sequencer connected: tip={:?}, lib={:?}",
-                        info.tip, info.lib
-                    );
-                    self.state = Some(TxState::new(info.lib));
-                    self.current_tip = Some(info.tip);
-                    // Do NOT update lib_slot here for fresh starts.
-                    // Keep it at genesis so the backfill check in
-                    // handle_block_event detects the gap and catches
-                    // up on existing channel inscriptions.
-                }
-                Err(e) => {
-                    warn!("Failed to fetch consensus info: {e}");
-                    tokio::time::sleep(self.config.reconnect_delay).await;
-                    return false;
-                }
-            }
+        if self.state.is_none() && !self.initialize_from_consensus_info().await {
+            return false;
         }
 
         match self.node.block_stream().await {
@@ -580,6 +563,29 @@ where
             }
             Err(e) => {
                 warn!("Failed to connect to blocks stream: {e}");
+                tokio::time::sleep(self.config.reconnect_delay).await;
+                false
+            }
+        }
+    }
+
+    async fn initialize_from_consensus_info(&mut self) -> bool {
+        match self.node.consensus_info().await {
+            Ok(info) => {
+                info!(
+                    "Sequencer connected: tip={:?}, lib={:?}",
+                    info.tip, info.lib
+                );
+                self.state = Some(TxState::new(info.lib));
+                self.current_tip = Some(info.tip);
+                // Do NOT update lib_slot here for fresh starts.
+                // Keep it at genesis so the backfill check in
+                // handle_block_event detects the gap and catches
+                // up on existing channel inscriptions.
+                true
+            }
+            Err(e) => {
+                warn!("Failed to fetch consensus info: {e}");
                 tokio::time::sleep(self.config.reconnect_delay).await;
                 false
             }
@@ -793,33 +799,15 @@ where
         return None;
     }
 
-    debug!(
-        "Backfilling finalized blocks from {:?} to {:?}",
-        from_slot + 1,
-        to_slot
-    );
+    log_finalized_backfill_range(from_slot, to_slot);
 
     let mut latest_msg_id = None;
 
     match node.blocks(from_slot + 1, to_slot).await {
         Ok(blocks) => {
             for block in blocks {
-                let block_id = block.header.id;
-                let parent_id = block.header.parent_block;
-
-                let our_txs: Vec<TxHash> = block
-                    .transactions
-                    .iter()
-                    .filter(|tx| matches_channel(tx, channel_id))
-                    .map(|tx| tx.mantle_tx.hash())
-                    .collect();
-
-                if let Some(tip) = find_channel_tip(&block.transactions, channel_id) {
-                    latest_msg_id = Some(tip);
-                }
-
-                let current_lib = state.lib();
-                state.process_block(block_id, parent_id, current_lib, our_txs);
+                latest_msg_id =
+                    replay_finalized_backfill_block(state, &block, channel_id, latest_msg_id);
             }
             debug!(
                 "Backfilled {} finalized blocks",
@@ -832,6 +820,14 @@ where
     }
 
     latest_msg_id
+}
+
+fn log_finalized_backfill_range(from_slot: Slot, to_slot: Slot) {
+    debug!(
+        "Backfilling finalized blocks from {:?} to {:?}",
+        from_slot + 1,
+        to_slot
+    );
 }
 
 /// Backfill canonical chain backwards from a missing parent to LIB.
@@ -854,12 +850,54 @@ async fn backfill_canonical<Node>(
     let lib = state.lib();
 
     // Walk backwards until we find a known block or reach lib
-    while !state.has_block(&current) && current != lib {
-        match node.block(current).await {
+    collect_canonical_backfill_blocks(state, node, &mut blocks_to_process, &mut current, lib).await;
+
+    // Process blocks in forward order (oldest first)
+    blocks_to_process.reverse();
+    for block in blocks_to_process {
+        replay_canonical_backfill_block(state, &block, channel_id, lib);
+    }
+
+    debug!("Canonical backfill complete");
+}
+
+fn replay_finalized_backfill_block(
+    state: &mut TxState,
+    block: &ApiBlock,
+    channel_id: ChannelId,
+    latest_msg_id: Option<MsgId>,
+) -> Option<MsgId> {
+    let block_id = block.header.id;
+    let parent_id = block.header.parent_block;
+
+    let our_txs: Vec<TxHash> = block
+        .transactions
+        .iter()
+        .filter(|tx| matches_channel(tx, channel_id))
+        .map(|tx| tx.mantle_tx.hash())
+        .collect();
+
+    let latest_msg_id = find_channel_tip(&block.transactions, channel_id).or(latest_msg_id);
+    let current_lib = state.lib();
+    state.process_block(block_id, parent_id, current_lib, our_txs);
+    latest_msg_id
+}
+
+async fn collect_canonical_backfill_blocks<Node>(
+    state: &TxState,
+    node: &Node,
+    blocks_to_process: &mut Vec<Block<SignedMantleTx>>,
+    current: &mut HeaderId,
+    lib: HeaderId,
+) where
+    Node: adapter::Node + Sync,
+{
+    while !state.has_block(current) && *current != lib {
+        match node.block(*current).await {
             Ok(Some(block)) => {
                 let parent = block.header().parent_block();
                 blocks_to_process.push(block);
-                current = parent;
+                *current = parent;
             }
             Ok(None) => {
                 warn!("Block {:?} not found during canonical backfill", current);
@@ -874,24 +912,25 @@ async fn backfill_canonical<Node>(
             }
         }
     }
+}
 
-    // Process blocks in forward order (oldest first)
-    blocks_to_process.reverse();
-    for block in blocks_to_process {
-        let block_id = block.header().id();
-        let parent_id = block.header().parent_block();
+fn replay_canonical_backfill_block(
+    state: &mut TxState,
+    block: &Block<SignedMantleTx>,
+    channel_id: ChannelId,
+    lib: HeaderId,
+) {
+    let block_id = block.header().id();
+    let parent_id = block.header().parent_block();
 
-        let our_txs: Vec<TxHash> = block
-            .transactions()
-            .filter(|tx| matches_channel(tx, channel_id))
-            .map(|tx| tx.mantle_tx.hash())
-            .collect();
+    let our_txs: Vec<TxHash> = block
+        .transactions()
+        .filter(|tx| matches_channel(tx, channel_id))
+        .map(|tx| tx.mantle_tx.hash())
+        .collect();
 
-        // Use current state lib to avoid premature finalization
-        state.process_block(block_id, parent_id, lib, our_txs);
-    }
-
-    debug!("Canonical backfill complete");
+    // Use current state lib to avoid premature finalization
+    state.process_block(block_id, parent_id, lib, our_txs);
 }
 
 fn enqueue_resubmit<Node>(
@@ -1044,9 +1083,8 @@ fn prepare_tx(
 mod tests {
     use async_trait::async_trait;
     use futures::Stream;
-    use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
+    use lb_common_http_client::{ApiHeader, BlockInfo, CryptarchiaInfo, State};
     use lb_core::{
-        block::Block,
         header::ContentId,
         mantle::{
             Note, Utxo,

@@ -9,7 +9,7 @@ use lb_core::{
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
-        genesis_tx::GENESIS_STORAGE_GAS_PRICE,
+        genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ops::transfer::TransferOp,
     },
     proofs::leader_proof::{self, LeaderPublic},
@@ -598,7 +598,7 @@ impl LedgerState {
             stake_inference,
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
-            execution_base_fee: 0.into(),
+            execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_ema: 0.into(),
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             storage_gas_consumed_in_epoch: 0.into(),
@@ -890,7 +890,7 @@ pub mod tests {
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
             block_density,
-            execution_base_fee: 0.into(),
+            execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_ema: 0.into(),
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             storage_gas_consumed_in_epoch: 0.into(),
@@ -1256,7 +1256,7 @@ pub mod tests {
         let transfer_op = TransferOp::new(inputs, outputs);
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op.clone())],
-            execution_gas_price: 1.into(),
+            execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         };
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap();

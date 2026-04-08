@@ -28,6 +28,13 @@ use crate::{
 // spec above.
 pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(0);
 
+/// Initial execution gas price at genesis
+//
+// TODO: This is currently set to 0 because zone-sdk and most of e2e tests are
+// not paying fees. This must be updated to the correct value once the spec is
+// finalized.
+pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(0);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GenesisTx(SignedMantleTx);
 
@@ -51,9 +58,9 @@ impl GenesisTx {
     pub fn from_tx(signed_mantle_tx: SignedMantleTx) -> Result<Self, Error> {
         let mantle_tx = &signed_mantle_tx.mantle_tx;
 
-        // Genesis transactions must have execution gas price of 0 and storage gas price
-        // matching the expected genesis value
-        if mantle_tx.execution_gas_price != 0.into()
+        // Genesis transactions must have execution gas price and storage gas price
+        // matching the expected genesis values
+        if mantle_tx.execution_gas_price != GENESIS_EXECUTION_GAS_PRICE
             || mantle_tx.storage_gas_price != GENESIS_STORAGE_GAS_PRICE
         {
             return Err(Error::InvalidGenesisGasPrice);
@@ -260,7 +267,7 @@ mod tests {
         new_ops.append(&mut ops);
         let mantle_tx = MantleTx {
             ops: new_ops,
-            execution_gas_price: 0.into(),
+            execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         };
         let mut new_op_proofs = vec![OpProof::ZkSig(

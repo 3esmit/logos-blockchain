@@ -61,3 +61,26 @@ pub mod serde_fr {
         }
     }
 }
+
+pub mod serde_fr_vec {
+    use ark_bn254::Fr;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct Wrapper(#[serde(with = "super::serde_fr")] Fr);
+
+    pub fn serialize<S: Serializer>(items: &[Fr], s: S) -> Result<S::Ok, S::Error> {
+        items
+            .iter()
+            .map(|f| Wrapper(*f))
+            .collect::<Vec<_>>()
+            .serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Fr>, D::Error> {
+        Ok(Vec::<Wrapper>::deserialize(d)?
+            .into_iter()
+            .map(|w| w.0)
+            .collect())
+    }
+}

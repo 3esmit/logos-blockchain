@@ -8,7 +8,7 @@ use crate::{
         NoteId,
         gas::{GasCost, GasOverflow, GasPrice},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
-        tx::MantleTxGasContext,
+        tx::MantleTxContext,
     },
     proofs::channel_withdraw_proof::ChannelWithdrawProof,
 };
@@ -20,13 +20,13 @@ pub struct MantleTxBuilder {
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
     channel_withdraw_proofs: HashMap<usize, ChannelWithdrawProof>,
-    context: MantleTxGasContext,
+    context: MantleTxContext,
 }
 
 // TODO: refactor to support more than 32 inputs (more than a single transfer)
 impl MantleTxBuilder {
     #[must_use]
-    pub fn new(context: MantleTxGasContext) -> Self {
+    pub fn new(context: MantleTxContext) -> Self {
         Self {
             mantle_tx: MantleTx {
                 ops: vec![],
@@ -156,12 +156,29 @@ impl MantleTxBuilder {
             .map(|n| i128::from(n.value))
             .sum();
 
-        in_sum - out_sum
+        // TODO: reuse this for `LedgerState::try_apply_tx` with some refactoring
+        // https://github.com/logos-blockchain/logos-blockchain/issues/2498
+        let ops_balance: i128 = self
+            .mantle_tx
+            .ops
+            .iter()
+            .map(|op| match op {
+                Op::ChannelDeposit(deposit) => -i128::from(deposit.amount),
+                Op::ChannelWithdraw(withdraw) => i128::from(withdraw.amount),
+                Op::LeaderClaim(_) => i128::from(self.context.leader_reward_amount),
+                // `Op::Transfer` is not handled here since `self.ledger_inputs` and
+                // `self.pending_transfer.outputs` already account for the balance changes from
+                // `Op::Transfer`s.
+                _ => 0,
+            })
+            .sum();
+
+        in_sum - out_sum + ops_balance
     }
 
     pub fn gas_cost<G: GasConstants>(&self) -> Result<GasCost, GasOverflow> {
         let build = self.clone().build();
-        build.total_gas_cost::<G>(&self.context)
+        build.total_gas_cost::<G>(&self.context.gas_context)
     }
 
     pub fn funding_delta<G: GasConstants>(&self) -> Result<i128, GasOverflow> {

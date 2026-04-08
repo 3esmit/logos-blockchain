@@ -19,8 +19,13 @@ use crate::{
 };
 
 /// Initial storage gas price at genesis, as defined in the Storage Markets
-/// spec: `P_STR(0)` = 1 LGO/gas
-pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(1);
+/// [spec](https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5?source=copy_link#326261aa09df804280b1fd5da1120a14):
+/// `P_STR(0)` = 1 LGO/gas
+//
+// TODO: This is currently set to 0 because zone-sdk and most of e2e tests are
+// not paying fees. This must be updated to the correct value defined in the
+// spec above.
+pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GenesisTx(SignedMantleTx);

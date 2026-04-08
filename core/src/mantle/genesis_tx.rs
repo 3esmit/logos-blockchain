@@ -431,8 +431,8 @@ mod tests {
 
     #[test]
     fn test_genesis_fees() {
-        // Should succeed with execution_gas_price=0 and
-        // storage_gas_price=GENESIS_STORAGE_GAS_PRICE
+        // Should succeed with execution_gas_price=GENESIS_EXECUTION_GAS_PRICE
+        // and storage_gas_price=GENESIS_STORAGE_GAS_PRICE
         let mut signed_mantle_tx = create_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
@@ -443,8 +443,9 @@ mod tests {
         );
         assert!(GenesisTx::from_tx(signed_mantle_tx.clone()).is_ok());
 
-        // Test with non-zero execution gas price
-        signed_mantle_tx.mantle_tx.execution_gas_price = 1.into();
+        // Test with wrong execution gas price
+        signed_mantle_tx.mantle_tx.execution_gas_price =
+            (GENESIS_EXECUTION_GAS_PRICE.into_inner() + 1).into();
         let result = GenesisTx::from_tx(signed_mantle_tx.clone());
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
 
@@ -455,10 +456,11 @@ mod tests {
         let result = GenesisTx::from_tx(signed_mantle_tx.clone());
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
 
-        // Test with wrong storage gas price and non-zero execution gas price
+        // Test with wrong storage/execution gas prices
         signed_mantle_tx.mantle_tx.storage_gas_price =
             (GENESIS_STORAGE_GAS_PRICE.into_inner() + 1).into();
-        signed_mantle_tx.mantle_tx.execution_gas_price = 1.into();
+        signed_mantle_tx.mantle_tx.execution_gas_price =
+            (GENESIS_EXECUTION_GAS_PRICE.into_inner() + 1).into();
         let result = GenesisTx::from_tx(signed_mantle_tx);
         assert_eq!(result, Err(Error::InvalidGenesisGasPrice));
     }

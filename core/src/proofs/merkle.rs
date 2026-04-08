@@ -1,4 +1,18 @@
+use lb_groth16::Fr;
 use lb_utxotree::{MerkleNode, MerklePath};
+
+/// Converts an MMR [`lb_mmr::MerklePath`] to the witness format expected by
+/// the circuit: siblings in forward order (bottom to top), selectors reversed.
+pub fn mmr_path_to_witness(path: &lb_mmr::MerklePath) -> (Vec<Fr>, Vec<bool>) {
+    let items = path.siblings.clone();
+    // Selectors: true if sibling is on the left (i.e. leaf is a right child).
+    // Circuit expects reversed order.
+    let selectors = (1..=items.len())
+        .rev()
+        .map(|h| !lb_mmr::is_left_child(path.leaf_index, h))
+        .collect();
+    (items, selectors)
+}
 
 /// Converts a [`MerklePath`] to the witness format expected by the circuit.
 pub fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) {

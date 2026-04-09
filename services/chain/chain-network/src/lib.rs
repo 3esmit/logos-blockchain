@@ -77,6 +77,7 @@ pub enum Error {
 pub enum Message<Tx> {
     ApplyBlockAndReconcileMempool {
         block: Block<Tx>,
+        locally_proposed: bool,
         resp: oneshot::Sender<Result<(), Error>>,
     },
 }
@@ -348,6 +349,7 @@ where
                             block.clone(),
                             relays.cryptarchia(),
                             relays.mempool_adapter(),
+                            false,
                         ).await {
                             Ok(()) => {
                                 trace!(counter.consensus_processed_blocks = 1);
@@ -512,6 +514,7 @@ where
             block,
             relays.cryptarchia(),
             relays.mempool_adapter(),
+            false,
         )
         .await
         {
@@ -553,11 +556,16 @@ where
         RuntimeServiceId: Send,
     {
         match msg {
-            Message::ApplyBlockAndReconcileMempool { block, resp } => {
+            Message::ApplyBlockAndReconcileMempool {
+                block,
+                locally_proposed,
+                resp,
+            } => {
                 let result = apply_block_and_reconcile_mempool::<_, Mempool, _>(
                     block,
                     relays.cryptarchia(),
                     relays.mempool_adapter(),
+                    locally_proposed,
                 )
                 .await;
 
@@ -610,6 +618,7 @@ async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceI
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     mempool_adapter: &MempoolAdapter<Mempool::Item>,
+    locally_proposed: bool,
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
@@ -620,7 +629,9 @@ where
 {
     debug!("Received proposal with ID: {:?}", block.header().id());
 
-    let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
+    let (tip, reorged_txs) = cryptarchia
+        .apply_block(block.clone(), locally_proposed)
+        .await?;
 
     // Remove included content from mempool if the block was applied to the honest
     // chain. Otherwise, we keep them in mempool, so they can be included to the

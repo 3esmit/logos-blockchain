@@ -26,8 +26,10 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, genesis_tx::GenesisTx,
+        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants,
+        genesis_tx::GenesisTx, ops::leader_claim::VoucherCm,
     },
+    proofs::leader_proof::LeaderProof as _,
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
@@ -35,6 +37,7 @@ pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
+use lb_mmr::MerklePath;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
@@ -135,6 +138,7 @@ pub enum ConsensusMsg<Tx> {
     /// and return the tip and reorged txs if successful.
     ApplyBlock {
         block: Box<Block<Tx>>,
+        locally_proposed: bool,
         tx: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
     },
     /// Forward chain sync events from the network to chain-service.
@@ -145,6 +149,14 @@ pub enum ConsensusMsg<Tx> {
     /// completed. Chain-service should start the prolonged bootstrap timer
     /// upon receiving this.
     IbdCompleted,
+    /// Query the tracked merkle path for a voucher commitment.
+    GetVoucherMerklePath {
+        voucher_cm: VoucherCm,
+        tx: oneshot::Sender<Option<MerklePath>>,
+    },
+    /// Remove tracked voucher paths for vouchers that have been claimed
+    /// in immutable blocks.
+    PruneTrackedVoucherPaths { voucher_cms: Vec<VoucherCm> },
     /// Subscribe to be notified when the chain becomes online mode.
     /// Since chain never goes back after entering online,
     /// the notification is delivered at most once.
@@ -214,6 +226,7 @@ pub struct Cryptarchia {
     pub ledger: lb_ledger::Ledger<HeaderId>,
     pub consensus: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
     pub genesis_id: HeaderId,
+    pub tracked_voucher_paths: lb_ledger::mantle::leader::TrackedVoucherPaths,
 }
 
 impl Cryptarchia {
@@ -238,6 +251,7 @@ impl Cryptarchia {
             ),
             ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
             genesis_id,
+            tracked_voucher_paths: lb_ledger::mantle::leader::TrackedVoucherPaths::new(),
         }
     }
 
@@ -307,6 +321,7 @@ impl Cryptarchia {
                 slot,
                 header.leader_proof(),
                 block.transactions(),
+                &mut self.tracked_voucher_paths,
             )
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
@@ -379,6 +394,7 @@ impl Cryptarchia {
             ledger: self.ledger,
             consensus,
             genesis_id: self.genesis_id,
+            tracked_voucher_paths: self.tracked_voucher_paths,
         };
 
         // Prune the ledger states of all the pruned blocks.
@@ -631,7 +647,11 @@ where
                                     Instant::now() + bootstrap_config.prolonged_bootstrap_period,
                                 )));
                             }
-                            ConsensusMsg::ApplyBlock { block, tx } => {
+                            ConsensusMsg::ApplyBlock { block, locally_proposed, tx } => {
+                                if locally_proposed {
+                                    let voucher_cm = *block.header().leader_proof().voucher_cm();
+                                    cryptarchia.tracked_voucher_paths.entry(voucher_cm).or_insert(None);
+                                }
                                 // TODO: move this into the process_message() function after making the process_message async.
                                 match Self::process_block_and_update_state(
                                         &mut cryptarchia,
@@ -666,7 +686,7 @@ where
                                 }
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg);
+                                Self::process_message(&mut cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg);
                             }
                         }
                     }
@@ -758,7 +778,7 @@ where
     }
 
     fn process_message(
-        cryptarchia: &Cryptarchia,
+        cryptarchia: &mut Cryptarchia,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
         chain_online_notifier: &ChainOnlineNotifier,
@@ -847,6 +867,20 @@ where
                 // the prolonged_bootstrap_timer. This should never be reached since we filter
                 // it out before calling process_message
                 panic!("IbdCompleted should be handled in the run loop, not in process_message");
+            }
+            ConsensusMsg::PruneTrackedVoucherPaths { voucher_cms } => {
+                for voucher_cm in &voucher_cms {
+                    cryptarchia.tracked_voucher_paths.remove(voucher_cm);
+                }
+            }
+            ConsensusMsg::GetVoucherMerklePath { voucher_cm, tx } => {
+                let path = cryptarchia
+                    .tracked_voucher_paths
+                    .get(&voucher_cm)
+                    .and_then(Clone::clone);
+                tx.send(path).unwrap_or_else(|_| {
+                    error!("Could not send voucher merkle path through channel");
+                });
             }
             ConsensusMsg::SubscribeChainOnline { sender } => {
                 sender
@@ -1146,6 +1180,7 @@ where
             self.state.lib_block_slot,
             self.state.lib_block_length,
         );
+        cryptarchia.tracked_voucher_paths = self.state.tracked_voucher_paths.clone();
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip_branch();

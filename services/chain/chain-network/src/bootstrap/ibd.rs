@@ -58,6 +58,7 @@ where
             block,
             &self.cryptarchia,
             &self.mempool_adapter,
+            false,
         )
         .await
         .map_err(|e| {

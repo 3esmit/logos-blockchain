@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::SystemTime};
 
 use lb_core::header::{Header, HeaderId};
 use lb_groth16::{Field as _, Fr};
-use lb_ledger::LedgerState;
+use lb_ledger::{LedgerState, mantle::leader::TrackedVoucherPaths};
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +22,8 @@ pub struct CryptarchiaConsensusState {
     pub(crate) storage_blocks_to_remove: HashSet<HeaderId>,
     /// Last engine state and timestamp for offline grace period tracking
     pub(crate) last_engine_state: Option<LastEngineState>,
+    /// Tracked voucher merkle paths for locally proposed vouchers.
+    pub(crate) tracked_voucher_paths: TrackedVoucherPaths,
 }
 
 impl CryptarchiaConsensusState {
@@ -56,6 +58,7 @@ impl CryptarchiaConsensusState {
                 timestamp: SystemTime::now(),
                 state: *cryptarchia.consensus.state(),
             }),
+            tracked_voucher_paths: cryptarchia.tracked_voucher_paths.clone(),
         })
     }
 }
@@ -93,6 +96,7 @@ impl ServiceState for CryptarchiaConsensusState {
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
             last_engine_state: None,
+            tracked_voucher_paths: TrackedVoucherPaths::new(),
         })
     }
 }
@@ -235,6 +239,7 @@ mod tests {
                 ledger: ledger_state,
                 consensus: cryptarchia_engine.clone(),
                 genesis_id: genesis_header_id,
+                tracked_voucher_paths: TrackedVoucherPaths::new(),
             },
             pruned_stale_blocks.clone(),
         )
@@ -333,6 +338,7 @@ mod tests {
                 ledger_config.clone(),
             ),
             genesis_id: genesis_header_id,
+            tracked_voucher_paths: TrackedVoucherPaths::new(),
         };
         let info_before = original.info();
 

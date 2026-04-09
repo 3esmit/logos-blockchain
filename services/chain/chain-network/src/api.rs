@@ -31,11 +31,13 @@ where
     pub async fn apply_block_and_reconcile_mempool(
         &self,
         block: Block<ChainNetworkService::Tx>,
+        locally_proposed: bool,
     ) -> Result<(), ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay
             .send(Message::ApplyBlockAndReconcileMempool {
                 block,
+                locally_proposed,
                 resp: resp_tx,
             })
             .await

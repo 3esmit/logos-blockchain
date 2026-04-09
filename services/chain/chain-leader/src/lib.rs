@@ -637,7 +637,12 @@ where
 
         ledger_state = ledger_state
             .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
+            .try_apply_header::<Groth16LeaderProof, HeaderId>(
+                slot,
+                &proof,
+                ledger_config,
+                &mut lb_ledger::mantle::leader::TrackedVoucherPaths::new(),
+            )?;
 
         let blend_session_after = *ledger_state
             .active_sessions()
@@ -721,7 +726,7 @@ where
         >,
     ) {
         if let Err(e) = chain_network_api
-            .apply_block_and_reconcile_mempool(block.clone())
+            .apply_block_and_reconcile_mempool(block.clone(), true)
             .await
         {
             error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());

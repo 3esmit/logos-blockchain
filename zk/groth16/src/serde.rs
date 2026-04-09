@@ -61,3 +61,69 @@ pub mod serde_fr {
         }
     }
 }
+
+pub mod serde_vec_fr {
+    use ark_bn254::Fr;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct FrWrapper(#[serde(with = "crate::serde::serde_fr")] Fr);
+
+    pub fn serialize<S>(items: &[Fr], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let wrappers: Vec<FrWrapper> = items.iter().copied().map(FrWrapper).collect();
+        wrappers.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Fr>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wrappers: Vec<FrWrapper> = Vec::deserialize(deserializer)?;
+        Ok(wrappers.into_iter().map(|w| w.0).collect())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use ark_bn254::Fr;
+        use num_bigint::BigUint;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Serialize, Deserialize, Eq, PartialEq, Debug)]
+        struct VecFrDeser(#[serde(with = "crate::serde::serde_vec_fr")] Vec<Fr>);
+
+        #[test]
+        fn test_serialize_deserialize_json() {
+            let v = VecFrDeser(vec![
+                BigUint::from(1u8).into(),
+                BigUint::from(42u8).into(),
+                BigUint::from(0u8).into(),
+            ]);
+            let json = serde_json::to_string(&v).unwrap();
+            let v2: VecFrDeser = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, v2);
+        }
+
+        #[test]
+        fn test_serialize_deserialize_bin() {
+            let v = VecFrDeser(vec![
+                BigUint::from(1u8).into(),
+                BigUint::from(42u8).into(),
+                BigUint::from(0u8).into(),
+            ]);
+            let bin = bincode::serialize(&v).unwrap();
+            let v2: VecFrDeser = bincode::deserialize(&bin).unwrap();
+            assert_eq!(v, v2);
+        }
+
+        #[test]
+        fn test_empty_vec() {
+            let v = VecFrDeser(vec![]);
+            let json = serde_json::to_string(&v).unwrap();
+            let v2: VecFrDeser = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, v2);
+        }
+    }
+}

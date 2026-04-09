@@ -1,4 +1,5 @@
-use lb_core::{block::Block, header::HeaderId};
+use lb_core::{block::Block, header::HeaderId, mantle::ops::leader_claim::VoucherCm};
+use lb_mmr::MerklePath;
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
@@ -190,6 +191,7 @@ where
     pub async fn apply_block(
         &self,
         block: Block<Cryptarchia::Tx>,
+        locally_proposed: bool,
     ) -> Result<(HeaderId, Vec<Cryptarchia::Tx>), ApiError> {
         let (tx, rx) = oneshot::channel();
 
@@ -197,6 +199,7 @@ where
         self.relay
             .send(ConsensusMsg::ApplyBlock {
                 block: boxed_block,
+                locally_proposed,
                 tx,
             })
             .await
@@ -239,6 +242,47 @@ where
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending IbdCompleted"))
+            })?;
+
+        Ok(())
+    }
+
+    /// Get the tracked merkle path for a voucher commitment.
+    /// Returns `Some(path)` if the voucher is tracked and has been flushed into
+    /// the MMR.
+    pub async fn get_voucher_merkle_path(
+        &self,
+        voucher_cm: VoucherCm,
+    ) -> Result<Option<MerklePath>, ApiError> {
+        let (tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(ConsensusMsg::GetVoucherMerklePath { voucher_cm, tx })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetVoucherMerklePath"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetVoucherMerklePath"
+            ))
+        })
+    }
+
+    /// Notify chain-service to remove tracked voucher paths for claimed
+    /// vouchers that have become immutable.
+    pub async fn prune_tracked_voucher_paths(
+        &self,
+        voucher_cms: Vec<VoucherCm>,
+    ) -> Result<(), ApiError> {
+        self.relay
+            .send(ConsensusMsg::PruneTrackedVoucherPaths { voucher_cms })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!(
+                    "{relay_error} while sending PruneTrackedVoucherPaths"
+                ))
             })?;
 
         Ok(())

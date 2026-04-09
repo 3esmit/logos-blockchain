@@ -1105,7 +1105,7 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_lib(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty(), &ledger_config),
+            LedgerState::from_utxos(empty(), &ledger_config, 1.into()),
             [GENESIS_ID; 32].into(),
             ledger_config,
             lb_cryptarchia_engine::State::Bootstrapping,

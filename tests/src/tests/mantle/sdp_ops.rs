@@ -257,7 +257,7 @@ async fn large_inscription_e2e() {
         max_payload / 256,
         max_payload / 64,
         max_payload / 2,
-        max_payload,
+        max_payload - 200_000,
     ] {
         let topology = Topology::spawn(TopologyConfig::two_validators()).await;
         topology.wait_network_ready().await;

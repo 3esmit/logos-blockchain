@@ -401,6 +401,7 @@ mod tests {
                 Utxo::new(tx_hash(0), 2, Note::new(4, alice)),
             ],
             &ledger_config(),
+            1.into(),
         );
 
         let wallet = Wallet::<_, TestVoucherId>::from_lib(
@@ -454,7 +455,7 @@ mod tests {
 
         let genesis = HeaderId::from([0; 32]);
 
-        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
+        let genesis_ledger = LedgerState::from_utxos([], &ledger_config(), 1.into());
 
         let mut wallet = Wallet::<_, TestVoucherId>::from_lib(
             [(alice, 1), (bob, 2)],
@@ -516,7 +517,7 @@ mod tests {
     fn test_fund_tx_with_change() {
         let alice = pk(1);
         let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([alice_utxo], &ledger_config());
+        let ledger_state = LedgerState::from_utxos([alice_utxo], &ledger_config(), 1.into());
 
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
@@ -567,6 +568,7 @@ mod tests {
                 Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
             ],
             &ledger_config(),
+            1.into(),
         );
 
         let wallet_state =
@@ -599,7 +601,7 @@ mod tests {
     #[test]
     fn test_fund_tx_zero_funds() {
         let alice = pk(1);
-        let ledger_state = LedgerState::from_utxos([], &ledger_config());
+        let ledger_state = LedgerState::from_utxos([], &ledger_config(), 1.into());
 
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
@@ -624,6 +626,7 @@ mod tests {
         let ledger_state = LedgerState::from_utxos(
             [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
             &ledger_config(),
+            1.into(),
         );
 
         let wallet_state =
@@ -675,6 +678,7 @@ mod tests {
             &LedgerState::from_utxos(
                 [Utxo::new(tx_hash(0), 0, Note::new(2885, alice))],
                 &ledger_config(),
+                1.into(),
             ),
         );
 
@@ -713,6 +717,7 @@ mod tests {
                 &LedgerState::from_utxos(
                     [Utxo::new(tx_hash(0), 0, Note::new(value, alice))],
                     &ledger_config(),
+                    1.into(),
                 ),
             );
 
@@ -730,6 +735,7 @@ mod tests {
             &LedgerState::from_utxos(
                 [Utxo::new(tx_hash(0), 0, Note::new(2926, alice))],
                 &ledger_config(),
+                1.into(),
             ),
         );
 

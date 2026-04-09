@@ -618,7 +618,7 @@ mod tests {
     use lb_core::{
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _,
-            gas::{GasPrice, MainnetGasConstants},
+            gas::MainnetGasConstants,
             ops::{
                 channel::{
                     ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,

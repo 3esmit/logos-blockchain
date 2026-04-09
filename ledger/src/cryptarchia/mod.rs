@@ -671,8 +671,11 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            AuthenticatedMantleTx, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx,
-            Transaction as _, gas::MainnetGasConstants, genesis_tx::GENESIS_STORAGE_GAS_PRICE,
+            AuthenticatedMantleTx, MantleTx, Note, Op,
+            OpProof::ZkSig,
+            SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants,
+            genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
             ops::leader_claim::VoucherCm,
         },
         sdp::ServiceParameters,

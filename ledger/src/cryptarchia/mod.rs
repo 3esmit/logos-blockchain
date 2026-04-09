@@ -9,7 +9,6 @@ use lb_core::{
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
-        genesis_tx::GENESIS_EXECUTION_GAS_PRICE,
         ops::transfer::TransferOp,
     },
     proofs::leader_proof::{self, LeaderPublic},
@@ -545,6 +544,7 @@ impl LedgerState {
         epoch_nonce: Fr,
     ) -> Result<Self, LedgerError<Id>> {
         let initial_storage_gas_price = tx.mantle_tx().storage_gas_price;
+        let initial_execution_gas_price = tx.mantle_tx().execution_gas_price;
         let transfer_op = tx.genesis_transfer();
         if !transfer_op.inputs.is_empty() {
             return Err(LedgerError::InputInGenesis(transfer_op.inputs[0]));
@@ -555,6 +555,7 @@ impl LedgerState {
             config,
             epoch_nonce,
             initial_storage_gas_price,
+            initial_execution_gas_price,
         ))
     }
 
@@ -563,6 +564,7 @@ impl LedgerState {
         config: &Config,
         nonce: Fr,
         storage_gas_price: GasPrice,
+        execution_base_fee: GasPrice,
     ) -> Self {
         let utxos = utxos
             .into_iter()
@@ -609,7 +611,7 @@ impl LedgerState {
             stake_inference,
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
-            execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
+            execution_base_fee,
             storage_gas_ema: 0.into(),
             storage_gas_price,
             storage_gas_consumed_in_epoch: 0.into(),
@@ -1298,8 +1300,13 @@ pub mod tests {
         let output_note2 = Note::new(3000, output_note2_sk.to_public_key());
 
         let locked_notes = LockedNotes::new();
-        let ledger_state =
-            LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO, GENESIS_STORAGE_GAS_PRICE);
+        let ledger_state = LedgerState::from_utxos(
+            [input_utxo],
+            &config(),
+            Fr::ZERO,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
@@ -1384,8 +1391,13 @@ pub mod tests {
             note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
         };
 
-        let ledger_state =
-            LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO, GENESIS_STORAGE_GAS_PRICE);
+        let ledger_state = LedgerState::from_utxos(
+            [input_utxo],
+            &config(),
+            Fr::ZERO,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
 
         let invalid_utxos = [
             non_existent_utxo_1,
@@ -1422,8 +1434,13 @@ pub mod tests {
         let output_note = Note::new(1, Fr::from(BigUint::from(2u8)).into());
 
         let locked_notes = LockedNotes::new();
-        let ledger_state =
-            LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO, GENESIS_STORAGE_GAS_PRICE);
+        let ledger_state = LedgerState::from_utxos(
+            [input_utxo],
+            &config(),
+            Fr::ZERO,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
 
@@ -1465,8 +1482,13 @@ pub mod tests {
         };
 
         let locked_notes = LockedNotes::new();
-        let ledger_state =
-            LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO, GENESIS_STORAGE_GAS_PRICE);
+        let ledger_state = LedgerState::from_utxos(
+            [input_utxo],
+            &config(),
+            Fr::ZERO,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
@@ -1496,8 +1518,13 @@ pub mod tests {
         };
 
         let locked_notes = LockedNotes::new();
-        let ledger_state =
-            LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO, GENESIS_STORAGE_GAS_PRICE);
+        let ledger_state = LedgerState::from_utxos(
+            [input_utxo],
+            &config(),
+            Fr::ZERO,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
             &[(&input_sk, &input_utxo)],
             vec![Note::new(0, Fr::from(BigUint::from(2u8)).into())],
@@ -1685,8 +1712,13 @@ pub mod tests {
     #[test]
     fn test_execution_market_update() {
         // Create a base ledger first
-        let mut ledger =
-            LedgerState::from_utxos([], &config(), Fr::ZERO, GENESIS_STORAGE_GAS_PRICE);
+        let mut ledger = LedgerState::from_utxos(
+            [],
+            &config(),
+            Fr::ZERO,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
 
         // Some random values to test
         let old_avg = 1_596_688.into();

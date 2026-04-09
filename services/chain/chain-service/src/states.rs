@@ -221,7 +221,7 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([], &ledger_config, 1.into()),
+            LedgerState::from_utxos([], &ledger_config, 1.into(), 1.into()),
             ledger_config,
         );
 
@@ -329,7 +329,7 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_utxos([], &ledger_config, 1.into()),
+                LedgerState::from_utxos([], &ledger_config, 1.into(), 1.into()),
                 ledger_config.clone(),
             ),
             genesis_id: genesis_header_id,

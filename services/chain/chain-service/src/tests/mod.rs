@@ -32,7 +32,7 @@ fn cryptarchia_switch_to_online() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_lib(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config, 1.into()),
+        LedgerState::from_utxos([utxo], &config, 1.into(), 1.into()),
         genesis_id,
         config,
         lb_cryptarchia_engine::State::Bootstrapping,

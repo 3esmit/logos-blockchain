@@ -391,9 +391,15 @@ impl LedgerState {
         utxos: impl IntoIterator<Item = Utxo>,
         config: &Config,
         storage_gas_price: GasPrice,
+        execution_base_fee: GasPrice,
     ) -> Self {
-        let cryptarchia_ledger =
-            CryptarchiaLedger::from_utxos(utxos, config, Fr::ZERO, storage_gas_price);
+        let cryptarchia_ledger = CryptarchiaLedger::from_utxos(
+            utxos,
+            config,
+            Fr::ZERO,
+            storage_gas_price,
+            execution_base_fee,
+        );
         let mantle_ledger = MantleLedger::new(config, cryptarchia_ledger.epoch_state());
         Self {
             block_number: 0,
@@ -666,7 +672,12 @@ mod tests {
     pub fn create_test_ledger() -> (Ledger<HeaderId>, HeaderId, Utxo) {
         let config = config();
         let utxo = utxo();
-        let genesis_state = LedgerState::from_utxos([utxo], &config, GENESIS_STORAGE_GAS_PRICE);
+        let genesis_state = LedgerState::from_utxos(
+            [utxo],
+            &config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let ledger = Ledger::new([0; 32], genesis_state, config);
         (ledger, [0; 32], utxo)
     }
@@ -809,7 +820,12 @@ mod tests {
     #[test]
     fn test_channel_inscribe_operation() {
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let state = LedgerState::from_utxos(
+            [utxo()],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([2; 32]);
 
@@ -837,7 +853,12 @@ mod tests {
     #[test]
     fn test_channel_set_keys_operation() {
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let state = LedgerState::from_utxos(
+            [utxo()],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([3; 32]);
 
@@ -874,8 +895,12 @@ mod tests {
     fn test_channel_deposit_operation() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let mut ledger_state =
-            LedgerState::from_utxos([utxo], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let mut ledger_state = LedgerState::from_utxos(
+            [utxo],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([4; 32]);
 
@@ -933,8 +958,12 @@ mod tests {
     fn test_channel_withdraw_operation() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let mut ledger_state =
-            LedgerState::from_utxos([utxo], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let mut ledger_state = LedgerState::from_utxos(
+            [utxo],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([9; 32]);
 
@@ -1025,8 +1054,12 @@ mod tests {
     fn test_channel_withdraw_invalid_helper_backed_proof_fails_on_apply() {
         let test_config = config();
         let (sk, utxo) = utxo_with_sk();
-        let mut ledger_state =
-            LedgerState::from_utxos([utxo], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let mut ledger_state = LedgerState::from_utxos(
+            [utxo],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([10; 32]);
 
@@ -1133,7 +1166,12 @@ mod tests {
     #[test]
     fn test_invalid_parent_error() {
         let test_config = config();
-        let mut state = LedgerState::from_utxos([utxo()], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let mut state = LedgerState::from_utxos(
+            [utxo()],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([5; 32]);
 
@@ -1203,7 +1241,12 @@ mod tests {
     #[test]
     fn test_unauthorized_signer_error() {
         let test_config = config();
-        let mut state = LedgerState::from_utxos([utxo()], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let mut state = LedgerState::from_utxos(
+            [utxo()],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (signing_key, verifying_key) = create_test_keys();
         let (unauthorized_signing_key, unauthorized_verifying_key) = create_test_keys_with_seed(3);
         let channel_id = ChannelId::from([6; 32]);
@@ -1250,7 +1293,12 @@ mod tests {
     #[test]
     fn test_empty_keys_error() {
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let state = LedgerState::from_utxos(
+            [utxo()],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (signing_key, _) = create_test_keys();
         let channel_id = ChannelId::from([7; 32]);
 
@@ -1276,7 +1324,12 @@ mod tests {
         // Change the keys for channel 1
         // Post another inscription in channel 1
         let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &test_config, GENESIS_STORAGE_GAS_PRICE);
+        let state = LedgerState::from_utxos(
+            [utxo()],
+            &test_config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
         let (sk1, vk1) = create_test_keys_with_seed(1);
         let (sk2, vk2) = create_test_keys_with_seed(2);
         let (_, vk3) = create_test_keys_with_seed(3);
@@ -1372,7 +1425,12 @@ mod tests {
     fn test_storage_price_rejection() {
         let utxo = utxo();
         let config = config();
-        let ledger = LedgerState::from_utxos([utxo], &config, GENESIS_STORAGE_GAS_PRICE);
+        let ledger = LedgerState::from_utxos(
+            [utxo],
+            &config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
 
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
@@ -1403,7 +1461,12 @@ mod tests {
     fn test_base_fee_rejection() {
         let utxo = utxo();
         let config = config();
-        let mut ledger = LedgerState::from_utxos([utxo], &config, GENESIS_STORAGE_GAS_PRICE);
+        let mut ledger = LedgerState::from_utxos(
+            [utxo],
+            &config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
 
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
@@ -1445,7 +1508,12 @@ mod tests {
     fn test_priority_fees_go_to_leader() {
         let utxo = utxo();
         let config = config();
-        let ledger = LedgerState::from_utxos([utxo], &config, GENESIS_STORAGE_GAS_PRICE);
+        let ledger = LedgerState::from_utxos(
+            [utxo],
+            &config,
+            GENESIS_STORAGE_GAS_PRICE,
+            GENESIS_EXECUTION_GAS_PRICE,
+        );
 
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));

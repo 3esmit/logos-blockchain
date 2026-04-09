@@ -5,7 +5,7 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 32
-    protocol_name: /logos-blockchain-devnet/blend/1.0.0
+    protocol_name: /logos-blockchain-playground/blend/1.0.0
     data_replication_factor: 0
   core:
     scheduler:
@@ -18,9 +18,9 @@ blend:
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
-  kademlia_protocol_name: /logos-blockchain-devnet/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-devnet/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-devnet/chainsync/1.0.0
+  kademlia_protocol_name: /logos-blockchain-playground/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-playground/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-playground/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
@@ -41,7 +41,7 @@ cryptarchia:
     min_stake:
       threshold: 1
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain-devnet/cryptarchia/1.0.0
+  gossipsub_protocol: /logos-blockchain-playground/cryptarchia/1.0.0
   genesis_state:
     mantle_tx:
       ops:
@@ -936,5 +936,5 @@ time:
   slot_duration: '1.000000000'
   chain_start_time: 2026-03-03 14:49:11.0 +00:00:00
 mempool:
-  pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0
+  pubsub_topic: /logos-blockchain-playground/mempool/1.0.0
 ";

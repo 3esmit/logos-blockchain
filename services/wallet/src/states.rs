@@ -88,9 +88,10 @@ impl<'u> ServiceState<'u> {
     pub fn prune_vouchers(
         &mut self,
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
-    ) {
-        self.wallet.prune_vouchers(pruned_nullifiers);
+    ) -> Vec<VoucherCm> {
+        let pruned_cms = self.wallet.prune_vouchers(pruned_nullifiers);
         self.update_state();
+        pruned_cms
     }
 
     pub const fn wallet(&self) -> &Wallet {

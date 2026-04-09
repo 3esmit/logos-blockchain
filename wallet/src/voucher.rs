@@ -41,9 +41,9 @@ impl<Id> Vouchers<Id> {
         self.get(self.voucher_nullifiers.get(nf)?)
     }
 
-    pub(crate) fn remove_by_nullifier(&mut self, nf: &VoucherNullifier) -> Option<Id> {
+    pub(crate) fn remove_by_nullifier(&mut self, nf: &VoucherNullifier) -> Option<(VoucherCm, Id)> {
         let cm = self.voucher_nullifiers.remove(nf)?;
-        self.vouchers.remove(&cm)
+        self.vouchers.remove(&cm).map(|id| (cm, id))
     }
 
     pub(crate) fn commitments_and_nullifiers(

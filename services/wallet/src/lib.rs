@@ -29,7 +29,6 @@ use lb_core::{
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
-use lb_groth16::Fr;
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
@@ -45,7 +44,6 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
-use lb_utxotree::MerklePath;
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -352,7 +350,7 @@ where
                     Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &storage_adapter, &mut state).await;
+                    Self::handle_lib_update(&lib_update, &storage_adapter, &mut state, &cryptarchia_api).await;
                 }
             }
         }
@@ -469,7 +467,7 @@ where
                     }
                 };
 
-                let resp = Self::sign_tx(tx_builder, ledger, kms, state.wallet())
+                let resp = Self::sign_tx(tx_builder, ledger, kms, state.wallet(), cryptarchia)
                     .await
                     .map(|signed_tx| TipResponse {
                         tip,
@@ -647,9 +645,9 @@ where
     async fn sign_leader_claim(
         tx_hash: TxHash,
         leader_claim_op: &LeaderClaimOp,
-        ledger: &LedgerState,
         wallet: &Wallet,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
         let (voucher_master_key_id, voucher_index) = wallet
             .get_voucher_by_nullifier(&leader_claim_op.voucher_nullifier)
@@ -660,9 +658,10 @@ where
             Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
 
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
-        let path = ledger
-            .mantle_ledger()
-            .voucher_merkle_path(voucher_cm)
+        let path = cryptarchia
+            .get_voucher_merkle_path(voucher_cm)
+            .await
+            .map_err(WalletServiceError::from)?
             .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
         let rewards_root = leader_claim_op.rewards_root;
 
@@ -689,6 +688,7 @@ where
         ledger: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         wallet: &Wallet,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
         let input_pks: Vec<ZkPublicKey> = tx_builder
@@ -727,7 +727,7 @@ where
                     Self::sign_sdp_active(tx_hash, active_op, &ledger, kms).await?
                 }
                 Op::LeaderClaim(claim_op) => {
-                    Self::sign_leader_claim(tx_hash, claim_op, &ledger, wallet, kms).await?
+                    Self::sign_leader_claim(tx_hash, claim_op, wallet, kms, cryptarchia).await?
                 }
                 Op::Transfer(_) => Self::sign_transfer(tx_hash, input_pks.clone(), kms).await?,
             };
@@ -791,7 +791,7 @@ where
 
     fn generate_poc(
         voucher_secret: VoucherSecret,
-        path: &MerklePath<Fr>,
+        path: &lb_mmr::MerklePath,
         rewards_root: RewardsRoot,
         tx_hash: TxHash,
     ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
@@ -923,13 +923,7 @@ where
             }
         };
 
-        // Get the ledger state at the specified tip
-        let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
-            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
-            return;
-        };
-
-        let voucher = Self::find_claimable_voucher(wallet, &ledger_state);
+        let voucher = Self::find_claimable_voucher(wallet, cryptarchia).await;
         if resp_tx
             .send(Ok(TipResponse {
                 tip,
@@ -941,12 +935,12 @@ where
         }
     }
 
-    fn find_claimable_voucher(
+    async fn find_claimable_voucher(
         wallet: &Wallet,
-        ledger_state: &LedgerState,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) -> Option<VoucherCommitmentAndNullifier> {
         for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
-            if ledger_state.mantle_ledger().has_claimable_voucher(cm) {
+            if let Ok(Some(_)) = cryptarchia.get_voucher_merkle_path(*cm).await {
                 return Some(VoucherCommitmentAndNullifier {
                     commitment: *cm,
                     nullifier: *nf,
@@ -1042,6 +1036,7 @@ where
         lib_update: &LibUpdate,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         state: &mut ServiceState<'_>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         debug!(
             new_lib = ?lib_update.new_lib,
@@ -1072,7 +1067,15 @@ where
                 }
             })
             .collect();
-        state.prune_vouchers(claimed_nullifiers);
+        let pruned_cms = state.prune_vouchers(claimed_nullifiers);
+        if !pruned_cms.is_empty() {
+            if let Err(e) = cryptarchia_api
+                .prune_tracked_voucher_paths(pruned_cms)
+                .await
+            {
+                error!("Failed to prune tracked voucher paths in chain service: {e}");
+            }
+        }
     }
 
     async fn backfill_missing_blocks(

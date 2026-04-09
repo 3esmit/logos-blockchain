@@ -325,12 +325,15 @@ where
     pub fn prune_vouchers(
         &mut self,
         immutable_transactions: impl IntoIterator<Item = VoucherNullifier>,
-    ) {
+    ) -> Vec<VoucherCm> {
+        let mut pruned_cms = Vec::new();
         for voucher_nullifier in immutable_transactions {
-            if let Some(id) = self.known_vouchers.remove_by_nullifier(&voucher_nullifier) {
+            if let Some((cm, id)) = self.known_vouchers.remove_by_nullifier(&voucher_nullifier) {
                 tracing::trace!("Pruned voucher {:?} from wallet", id);
+                pruned_cms.push(cm);
             }
         }
+        pruned_cms
     }
 }
 

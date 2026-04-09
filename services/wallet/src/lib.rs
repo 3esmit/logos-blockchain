@@ -1068,13 +1068,12 @@ where
             })
             .collect();
         let pruned_cms = state.prune_vouchers(claimed_nullifiers);
-        if !pruned_cms.is_empty() {
-            if let Err(e) = cryptarchia_api
+        if !pruned_cms.is_empty()
+            && let Err(e) = cryptarchia_api
                 .prune_tracked_voucher_paths(pruned_cms)
                 .await
-            {
-                error!("Failed to prune tracked voucher paths in chain service: {e}");
-            }
+        {
+            error!("Failed to prune tracked voucher paths in chain service: {e}");
         }
     }
 

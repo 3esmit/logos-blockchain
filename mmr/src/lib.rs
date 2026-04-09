@@ -116,10 +116,11 @@ where
     ///
     /// All paths reachable through the iterator are updated in-place so they
     /// remain valid against the new [`frontier_root`](Self::frontier_root).
-    pub fn push_with_paths<'a>(
+    #[expect(single_use_lifetimes, reason = "for mutable references of paths")]
+    pub fn push_with_paths<'p>(
         &self,
         elem: T,
-        paths: impl IntoIterator<Item = &'a mut MerklePath>,
+        paths: impl IntoIterator<Item = &'p mut MerklePath>,
     ) -> Result<(Self, MerklePath), MmrFull> {
         if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
             return Err(MmrFull);

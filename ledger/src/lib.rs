@@ -138,6 +138,7 @@ where
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
+        tracked: &mut mantle::leader::TrackedVoucherPaths,
     ) -> Result<(Id, LedgerState), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -148,10 +149,13 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let new_state =
-            parent_state
-                .clone()
-                .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
+        let new_state = parent_state.clone().try_update::<_, _, Constants>(
+            slot,
+            proof,
+            txs,
+            &self.config,
+            tracked,
+        )?;
 
         Ok((id, new_state))
     }
@@ -215,12 +219,13 @@ impl LedgerState {
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx>,
         config: &Config,
+        tracked: &mut mantle::leader::TrackedVoucherPaths,
     ) -> Result<Self, LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
     {
-        self.try_apply_header(slot, proof, config)?
+        self.try_apply_header(slot, proof, config, tracked)?
             .try_apply_contents::<_, Constants>(config, txs)
     }
 
@@ -232,6 +237,7 @@ impl LedgerState {
         slot: Slot,
         proof: &LeaderProof,
         config: &Config,
+        tracked: &mut mantle::leader::TrackedVoucherPaths,
     ) -> Result<Self, LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -243,6 +249,7 @@ impl LedgerState {
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
             config,
+            tracked,
         )?;
 
         // Insert reward UTXOs into the cryptarchia ledger
@@ -793,6 +800,7 @@ mod tests {
         );
 
         let new_id = [1; 32];
+        let mut tracked = mantle::leader::TrackedVoucherPaths::new();
         let (_, state) = ledger
             .prepare_update::<_, MainnetGasConstants>(
                 new_id,
@@ -800,6 +808,7 @@ mod tests {
                 Slot::from(1u64),
                 &proof,
                 std::iter::once(&tx),
+                &mut tracked,
             )
             .unwrap();
         ledger.commit_update(new_id, state);

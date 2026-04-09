@@ -8,7 +8,7 @@ use rpds::StackSync;
 
 mod path;
 
-pub use path::MerklePath;
+pub use path::{MerklePath, is_left_child};
 use path::{update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
@@ -114,16 +114,18 @@ where
     /// Push an element, updating any tracked [`MerklePath`]s and returning
     /// a new one for the pushed element.
     ///
-    /// All paths in `paths` are updated in-place so they remain valid
-    /// against the new [`frontier_root`](Self::frontier_root).
-    pub fn push_with_paths(
+    /// All paths reachable through the iterator are updated in-place so they
+    /// remain valid against the new [`frontier_root`](Self::frontier_root).
+    pub fn push_with_paths<'a>(
         &self,
         elem: T,
-        paths: &mut [MerklePath],
+        paths: impl IntoIterator<Item = &'a mut MerklePath>,
     ) -> Result<(Self, MerklePath), MmrFull> {
         if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
             return Err(MmrFull);
         }
+
+        let mut paths: Vec<&mut MerklePath> = paths.into_iter().collect();
 
         let mut new_path = MerklePath {
             leaf_index: self.len(),
@@ -141,7 +143,7 @@ where
         while let Some(root) = roots.peek().copied() {
             if last_root.height == root.height {
                 roots.pop_mut();
-                update_paths_at_merge(last_root, root, paths, &mut new_path);
+                update_paths_at_merge(last_root, root, &mut paths, &mut new_path);
                 last_root = Root {
                     root: Hash::compress(&[root.root, last_root.root]),
                     height: last_root.height + 1,
@@ -159,7 +161,7 @@ where
         update_paths_above_merge::<Hash, MAX_HEIGHT>(
             last_root,
             roots.iter().copied(),
-            paths,
+            &mut paths,
             &mut new_path,
         );
 
@@ -413,7 +415,7 @@ mod test {
 
         for (i, elem) in elements.iter().enumerate() {
             let (new_mmr, new_path) = mmr
-                .push_with_paths(TestFr::from(*elem), &mut paths)
+                .push_with_paths(TestFr::from(*elem), paths.iter_mut())
                 .unwrap();
             mmr = new_mmr;
             paths.push(new_path);
@@ -439,7 +441,7 @@ mod test {
 
         for (i, elem) in elements.iter().enumerate() {
             let (new_mmr, new_path) = mmr
-                .push_with_paths(TestFr::from(*elem), &mut paths)
+                .push_with_paths(TestFr::from(*elem), paths.iter_mut())
                 .unwrap();
             mmr = new_mmr;
             // Keep only even-indexed elements.
@@ -464,7 +466,7 @@ mod test {
         const HEIGHT: u8 = 3;
         let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
         let (new_mmr, path) = mmr
-            .push_with_paths(TestFr::from(b"only".as_ref()), &mut [])
+            .push_with_paths(TestFr::from(b"only".as_ref()), std::iter::empty())
             .unwrap();
         mmr = new_mmr;
         assert_eq!(path.leaf_index(), 0);
@@ -480,7 +482,7 @@ mod test {
 
         for elem in elems {
             let (new_mmr, new_path) = mmr
-                .push_with_paths(TestFr::from(*elem), &mut paths)
+                .push_with_paths(TestFr::from(*elem), paths.iter_mut())
                 .unwrap();
             mmr = new_mmr;
             paths.push(new_path);
@@ -496,7 +498,7 @@ mod test {
 
         // Tree is full — next push should fail.
         assert!(
-            mmr.push_with_paths(TestFr::from(b"overflow".as_ref()), &mut paths)
+            mmr.push_with_paths(TestFr::from(b"overflow".as_ref()), paths.iter_mut())
                 .is_err()
         );
     }
@@ -511,7 +513,7 @@ mod test {
             let bytes = i.to_le_bytes();
             mmr_a = mmr_a.push(TestFr::from(bytes.as_ref())).unwrap();
             let (new_b, _) = mmr_b
-                .push_with_paths(TestFr::from(bytes.as_ref()), &mut [])
+                .push_with_paths(TestFr::from(bytes.as_ref()), std::iter::empty())
                 .unwrap();
             mmr_b = new_b;
             assert_eq!(mmr_a.frontier_root(), mmr_b.frontier_root());

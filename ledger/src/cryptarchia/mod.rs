@@ -759,6 +759,7 @@ pub mod tests {
             slot,
             &proof,
             std::iter::empty::<&SignedMantleTx>(),
+            &mut crate::mantle::leader::TrackedVoucherPaths::new(),
         )?;
         ledger.commit_update(id, state);
         Ok(id)

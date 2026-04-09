@@ -1,15 +1,25 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashMap};
 
 use lb_core::{
-    crypto::ZkHash,
+    crypto::ZkHasher,
     mantle::{
         Value,
         ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
     },
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_utxotree::{DynamicMerkleTree, MerklePath};
-use rpds::{HashTrieMapSync, VectorSync};
+use lb_mmr::{MerkleMountainRange, MerklePath};
+use rpds::VectorSync;
+
+pub type VoucherMmr = MerkleMountainRange<VoucherCm, ZkHasher>;
+
+/// Tracked voucher merkle paths, keyed by commitment.
+///
+/// - `Some(path)`: an existing path that is kept up-to-date across pushes.
+/// - `None`: the commitment is tracked but has not yet been flushed into the
+///   MMR; a path will be created when the voucher is flushed during an epoch
+///   transition.
+pub type TrackedVoucherPaths = HashMap<VoucherCm, Option<MerklePath>>;
 
 /// A leader state in the mantle ledger.
 ///
@@ -34,12 +44,9 @@ pub struct LeaderState {
     /// Rewards that are being collected during the current epoch.
     /// This will be added to the `claimable_rewards` when a new epoch starts.
     pending_rewards: Value,
-    // Merkle tree vouchers that can be claimed in this epoch
-    // this is updated once at the start of each epoch
-    // TODO: Replace this with MMR to save space by moving merkle path
-    //       maintenance to the wallet.
-    claimable_vouchers: DynamicMerkleTree<VoucherCm, lb_core::crypto::ZkHasher>,
-    claimable_voucher_indices: HashTrieMapSync<VoucherCm, usize>,
+    // MMR of vouchers that can be claimed in this epoch.
+    // Updated once at the start of each epoch by flushing pending_vouchers.
+    claimable_vouchers: VoucherMmr,
     // List of vouchers that are waiting to be added at the start of
     // the next epoch
     pending_vouchers: VectorSync<VoucherCm>,
@@ -71,19 +78,27 @@ impl LeaderState {
             nfs: rpds::HashTrieSetSync::new_sync(),
             pending_rewards: 0,
             claimable_rewards: 0,
-            claimable_vouchers: DynamicMerkleTree::new(),
-            claimable_voucher_indices: HashTrieMapSync::new_sync(),
+            claimable_vouchers: VoucherMmr::new(),
             pending_vouchers: VectorSync::new_sync(),
         }
     }
 
-    pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<Self, Error> {
+    pub fn try_apply_header(
+        self,
+        epoch: Epoch,
+        voucher_cm: VoucherCm,
+        tracked: &mut TrackedVoucherPaths,
+    ) -> Result<Self, Error> {
         Ok(self
-            .update_epoch_state(epoch)?
+            .update_epoch_state(epoch, tracked)?
             .add_pending_voucher(voucher_cm))
     }
 
-    fn update_epoch_state(mut self, epoch: Epoch) -> Result<Self, Error> {
+    fn update_epoch_state(
+        mut self,
+        epoch: Epoch,
+        tracked: &mut TrackedVoucherPaths,
+    ) -> Result<Self, Error> {
         match epoch.cmp(&self.epoch) {
             Ordering::Equal => Ok(self),
             Ordering::Less => Err(Error::InvalidEpoch {
@@ -91,7 +106,7 @@ impl LeaderState {
                 incoming: epoch,
             }),
             Ordering::Greater => {
-                self = self.update_claimable_vouchers();
+                self = self.update_claimable_vouchers(tracked);
                 self = self.update_claimable_rewards();
                 self.epoch = epoch;
                 Ok(self)
@@ -114,18 +129,26 @@ impl LeaderState {
         self
     }
 
-    /// Insert all pending vouchers into the Merkle tree,
-    /// and update the Merkle root.
-    fn update_claimable_vouchers(mut self) -> Self {
+    /// Flush all pending vouchers into the MMR and update the root.
+    ///
+    /// Existing paths in `tracked` are kept up-to-date. If a flushed voucher
+    /// is tracked with `None`, a new path is created and stored.
+    fn update_claimable_vouchers(mut self, tracked: &mut TrackedVoucherPaths) -> Self {
         for &voucher_cm in &self.pending_vouchers {
-            let (new_vouchers, index) = self.claimable_vouchers.insert(voucher_cm);
-            self.claimable_vouchers = new_vouchers;
-            self.claimable_voucher_indices =
-                self.claimable_voucher_indices.insert(voucher_cm, index);
+            let (new_mmr, new_path) = self
+                .claimable_vouchers
+                .push_with_paths(voucher_cm, tracked.values_mut().filter_map(Option::as_mut))
+                .expect("MMR should not be full");
+            self.claimable_vouchers = new_mmr;
+
+            if let Some(path) = tracked.get_mut(&voucher_cm) {
+                *path = Some(new_path);
+            }
         }
+
         self.pending_vouchers = VectorSync::new_sync();
-        self.claimable_vouchers_root = self.claimable_vouchers.root().into();
-        self.n_claimable_vouchers = self.claimable_vouchers.size() as u64;
+        self.claimable_vouchers_root = self.claimable_vouchers.frontier_root().into();
+        self.n_claimable_vouchers = self.claimable_vouchers.len() as u64;
         self
     }
 
@@ -136,18 +159,8 @@ impl LeaderState {
         self
     }
 
-    pub(crate) fn has_claimable_voucher(&self, voucher_cm: &VoucherCm) -> bool {
-        self.claimable_voucher_indices.contains_key(voucher_cm)
-    }
-
     pub(crate) const fn claimable_vouchers_root(&self) -> RewardsRoot {
         self.claimable_vouchers_root
-    }
-
-    /// Get the Merkle path for a given voucher commitment
-    pub(crate) fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
-        let index = self.claimable_voucher_indices.get(&voucher_cm)?;
-        self.claimable_vouchers.path(*index)
     }
 
     /// Compute the per-voucher reward given current state.
@@ -206,14 +219,19 @@ mod tests {
 
     #[test]
     fn test_reward_amounts() {
+        let tracked = &mut TrackedVoucherPaths::new();
         let state = LeaderState::new();
-        let state = state.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
-        let state = state.try_apply_header(1.into(), Fr::ONE.into()).unwrap();
         let state = state
-            .try_apply_header(1.into(), Fr::from(2u64).into())
+            .try_apply_header(1.into(), Fr::ZERO.into(), tracked)
             .unwrap();
         let state = state
-            .try_apply_header(2.into(), Fr::from(3u64).into())
+            .try_apply_header(1.into(), Fr::ONE.into(), tracked)
+            .unwrap();
+        let state = state
+            .try_apply_header(1.into(), Fr::from(2u64).into(), tracked)
+            .unwrap();
+        let state = state
+            .try_apply_header(2.into(), Fr::from(3u64).into(), tracked)
             .unwrap();
         let state = LeaderState {
             claimable_rewards: 300,
@@ -244,26 +262,31 @@ mod tests {
 
     #[test]
     fn test_epoch_transition() {
+        let tracked = &mut TrackedVoucherPaths::new();
         let state = LeaderState::new();
-        let state = state.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
+        let state = state
+            .try_apply_header(1.into(), Fr::ZERO.into(), tracked)
+            .unwrap();
         assert_eq!(state.epoch, 1.into());
         assert_eq!(state.n_claimable_vouchers, 0);
-        let state = state.try_apply_header(2.into(), Fr::ONE.into()).unwrap();
-        assert_eq!(state.epoch, 2.into());
-        assert_eq!(state.n_claimable_vouchers, 1);
         let state = state
-            .try_apply_header(2.into(), Fr::from(2u64).into())
+            .try_apply_header(2.into(), Fr::ONE.into(), tracked)
             .unwrap();
         assert_eq!(state.epoch, 2.into());
         assert_eq!(state.n_claimable_vouchers, 1);
         let state = state
-            .try_apply_header(3.into(), Fr::from(3u64).into())
+            .try_apply_header(2.into(), Fr::from(2u64).into(), tracked)
+            .unwrap();
+        assert_eq!(state.epoch, 2.into());
+        assert_eq!(state.n_claimable_vouchers, 1);
+        let state = state
+            .try_apply_header(3.into(), Fr::from(3u64).into(), tracked)
             .unwrap();
         assert_eq!(state.epoch, 3.into());
         assert_eq!(state.n_claimable_vouchers, 3);
         let err = state
             .clone()
-            .try_apply_header(2.into(), Fr::from(4u64).into())
+            .try_apply_header(2.into(), Fr::from(4u64).into(), tracked)
             .unwrap_err();
         assert_eq!(
             err,
@@ -273,10 +296,67 @@ mod tests {
             }
         );
         let state = state
-            .try_apply_header(4.into(), Fr::from(5u64).into())
+            .try_apply_header(4.into(), Fr::from(5u64).into(), tracked)
             .unwrap();
         assert_eq!(state.epoch, 4.into());
         assert_eq!(state.n_claimable_vouchers, 4);
+    }
+
+    #[test]
+    fn test_tracked_paths_created_on_flush() {
+        let cm0: VoucherCm = Fr::ZERO.into();
+        let cm1: VoucherCm = Fr::ONE.into();
+        let cm2: VoucherCm = Fr::from(2u64).into();
+
+        // Track cm0 and cm1 (but not cm2)
+        let mut tracked = TrackedVoucherPaths::new();
+        tracked.insert(cm0, None);
+        tracked.insert(cm1, None);
+
+        // Epoch 1: add three vouchers as pending
+        let state = LeaderState::new();
+        let state = state.try_apply_header(1.into(), cm0, &mut tracked).unwrap();
+        let state = state.try_apply_header(1.into(), cm1, &mut tracked).unwrap();
+        let state = state.try_apply_header(1.into(), cm2, &mut tracked).unwrap();
+
+        // Paths not yet created (still pending)
+        assert!(tracked[&cm0].is_none());
+        assert!(tracked[&cm1].is_none());
+
+        // Epoch 2: flush pending vouchers into the MMR
+        let cm3: VoucherCm = Fr::from(3u64).into();
+        let state = state.try_apply_header(2.into(), cm3, &mut tracked).unwrap();
+
+        // Now tracked vouchers should have valid paths
+        let root = state.claimable_vouchers_root;
+        let path0 = tracked[&cm0].as_ref().expect("path for cm0");
+        let path1 = tracked[&cm1].as_ref().expect("path for cm1");
+        assert!(path0.verify::<ZkHasher>(*cm0.as_ref(), root.into()));
+        assert!(path1.verify::<ZkHasher>(*cm1.as_ref(), root.into()));
+
+        // cm2 and cm3 were not tracked
+        assert!(!tracked.contains_key(&cm2));
+        assert!(!tracked.contains_key(&cm3));
+
+        // Verify paths against the MMR root
+
+        // Create cm4 and track it. Add it to state at epoch 2 (not 3)
+        let cm4: VoucherCm = Fr::from(4u64).into();
+        tracked.insert(cm4, None);
+        let state = state.try_apply_header(2.into(), cm4, &mut tracked).unwrap();
+
+        // Epoch 3: flush pending vouchers into the MMR
+        let cm5: VoucherCm = Fr::from(5u64).into();
+        let state = state.try_apply_header(3.into(), cm5, &mut tracked).unwrap();
+
+        // Now tracked vouchers should have updated valid paths
+        let root = state.claimable_vouchers_root;
+        let path0 = tracked[&cm0].as_ref().expect("path for cm0");
+        let path1 = tracked[&cm1].as_ref().expect("path for cm1");
+        let path4 = tracked[&cm4].as_ref().expect("path for cm4");
+        assert!(path0.verify::<ZkHasher>(*cm0.as_ref(), root.into()));
+        assert!(path1.verify::<ZkHasher>(*cm1.as_ref(), root.into()));
+        assert!(path4.verify::<ZkHasher>(*cm4.as_ref(), root.into()));
     }
 
     #[test]

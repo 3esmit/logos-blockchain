@@ -57,7 +57,7 @@ impl MerklePath {
 pub fn update_paths_at_merge(
     right: Root,
     left: Root,
-    paths: &mut [MerklePath],
+    paths: &mut [&mut MerklePath],
     new_path: &mut MerklePath,
 ) {
     let height = right.height as usize;
@@ -81,7 +81,7 @@ pub fn update_paths_at_merge(
 pub fn update_paths_above_merge<Hash: Digest, const MAX_HEIGHT: u8>(
     merged_root: Root,
     remaining_peaks: impl Iterator<Item = Root>,
-    paths: &mut [MerklePath],
+    paths: &mut [&mut MerklePath],
     new_path: &mut MerklePath,
 ) {
     let mut subtree_hash = merged_root.root;
@@ -107,7 +107,8 @@ pub fn update_paths_above_merge<Hash: Digest, const MAX_HEIGHT: u8>(
 }
 
 /// Whether `leaf` sits in the left subtree at the given tree `height`.
-const fn is_left_child(leaf: usize, height: usize) -> bool {
+#[must_use]
+pub const fn is_left_child(leaf: usize, height: usize) -> bool {
     (leaf >> (height - 1)) & 1 == 0
 }
 

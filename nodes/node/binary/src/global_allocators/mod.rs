@@ -8,6 +8,9 @@ pub mod dhat_heap;
 #[cfg(all(
     feature = "jemalloc",
     not(feature = "dhat-heap"),
-    not(target_env = "msvc")
+    not(target_env = "msvc"),
+    // jemalloc supports ARM but users must change page size to 4KB.
+    // We disable jemalloc for ARM until we verify that 4KB page size is okay.
+    not(any(target_arch = "arm", target_arch = "aarch64"))
 ))]
 pub mod jemalloc;

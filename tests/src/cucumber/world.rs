@@ -72,6 +72,37 @@ pub struct RunState {
     pub result: Option<Result<(), String>>,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct ManualNodeConfigOverrides {
+    pub cryptarchia_security_param: Option<NonZero<u32>>,
+    pub prolonged_bootstrap_period: Option<Duration>,
+}
+
+impl ManualNodeConfigOverrides {
+    pub const fn apply_to(&self, config: &mut RunConfig) {
+        if let Some(security_param) = self.cryptarchia_security_param {
+            config.deployment.cryptarchia.security_param = security_param;
+        }
+
+        if let Some(prolonged_bootstrap_period) = self.prolonged_bootstrap_period {
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = prolonged_bootstrap_period;
+        }
+    }
+
+    pub const fn set_cryptarchia_security_param(&mut self, security_param: NonZero<u32>) {
+        self.cryptarchia_security_param = Some(security_param);
+    }
+
+    pub const fn set_prolonged_bootstrap_period(&mut self, period: Duration) {
+        self.prolonged_bootstrap_period = Some(period);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PublicCryptarchiaEndpointPeer {
     pub url: String,
@@ -170,6 +201,8 @@ pub struct CucumberWorld {
     /// Manual: Mapping of logical wallet names to the UTXOs that are currently
     /// encumbered (i.e. spent but not yet finalized) for that wallet.
     pub wallet_encumbered_tokens: HashMap<String, Vec<Utxo>>,
+    /// Manual: Mapping of scenario transaction aliases to submitted hashes.
+    pub submitted_transactions: HashMap<String, TxHash>,
     /// Manual:  Per node: `header_id` -> height
     pub node_header_heights: HashMap<String, HashMap<String, u64>>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
@@ -203,6 +236,9 @@ pub struct CucumberWorld {
     /// Manual: Whether to have dynamically started nodes join the external
     /// network
     pub join_external_network: Option<bool>,
+    /// Manual: Runtime state for node-control extensions added outside the
+    /// legacy generic step files.
+    pub manual_node_config_overrides: ManualNodeConfigOverrides,
     /// Manual: Faucet base URL configuration for manual transactions, if
     /// applicable.
     pub faucet_base_url: Option<String>,
@@ -300,6 +336,7 @@ impl Debug for CucumberWorld {
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
             )
             .field("wallet_accounts", &self.wallet_accounts.len())
+            .field("submitted_transactions", &self.submitted_transactions.len())
             .field(
                 "wallet_tokens_per_block",
                 &self.wallet_tokens_per_block.len(),
@@ -310,6 +347,10 @@ impl Debug for CucumberWorld {
             )
             .field("node_header_heights", &self.node_header_heights.len())
             .field("node_peer_ids", &self.node_peer_ids.len())
+            .field(
+                "manual_node_config_overrides",
+                &self.manual_node_config_overrides,
+            )
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
@@ -460,6 +501,20 @@ impl NodeInfo {
 }
 
 impl CucumberWorld {
+    /// Set a scenario-wide cryptarchia security parameter override for
+    /// manual-cluster nodes.
+    pub const fn set_cryptarchia_security_param(&mut self, security_param: NonZero<u32>) {
+        self.manual_node_config_overrides
+            .set_cryptarchia_security_param(security_param);
+    }
+
+    /// Set a scenario-wide prolonged bootstrap period override for
+    /// manual-cluster nodes.
+    pub const fn set_prolonged_bootstrap_period(&mut self, period: Duration) {
+        self.manual_node_config_overrides
+            .set_prolonged_bootstrap_period(period);
+    }
+
     /// Get the best known height for the given node, if any. This is based on
     /// the cached height -> hash information stored in the world for each
     /// node.
@@ -753,6 +808,19 @@ impl CucumberWorld {
             .into_iter()
             .next()
             .ok_or(StepError::MissingWallet)
+    }
+
+    pub fn remember_submitted_transaction(&mut self, alias: String, tx_hash: TxHash) {
+        self.submitted_transactions.insert(alias, tx_hash);
+    }
+
+    pub fn resolve_submitted_transaction(&self, alias: &str) -> Result<TxHash, StepError> {
+        self.submitted_transactions
+            .get(alias)
+            .copied()
+            .ok_or(StepError::LogicalError {
+                message: format!("Transaction alias '{alias}' not found in world state"),
+            })
     }
 
     /// Helper to resolve multiple wallet names to their actual wallet

@@ -4,18 +4,23 @@ use hex::ToHex as _;
 use lb_core::{
     codec::SerializeOp as _,
     mantle::{
-        Note, NoteId, SignedMantleTx, Transaction as _, Utxo, gas::MainnetGasConstants,
-        tx::MantleTxContext, tx_builder::MantleTxBuilder,
+        Note, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
+        genesis_tx::GENESIS_STORAGE_GAS_PRICE,
+        tx::{MantleTxContext, MantleTxGasContext},
+        tx_builder::MantleTxBuilder,
     },
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::TARGET,
-    world::{CucumberWorld, WalletInfo, WalletTokenMap},
+use crate::{
+    common::wallet::fund_transfer_builder_from_utxos,
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::TARGET,
+        world::{CucumberWorld, WalletInfo, WalletTokenMap},
+    },
 };
 
 /// Specifies which subset of wallet UTXOs to consider when checking for
@@ -43,7 +48,6 @@ impl Display for WalletStateType {
 
 use std::str::FromStr;
 
-use lb_core::mantle::OpProof;
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_testing_framework::is_truthy_env;
 
@@ -73,6 +77,29 @@ pub async fn create_and_submit_transaction(
     sender_wallet_name: &str,
     receivers: &[(ZkPublicKey, u64)],
 ) -> Result<String, StepError> {
+    let tx_hashes =
+        create_and_submit_transaction_hashes(world, step, sender_wallet_name, receivers).await?;
+
+    let tx_hashes_hex: String = tx_hashes
+        .iter()
+        .map(|h| {
+            h.to_bytes()
+                .unwrap()
+                .to_ascii_lowercase()
+                .encode_hex::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Ok(tx_hashes_hex)
+}
+
+pub async fn create_and_submit_transaction_hashes(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    receivers: &[(ZkPublicKey, u64)],
+) -> Result<Vec<lb_core::mantle::TxHash>, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
     })?;
@@ -83,33 +110,46 @@ pub async fn create_and_submit_transaction(
         WalletType::User {
             ref wallet_account, ..
         } => {
-            let wallet_state = wallet_state_from_utxos(available_utxos);
-            let empty_context = MantleTxContext::default();
-            let mut tx_builder = MantleTxBuilder::new(empty_context);
+            let empty_context = MantleTxGasContext::new(HashMap::new());
+            let tx_context = MantleTxContext {
+                gas_context: empty_context,
+                leader_reward_amount: 0,
+            };
+            let mut tx_builder = MantleTxBuilder::new(tx_context)
+                .set_storage_gas_price(GENESIS_STORAGE_GAS_PRICE)
+                .set_execution_gas_price(0.into());
             for (receiver_pk, value) in receivers {
                 tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk));
             }
 
             let sender_pk = wallet_account.public_key();
-            let funded_builder = wallet_state
-                .fund_tx::<MainnetGasConstants>(&tx_builder, sender_pk, [sender_pk])
-                .inspect_err(|e| {
-                    warn!(target: TARGET, "Step `{}` error: {e}", step);
-                })?;
+
+            let funded_builder =
+                fund_transfer_builder_from_utxos(available_utxos, &tx_builder, sender_pk).map_err(
+                    |err| {
+                        warn!(target: TARGET, "Step `{}` error: {err}", step);
+                        StepError::WalletError(err)
+                    },
+                )?;
+
             // Collect all UTXOs used in this transaction as encumbered tokens to prevent
             // them from being used in other transactions until this transaction is
             // finalized.
-            let newly_encumbered: Vec<Utxo> = funded_builder.ledger_inputs().to_vec();
+            let newly_encumbered = funded_builder.ledger_inputs().to_vec();
+
+            let signing_keys = funded_builder
+                .ledger_inputs()
+                .iter()
+                .map(|_| wallet_account.secret_key.clone())
+                .collect::<Vec<_>>();
 
             let mantle_tx = funded_builder.build();
             let tx_hash = mantle_tx.hash();
-            let transfer_proof = ZkKey::multi_sign(
-                std::slice::from_ref(&wallet_account.secret_key),
-                tx_hash.as_ref(),
-            )
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{}` error: {e}", step);
-            })?;
+
+            let transfer_proof =
+                ZkKey::multi_sign(&signing_keys, tx_hash.as_ref()).inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{}` error: {e}", step);
+                })?;
 
             let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::ZkSig(transfer_proof)])
                 .inspect_err(|e| {
@@ -152,18 +192,7 @@ pub async fn create_and_submit_transaction(
         }
     };
 
-    let tx_hashes_hex: String = tx_hashes
-        .iter()
-        .map(|h| {
-            h.to_bytes()
-                .unwrap()
-                .to_ascii_lowercase()
-                .encode_hex::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    Ok(tx_hashes_hex)
+    Ok(tx_hashes)
 }
 
 pub async fn update_wallet_balance_all_user_wallets(
@@ -559,7 +588,7 @@ fn get_last_known_height<'a>(
         |&cached_header_id| {
             let cached_height = node_header_heights
                 .get(wallet_node_name)
-                .and_then(|m| m.get(cached_header_id))
+                .and_then(|m: &HashMap<String, u64>| m.get(cached_header_id))
                 .copied();
 
             cached_height.map_or((1, "~"), |h| (h + 1, ""))
@@ -713,29 +742,6 @@ async fn collect_wallet_utxos(
     }
 
     Ok(owned.into_values().collect())
-}
-
-fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> lb_wallet::WalletState {
-    let mut utxo_map = rpds::HashTrieMapSync::new_sync();
-    let mut pk_index = rpds::HashTrieMapSync::new_sync();
-
-    for utxo in utxos {
-        let note_id = utxo.id();
-        let pk = utxo.note.pk;
-        utxo_map = utxo_map.insert(note_id, utxo);
-
-        let note_set = pk_index
-            .get(&pk)
-            .cloned()
-            .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
-            .insert(note_id);
-        pk_index = pk_index.insert(pk, note_set);
-    }
-
-    lb_wallet::WalletState {
-        utxos: utxo_map,
-        pk_index,
-    }
 }
 
 pub(crate) fn request_faucet_funds(

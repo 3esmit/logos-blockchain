@@ -1205,7 +1205,7 @@ dependencies = [
 [[package]]
 name = "cfgsync-adapter"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=f731791#f73179193b5706067b35906501705a3804c105a8"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
 dependencies = [
  "cfgsync-artifacts",
  "cfgsync-core",
@@ -1216,7 +1216,7 @@ dependencies = [
 [[package]]
 name = "cfgsync-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=f731791#f73179193b5706067b35906501705a3804c105a8"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -1225,7 +1225,7 @@ dependencies = [
 [[package]]
 name = "cfgsync-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=f731791#f73179193b5706067b35906501705a3804c105a8"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -8192,7 +8192,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=f731791#f73179193b5706067b35906501705a3804c105a8"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8214,7 +8214,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=f731791#f73179193b5706067b35906501705a3804c105a8"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8235,7 +8235,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-k8s"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=f731791#f73179193b5706067b35906501705a3804c105a8"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8259,7 +8259,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=f731791#f73179193b5706067b35906501705a3804c105a8"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=5b8610a#5b8610a9370de0ddce2c40d7ad8f781f7c53085d"
 dependencies = [
  "async-trait",
  "fs_extra",
@@ -9416,7 +9416,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

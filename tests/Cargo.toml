@@ -67,28 +67,8 @@ name = "test_blend_local_setup"
 path = "src/tests/blend/local.rs"
 
 [[test]]
-name = "test_cryptarchia_happy_path"
-path = "src/tests/cryptarchia/happy.rs"
-
-[[test]]
-name = "test_cryptarchia_bootstrap"
-path = "src/tests/cryptarchia/bootstrap.rs"
-
-[[test]]
-name = "test_orphan_handling"
-path = "src/tests/cryptarchia/orphan.rs"
-
-[[test]]
-name = "test_immutable_blocks"
-path = "src/tests/cryptarchia/immutable_blocks.rs"
-
-[[test]]
-name = "test_invalid_tx_handling"
-path = "src/tests/cryptarchia/invalid_tx_handling.rs"
-
-[[test]]
-name = "test_mempool_api"
-path = "src/tests/mempool/api.rs"
+name = "test_cli_restart"
+path = "src/tests/cli/restart.rs"
 
 [[test]]
 name = "test_mantle_channel"
@@ -97,10 +77,6 @@ path = "src/tests/mantle/channel.rs"
 [[test]]
 name = "test_mantle_sdp_ops"
 path = "src/tests/mantle/sdp_ops.rs"
-
-[[test]]
-name = "test_cli_restart"
-path = "src/tests/cli/restart.rs"
 
 [[test]]
 name              = "test_testing_framework_smoke_local"
@@ -137,7 +113,3 @@ harness           = false                        # Cucumber will have its own ma
 name              = "cucumber"
 path              = "cucumber_tests/cucumber.rs"
 required-features = ["cucumber"]
-
-[[test]]
-name = "test_zone_sdk_e2e"
-path = "src/tests/zone_sdk/e2e.rs"

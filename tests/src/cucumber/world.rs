@@ -11,16 +11,22 @@ use cucumber::World;
 use derivative::Derivative;
 use lb_core::{
     codec::DeserializeOp as _,
-    mantle::{SignedMantleTx, TxHash, Utxo},
+    mantle::{SignedMantleTx, TxHash, Utxo, ops::channel::ChannelId},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
 };
+use lb_zone_sdk::{
+    adapter::NodeHttpClient as ZoneNodeHttpClient,
+    indexer::ZoneIndexer,
+    sequencer::{InscriptionId, SequencerCheckpoint, SequencerHandle},
+};
+use reqwest::Url;
 use testing_framework_core::scenario::{NodeControlCapability, Scenario, StartedNode};
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -103,6 +109,196 @@ impl ManualNodeConfigOverrides {
     }
 }
 
+pub struct ZonePublishedMessage {
+    pub payload: Vec<u8>,
+    pub inscription_id: InscriptionId,
+}
+
+#[derive(Default)]
+pub struct ZoneState {
+    node_name: Option<String>,
+    channel_signing_key: Option<Ed25519Key>,
+    sequencer_handle: Option<SequencerHandle<ZoneNodeHttpClient>>,
+    sequencer_task: Option<JoinHandle<()>>,
+    indexer: Option<ZoneIndexer<ZoneNodeHttpClient>>,
+    published_messages: HashMap<String, ZonePublishedMessage>,
+    published_order: Vec<String>,
+    checkpoints: HashMap<String, SequencerCheckpoint>,
+    latest_checkpoint: Option<SequencerCheckpoint>,
+}
+
+impl ZoneState {
+    pub fn initialize_cluster(&mut self, node_name: String, channel_signing_key: Ed25519Key) {
+        if let Some(task) = self.sequencer_task.take() {
+            task.abort();
+        }
+
+        self.node_name = Some(node_name);
+        self.channel_signing_key = Some(channel_signing_key);
+        self.sequencer_handle = None;
+        self.indexer = None;
+        self.published_messages.clear();
+        self.published_order.clear();
+        self.checkpoints.clear();
+        self.latest_checkpoint = None;
+    }
+
+    pub fn clear(&mut self) {
+        if let Some(task) = self.sequencer_task.take() {
+            task.abort();
+        }
+
+        self.node_name = None;
+        self.channel_signing_key = None;
+        self.sequencer_handle = None;
+        self.indexer = None;
+        self.published_messages.clear();
+        self.published_order.clear();
+        self.checkpoints.clear();
+        self.latest_checkpoint = None;
+    }
+
+    pub fn node_name(&self) -> Result<&str, StepError> {
+        self.node_name.as_deref().ok_or(StepError::LogicalError {
+            message: "Zone cluster is not initialized".to_owned(),
+        })
+    }
+
+    pub fn channel_signing_key(&self) -> Result<&Ed25519Key, StepError> {
+        self.channel_signing_key
+            .as_ref()
+            .ok_or(StepError::LogicalError {
+                message: "Zone signing key is not initialized".to_owned(),
+            })
+    }
+
+    pub fn channel_id(&self) -> Result<ChannelId, StepError> {
+        Ok(ChannelId::from(
+            self.channel_signing_key()?.public_key().to_bytes(),
+        ))
+    }
+
+    pub fn remember_published_message(
+        &mut self,
+        alias: String,
+        payload: Vec<u8>,
+        inscription_id: InscriptionId,
+        checkpoint: SequencerCheckpoint,
+    ) {
+        self.published_order.push(alias.clone());
+        self.published_messages.insert(
+            alias,
+            ZonePublishedMessage {
+                payload,
+                inscription_id,
+            },
+        );
+        self.latest_checkpoint = Some(checkpoint);
+    }
+
+    pub fn ordered_inscription_ids(&self) -> Result<Vec<InscriptionId>, StepError> {
+        self.published_order
+            .iter()
+            .map(|alias| {
+                self.published_messages
+                    .get(alias)
+                    .map(|message| message.inscription_id)
+                    .ok_or(StepError::LogicalError {
+                        message: format!("Zone message alias '{alias}' not found"),
+                    })
+            })
+            .collect()
+    }
+
+    pub fn message_payloads_for_aliases(
+        &self,
+        aliases: &[String],
+    ) -> Result<Vec<Vec<u8>>, StepError> {
+        aliases
+            .iter()
+            .map(|alias| {
+                self.published_messages
+                    .get(alias)
+                    .map(|message| message.payload.clone())
+                    .ok_or(StepError::LogicalError {
+                        message: format!("Zone message alias '{alias}' not found"),
+                    })
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub const fn has_published_messages(&self) -> bool {
+        !self.published_order.is_empty()
+    }
+
+    pub fn remember_checkpoint(&mut self, alias: String, checkpoint: SequencerCheckpoint) {
+        self.latest_checkpoint = Some(checkpoint.clone());
+        self.checkpoints.insert(alias, checkpoint);
+    }
+
+    pub fn current_checkpoint(&self) -> Result<SequencerCheckpoint, StepError> {
+        self.latest_checkpoint
+            .clone()
+            .ok_or(StepError::LogicalError {
+                message: "Zone sequencer has not produced a checkpoint yet".to_owned(),
+            })
+    }
+
+    pub fn resolve_checkpoint(
+        &self,
+        alias: impl AsRef<str>,
+    ) -> Result<SequencerCheckpoint, StepError> {
+        let alias = alias.as_ref();
+
+        self.checkpoints
+            .get(alias)
+            .cloned()
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone checkpoint alias '{alias}' not found"),
+            })
+    }
+
+    pub fn set_sequencer(
+        &mut self,
+        sequencer_handle: SequencerHandle<ZoneNodeHttpClient>,
+        sequencer_task: JoinHandle<()>,
+    ) {
+        if let Some(task) = self.sequencer_task.replace(sequencer_task) {
+            task.abort();
+        }
+
+        self.sequencer_handle = Some(sequencer_handle);
+    }
+
+    pub fn sequencer_handle(&self) -> Result<&SequencerHandle<ZoneNodeHttpClient>, StepError> {
+        self.sequencer_handle
+            .as_ref()
+            .ok_or(StepError::LogicalError {
+                message: "Zone sequencer is not initialized".to_owned(),
+            })
+    }
+
+    pub fn set_indexer(&mut self, indexer: ZoneIndexer<ZoneNodeHttpClient>) {
+        self.indexer = Some(indexer);
+    }
+
+    pub fn indexer(&self) -> Result<&ZoneIndexer<ZoneNodeHttpClient>, StepError> {
+        self.indexer.as_ref().ok_or(StepError::LogicalError {
+            message: "Zone indexer is not initialized".to_owned(),
+        })
+    }
+
+    #[must_use]
+    pub fn debug_summary(&self) -> String {
+        let node_name = self.node_name.as_deref().unwrap_or("<unset>");
+        let published = self.published_messages.len();
+        let checkpoints = self.checkpoints.len();
+
+        format!("node={node_name}, published={published}, checkpoints={checkpoints}")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PublicCryptarchiaEndpointPeer {
     pub url: String,
@@ -157,8 +353,7 @@ pub struct ConsensusLivenessSpec {
 pub struct CucumberWorld {
     /// The deployer kind that this scenario is configured for.
     pub deployer: Option<DeployerKind>,
-    /// The unique test context, helfull to guarantee unique genesis transaction
-    /// inscription.
+    /// A unique per-scenario context string used to isolate runtime resources.
     pub test_context: Option<String>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
@@ -251,10 +446,14 @@ pub struct CucumberWorld {
     /// Manual: Task handles for dynamically spawned faucet funding tasks.
     #[derivative(Default(value = "None"))]
     pub faucet_task_handles: Option<Vec<JoinHandle<()>>>,
+    /// Manual: Zone-specific state for SDK/sequencer scenarios.
+    pub zone: ZoneState,
 }
 
 impl Drop for CucumberWorld {
     fn drop(&mut self) {
+        self.zone.clear();
+
         if let Some(handles) = self.faucet_task_handles.take() {
             for handle in handles {
                 handle.abort();
@@ -351,6 +550,7 @@ impl Debug for CucumberWorld {
                 "manual_node_config_overrides",
                 &self.manual_node_config_overrides,
             )
+            .field("zone", &self.zone.debug_summary())
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
@@ -533,11 +733,6 @@ impl CucumberWorld {
         self.deployer = Some(deployer);
     }
 
-    /// Set the unique test context for this scenario.
-    pub fn set_test_context(&mut self, test_context: String) {
-        self.test_context = Some(test_context);
-    }
-
     /// Set the directory where scenario artifacts should be stored.
     pub fn set_scenario_base_dir(&mut self, log_dir: &Path, deployer: &DeployerKind) {
         let log_dir = PathBuf::from(log_dir);
@@ -546,6 +741,10 @@ impl CucumberWorld {
         if let Some(topology) = self.spec.topology.as_mut() {
             topology.scenario_base_dir = log_dir;
         }
+    }
+
+    pub fn set_test_context(&mut self, test_context: String) {
+        self.test_context = Some(test_context);
     }
 
     /// Remove all scenario artifacts from the scenario base directory. This is
@@ -769,6 +968,15 @@ impl CucumberWorld {
         self.resolve_node_runtime_name(node_name)
     }
 
+    pub fn zone_node_http_client(&self) -> Result<NodeHttpClient, StepError> {
+        let node_name = self.zone.node_name()?;
+        self.resolve_node_http_client(node_name)
+    }
+
+    pub fn zone_node_url(&self) -> Result<Url, StepError> {
+        Ok(self.zone_node_http_client()?.base_url().clone())
+    }
+
     /// Helper to resolve a node http client to the actual started node name.
     pub fn resolve_node_http_client(&self, node_name: &str) -> Result<NodeHttpClient, StepError> {
         Ok(self
@@ -938,6 +1146,7 @@ impl CucumberWorld {
                 "join_external_network",
                 &format!("{:?}", self.join_external_network),
             )
+            .field("zone", &self.zone.debug_summary())
             .field(
                 "populate_ibd_peers",
                 &format!("{:?}", self.populate_ibd_peers_from_initial_peers),
@@ -974,6 +1183,7 @@ impl CucumberWorld {
                 "faucet_task_handles",
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
             )
+            .field("test_context", &format!("{:?}", self.test_context))
             .field(
                 "wallet_accounts",
                 &wallet_accounts_display(&self.wallet_accounts),

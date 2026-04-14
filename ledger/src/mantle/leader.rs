@@ -1,15 +1,14 @@
 use std::cmp::Ordering;
 
 use lb_core::{
-    crypto::ZkHash,
+    crypto::ZkHasher,
     mantle::{
         Value,
         ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
     },
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_utxotree::{DynamicMerkleTree, MerklePath};
-use rpds::{HashTrieMapSync, VectorSync};
+use lb_mmr::MerkleMountainRange;
 
 /// A leader state in the mantle ledger.
 ///
@@ -20,8 +19,8 @@ use rpds::{HashTrieMapSync, VectorSync};
 pub struct LeaderState {
     // current epoch
     epoch: Epoch,
-    // vouchers that can be claimed in this epoch
-    // this is updated once at the start of each epoch
+    // Root of vouchers that can be claimed in this epoch.
+    // This is updated once at the start of each epoch.
     claimable_vouchers_root: RewardsRoot,
     n_claimable_vouchers: u64,
     // nullifiers of vouchers that have been claimed since genesis
@@ -34,15 +33,9 @@ pub struct LeaderState {
     /// Rewards that are being collected during the current epoch.
     /// This will be added to the `claimable_rewards` when a new epoch starts.
     pending_rewards: Value,
-    // Merkle tree vouchers that can be claimed in this epoch
-    // this is updated once at the start of each epoch
-    // TODO: Replace this with MMR to save space by moving merkle path
-    //       maintenance to the wallet.
-    claimable_vouchers: DynamicMerkleTree<VoucherCm, lb_core::crypto::ZkHasher>,
-    claimable_voucher_indices: HashTrieMapSync<VoucherCm, usize>,
-    // List of vouchers that are waiting to be added at the start of
-    // the next epoch
-    pending_vouchers: VectorSync<VoucherCm>,
+    // All vouchers collected up to the current block.
+    // This does not always match `claimable_vouchers_root`.
+    vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -71,16 +64,12 @@ impl LeaderState {
             nfs: rpds::HashTrieSetSync::new_sync(),
             pending_rewards: 0,
             claimable_rewards: 0,
-            claimable_vouchers: DynamicMerkleTree::new(),
-            claimable_voucher_indices: HashTrieMapSync::new_sync(),
-            pending_vouchers: VectorSync::new_sync(),
+            vouchers: MerkleMountainRange::new(),
         }
     }
 
     pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<Self, Error> {
-        Ok(self
-            .update_epoch_state(epoch)?
-            .add_pending_voucher(voucher_cm))
+        Ok(self.update_epoch_state(epoch)?.push_voucher(voucher_cm))
     }
 
     fn update_epoch_state(mut self, epoch: Epoch) -> Result<Self, Error> {
@@ -91,7 +80,7 @@ impl LeaderState {
                 incoming: epoch,
             }),
             Ordering::Greater => {
-                self = self.update_claimable_vouchers();
+                self = self.snapshot_claimable_vouchers();
                 self = self.update_claimable_rewards();
                 self.epoch = epoch;
                 Ok(self)
@@ -107,25 +96,15 @@ impl LeaderState {
         self
     }
 
-    /// Add a voucher to be included in the Merkle tree at the start of the
-    /// next epoch
-    fn add_pending_voucher(mut self, voucher_cm: VoucherCm) -> Self {
-        self.pending_vouchers.push_back_mut(voucher_cm);
+    fn push_voucher(mut self, voucher_cm: VoucherCm) -> Self {
+        self.vouchers = self.vouchers.push(voucher_cm).expect("MMR is full");
         self
     }
 
-    /// Insert all pending vouchers into the Merkle tree,
-    /// and update the Merkle root.
-    fn update_claimable_vouchers(mut self) -> Self {
-        for &voucher_cm in &self.pending_vouchers {
-            let (new_vouchers, index) = self.claimable_vouchers.insert(voucher_cm);
-            self.claimable_vouchers = new_vouchers;
-            self.claimable_voucher_indices =
-                self.claimable_voucher_indices.insert(voucher_cm, index);
-        }
-        self.pending_vouchers = VectorSync::new_sync();
-        self.claimable_vouchers_root = self.claimable_vouchers.root().into();
-        self.n_claimable_vouchers = self.claimable_vouchers.size() as u64;
+    /// Snapshot the current MMR root as the claimable root for the new epoch.
+    fn snapshot_claimable_vouchers(mut self) -> Self {
+        self.claimable_vouchers_root = self.vouchers.frontier_root().into();
+        self.n_claimable_vouchers = self.vouchers.len() as u64;
         self
     }
 
@@ -136,18 +115,13 @@ impl LeaderState {
         self
     }
 
-    pub(crate) fn has_claimable_voucher(&self, voucher_cm: &VoucherCm) -> bool {
-        self.claimable_voucher_indices.contains_key(voucher_cm)
-    }
-
     pub(crate) const fn claimable_vouchers_root(&self) -> RewardsRoot {
         self.claimable_vouchers_root
     }
 
-    /// Get the Merkle path for a given voucher commitment
-    pub(crate) fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
-        let index = self.claimable_voucher_indices.get(&voucher_cm)?;
-        self.claimable_vouchers.path(*index)
+    #[must_use]
+    pub const fn vouchers_mmr(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
+        &self.vouchers
     }
 
     /// Compute the per-voucher reward given current state.

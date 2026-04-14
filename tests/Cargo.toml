@@ -34,6 +34,7 @@ lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
 lb-groth16                       = { workspace = true }
+lb-mmr                           = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }

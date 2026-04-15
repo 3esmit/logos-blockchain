@@ -735,6 +735,10 @@ fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> lb_wallet::WalletState {
     lb_wallet::WalletState {
         utxos: utxo_map,
         pk_index,
+        epoch: 0.into(),
+        vouchers: lb_mmr::MerkleMountainRange::new(),
+        tracked_voucher_paths: rpds::HashTrieMapSync::new_sync(),
+        claimable_voucher_paths: rpds::HashTrieMapSync::new_sync(),
     }
 }
 

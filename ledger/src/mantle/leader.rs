@@ -119,6 +119,11 @@ impl LeaderState {
         self.claimable_vouchers_root
     }
 
+    #[must_use]
+    pub fn vouchers_mmr(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
+        &self.vouchers
+    }
+
     /// Compute the per-voucher reward given current state.
     #[must_use]
     pub fn reward_amount(&self) -> Value {

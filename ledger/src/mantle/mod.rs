@@ -120,9 +120,15 @@ impl LedgerState {
     }
 
     #[must_use]
-    #[must_use]
     pub const fn claimable_vouchers_root(&self) -> RewardsRoot {
         self.leaders.claimable_vouchers_root()
+    }
+
+    #[must_use]
+    pub fn vouchers_mmr(
+        &self,
+    ) -> &lb_mmr::MerkleMountainRange<VoucherCm, lb_core::crypto::ZkHasher> {
+        self.leaders.vouchers_mmr()
     }
 
     #[must_use]

@@ -11,7 +11,10 @@ use cucumber::World;
 use derivative::Derivative;
 use lb_core::{
     codec::DeserializeOp as _,
-    mantle::{SignedMantleTx, TxHash, Utxo, ops::channel::ChannelId},
+    mantle::{
+        SignedMantleTx, TxHash, Utxo,
+        ops::channel::{ChannelId, deposit::DepositOp},
+    },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
@@ -118,26 +121,35 @@ pub struct ZonePublishedMessage {
 pub struct ZoneState {
     node_name: Option<String>,
     channel_signing_key: Option<Ed25519Key>,
+    funding_public_key: Option<ZkPublicKey>,
     sequencer_handle: Option<SequencerHandle<ZoneNodeHttpClient>>,
     sequencer_task: Option<JoinHandle<()>>,
     indexer: Option<ZoneIndexer<ZoneNodeHttpClient>>,
     published_messages: HashMap<String, ZonePublishedMessage>,
+    submitted_deposits: HashMap<String, DepositOp>,
     published_order: Vec<String>,
     checkpoints: HashMap<String, SequencerCheckpoint>,
     latest_checkpoint: Option<SequencerCheckpoint>,
 }
 
 impl ZoneState {
-    pub fn initialize_cluster(&mut self, node_name: String, channel_signing_key: Ed25519Key) {
+    pub fn initialize_cluster(
+        &mut self,
+        node_name: String,
+        channel_signing_key: Ed25519Key,
+        funding_public_key: ZkPublicKey,
+    ) {
         if let Some(task) = self.sequencer_task.take() {
             task.abort();
         }
 
         self.node_name = Some(node_name);
         self.channel_signing_key = Some(channel_signing_key);
+        self.funding_public_key = Some(funding_public_key);
         self.sequencer_handle = None;
         self.indexer = None;
         self.published_messages.clear();
+        self.submitted_deposits.clear();
         self.published_order.clear();
         self.checkpoints.clear();
         self.latest_checkpoint = None;
@@ -150,9 +162,11 @@ impl ZoneState {
 
         self.node_name = None;
         self.channel_signing_key = None;
+        self.funding_public_key = None;
         self.sequencer_handle = None;
         self.indexer = None;
         self.published_messages.clear();
+        self.submitted_deposits.clear();
         self.published_order.clear();
         self.checkpoints.clear();
         self.latest_checkpoint = None;
@@ -178,6 +192,12 @@ impl ZoneState {
         ))
     }
 
+    pub fn funding_public_key(&self) -> Result<ZkPublicKey, StepError> {
+        self.funding_public_key.ok_or(StepError::LogicalError {
+            message: "Zone funding public key is not initialized".to_owned(),
+        })
+    }
+
     pub fn remember_published_message(
         &mut self,
         alias: String,
@@ -194,6 +214,23 @@ impl ZoneState {
             },
         );
         self.latest_checkpoint = Some(checkpoint);
+    }
+
+    pub fn remember_submitted_deposit(&mut self, alias: String, deposit: DepositOp) {
+        self.submitted_deposits.insert(alias, deposit);
+    }
+
+    pub fn resolve_submitted_deposit(
+        &self,
+        alias: impl AsRef<str>,
+    ) -> Result<&DepositOp, StepError> {
+        let alias = alias.as_ref();
+
+        self.submitted_deposits
+            .get(alias)
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone deposit alias '{alias}' not found"),
+            })
     }
 
     pub fn ordered_inscription_ids(&self) -> Result<Vec<InscriptionId>, StepError> {
@@ -293,9 +330,12 @@ impl ZoneState {
     pub fn debug_summary(&self) -> String {
         let node_name = self.node_name.as_deref().unwrap_or("<unset>");
         let published = self.published_messages.len();
+        let deposits = self.submitted_deposits.len();
         let checkpoints = self.checkpoints.len();
 
-        format!("node={node_name}, published={published}, checkpoints={checkpoints}")
+        format!(
+            "node={node_name}, published={published}, deposits={deposits}, checkpoints={checkpoints}"
+        )
     }
 }
 

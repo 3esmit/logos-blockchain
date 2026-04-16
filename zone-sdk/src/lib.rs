@@ -33,3 +33,10 @@ pub struct Deposit {
     /// Opaque metadata associated with this deposit
     metadata: Vec<u8>,
 }
+
+impl Deposit {
+    #[must_use]
+    pub fn metadata(&self) -> &[u8] {
+        &self.metadata
+    }
+}

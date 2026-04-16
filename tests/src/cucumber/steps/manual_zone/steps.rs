@@ -2,6 +2,8 @@ use std::{collections::HashMap, time::Duration};
 
 use cucumber::{gherkin::Step, given, when};
 use lb_common_http_client::CommonHttpClient;
+use lb_core::mantle::{gas::GasCost, ops::channel::deposit::DepositOp};
+use lb_http_api_common::bodies::channel::{ChannelDepositRequestBody, ChannelDepositResponseBody};
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
     indexer::ZoneIndexer,
@@ -16,7 +18,8 @@ use crate::{
             ZoneTestError, build_zone_cluster, collect_indexed_messages,
             collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
             publish_message_with_retry, random_second_public_key, sequencer_config,
-            start_zone_node, wait_for_transactions_finalized, wait_for_zone_network_ready,
+            start_zone_node, wait_for_deposit, wait_for_transactions_finalized,
+            wait_for_zone_network_ready,
         },
     },
     cucumber::{
@@ -44,6 +47,7 @@ async fn step_zone_cluster(world: &mut CucumberWorld, step: &Step) -> StepResult
     })?;
 
     let channel_signing_key = zone_cluster.channel_signing_key.clone();
+    let funding_public_key = zone_cluster.funding_public_key;
     let cluster = zone_cluster.cluster;
 
     let started_zone_node = start_zone_node(&cluster, &world.scenario_base_dir)
@@ -85,7 +89,7 @@ async fn step_zone_cluster(world: &mut CucumberWorld, step: &Step) -> StepResult
 
     world
         .zone
-        .initialize_cluster(node_name, channel_signing_key);
+        .initialize_cluster(node_name, channel_signing_key, funding_public_key);
 
     info!(target: TARGET, node_url = %client.base_url(), "Started zone cluster");
 
@@ -361,6 +365,61 @@ async fn step_submit_zone_set_keys_transaction(
     Ok(())
 }
 
+#[when(expr = "I submit zone deposit transaction {string} of {int} with metadata {string}")]
+async fn step_submit_zone_deposit_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    amount: u64,
+    metadata: String,
+) -> StepResult {
+    let node_url = world.zone_node_url().inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+
+    let channel_id = world.zone.channel_id().inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+
+    let funding_public_key = world.zone.funding_public_key().inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+
+    let deposit = DepositOp {
+        channel_id,
+        amount,
+        metadata: metadata.into_bytes(),
+    };
+
+    let body = ChannelDepositRequestBody {
+        tip: None,
+        deposit: deposit.clone(),
+        change_public_key: funding_public_key,
+        funding_public_keys: vec![funding_public_key],
+        max_tx_fee: GasCost::new(10),
+    };
+
+    let request_url = node_url
+        .join("/channel/deposit")
+        .map_err(|e| StepError::LogicalError {
+            message: format!("Failed to build channel deposit URL: {e}"),
+        })?;
+
+    let response: ChannelDepositResponseBody = CommonHttpClient::new(None)
+        .post(request_url, &body)
+        .await
+        .map_err(|error| StepError::LogicalError {
+            message: format!("Zone channel deposit failed: {error}"),
+        })?;
+
+    world
+        .zone
+        .remember_submitted_deposit(transaction_alias.clone(), deposit);
+    world.remember_submitted_transaction(transaction_alias, response.hash);
+
+    Ok(())
+}
+
 #[cucumber::then(expr = "all zone messages are safe in {int} seconds")]
 #[expect(
     clippy::needless_pass_by_ref_mut,
@@ -582,6 +641,38 @@ async fn step_zone_transaction_is_finalized(
     })?;
 
     wait_for_transactions_finalized(node_url, &[tx_hash], Duration::from_secs(timeout_seconds))
+        .await
+        .map_err(|error| {
+            log_zone_error(step, &error);
+
+            StepError::LogicalError {
+                message: error.to_string(),
+            }
+        })?;
+
+    Ok(())
+}
+
+#[cucumber::then(expr = "the zone indexer returns finalized deposit {string} in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_zone_indexer_returns_finalized_deposit(
+    world: &mut CucumberWorld,
+    step: &Step,
+    deposit_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let deposit = world
+        .zone
+        .resolve_submitted_deposit(&deposit_alias)?
+        .clone();
+    let indexer = world.zone.indexer().inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+
+    wait_for_deposit(indexer, &deposit, Duration::from_secs(timeout_seconds))
         .await
         .map_err(|error| {
             log_zone_error(step, &error);

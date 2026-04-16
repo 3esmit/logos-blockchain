@@ -80,3 +80,19 @@ Feature: Zone SDK
       | MSG_4 |
       | MSG_5 |
     And I stop all nodes
+
+  @zone_ci
+  Scenario: Finalized deposits are returned by the zone indexer
+    Given I have a zone cluster
+    When the zone node is at height 1 in 120 seconds
+    And a zone sequencer is initialized
+    And a zone indexer is initialized
+    And I publish the following zone messages:
+      | alias | data                |
+      | MSG_1 | initial inscription |
+    Then all zone messages are safe in 120 seconds
+    When I submit zone deposit transaction "DEPOSIT_1" of 1 with metadata "Mint 1 to Alice in Zone"
+    Then zone transaction "DEPOSIT_1" is included in 120 seconds
+    And zone transaction "DEPOSIT_1" is finalized in 120 seconds
+    And the zone indexer returns finalized deposit "DEPOSIT_1" in 120 seconds
+    And I stop all nodes

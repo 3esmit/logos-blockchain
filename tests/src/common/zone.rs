@@ -7,8 +7,13 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_common_http_client::CommonHttpClient;
-use lb_core::mantle::{Transaction as _, ops::channel::ChannelId};
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+use lb_core::mantle::{
+    Transaction as _,
+    ops::channel::{ChannelId, deposit::DepositOp},
+};
+use lb_key_management_system_service::keys::{
+    Ed25519Key, Ed25519PublicKey, ZkPublicKey, secured_key::SecuredKey as _,
+};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
@@ -64,6 +69,7 @@ pub enum ZoneTestError {
 pub struct ZoneClusterTemplate {
     pub cluster: LbcManualCluster,
     pub channel_signing_key: Ed25519Key,
+    pub funding_public_key: ZkPublicKey,
 }
 
 pub struct StartedZoneNode {
@@ -78,11 +84,17 @@ pub fn build_zone_cluster(
 
     let deployment = build_zone_deployment(scenario_base_dir)?;
     let channel_signing_key = deployment.nodes()[0].general.blend_config.1.clone();
+    let funding_public_key = deployment.nodes()[0]
+        .general
+        .consensus_config
+        .funding_sk
+        .as_public_key();
     let cluster = LbcLocalDeployer::new().manual_cluster_from_descriptors(deployment);
 
     Ok(ZoneClusterTemplate {
         cluster,
         channel_signing_key,
+        funding_public_key,
     })
 }
 
@@ -187,42 +199,19 @@ pub async fn collect_indexed_messages(
     let expected: HashSet<Vec<u8>> = expected_messages.iter().cloned().collect();
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
     let mut ordered: Vec<Vec<u8>> = Vec::new();
-    let mut cursor = None;
 
-    timeout(duration, async {
-        while seen != expected {
-            let stream =
-                indexer
-                    .next_messages(cursor)
-                    .await
-                    .map_err(|error| ZoneTestError::Indexer {
-                        message: error.to_string(),
-                    })?;
-            futures::pin_mut!(stream);
+    poll_zone_indexer_until(indexer, duration, |message| {
+        let ZoneMessage::Block(block) = message else {
+            return None;
+        };
 
-            while let Some((message, slot)) = stream.next().await {
-                let ZoneMessage::Block(block) = message else {
-                    continue;
-                };
-
-                if expected.contains(&block.data) && seen.insert(block.data.clone()) {
-                    ordered.push(block.data.clone());
-                }
-
-                cursor = Some((block.id, slot));
-            }
-
-            if seen != expected {
-                sleep(Duration::from_millis(500)).await;
-            }
+        if expected.contains(&block.data) && seen.insert(block.data.clone()) {
+            ordered.push(block.data.clone());
         }
 
-        Ok::<(), ZoneTestError>(())
+        (seen == expected).then(|| ordered.clone())
     })
     .await
-    .map_err(|_| ZoneTestError::IndexerTimeout)??;
-
-    Ok(ordered)
 }
 
 pub async fn collect_indexed_messages_exactly_once(
@@ -266,6 +255,58 @@ pub async fn collect_indexed_messages_exactly_once(
 
             if ordered == expected_messages {
                 return Ok(ordered);
+            }
+
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::IndexerTimeout)?
+}
+
+pub async fn wait_for_deposit(
+    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+    expected: &DepositOp,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    poll_zone_indexer_until(indexer, duration, |message| match message {
+        ZoneMessage::Deposit(deposit)
+            if deposit.amount == expected.amount
+                && deposit.metadata() == expected.metadata.as_slice() =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await
+}
+
+async fn poll_zone_indexer_until<T>(
+    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+    duration: Duration,
+    mut predicate: impl FnMut(&ZoneMessage) -> Option<T>,
+) -> Result<T, ZoneTestError> {
+    timeout(duration, async {
+        let mut cursor = None;
+
+        loop {
+            let stream =
+                indexer
+                    .next_messages(cursor)
+                    .await
+                    .map_err(|error| ZoneTestError::Indexer {
+                        message: error.to_string(),
+                    })?;
+            futures::pin_mut!(stream);
+
+            while let Some((message, slot)) = stream.next().await {
+                if let ZoneMessage::Block(block) = &message {
+                    cursor = Some((block.id, slot));
+                }
+
+                if let Some(result) = predicate(&message) {
+                    return Ok(result);
+                }
             }
 
             sleep(Duration::from_millis(500)).await;

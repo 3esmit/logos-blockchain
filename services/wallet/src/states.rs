@@ -3,9 +3,10 @@ use lb_core::{
     mantle::ops::leader_claim::{VoucherCm, VoucherNullifier},
 };
 use lb_ledger::LedgerState;
-use lb_wallet::{Vouchers, WalletBlock, WalletError};
+use lb_wallet::{Vouchers, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{KeyId, WalletServiceError, WalletServiceSettings};
 
@@ -17,6 +18,9 @@ pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
 pub struct RecoveryState {
     next_new_voucher_index: VoucherIndex,
     vouchers: Vouchers<VoucherId>,
+    /// Persisted wallet state at the last known LIB.
+    /// `None` on fresh start; populated after the first LIB update.
+    lib_wallet_state: Option<(HeaderId, WalletState)>,
 }
 
 impl overwatch::services::state::ServiceState for RecoveryState {
@@ -27,6 +31,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
         Ok(Self {
             next_new_voucher_index: 0,
             vouchers: Vouchers::default(),
+            lib_wallet_state: None,
         })
     }
 }
@@ -35,6 +40,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 pub struct ServiceState<'u> {
     next_new_voucher_index: VoucherIndex,
     wallet: Wallet,
+    current_lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
 }
 
@@ -46,18 +52,31 @@ impl<'u> ServiceState<'u> {
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
+        let known_keys = settings
+            .known_keys
+            .clone()
+            .into_iter()
+            .map(|(key_id, pk)| (pk, key_id));
+
+        let (wallet, current_lib) =
+            if let Some((persisted_lib, wallet_state)) = state.lib_wallet_state {
+                let wallet = Wallet::from_lib_wallet_state(
+                    known_keys,
+                    state.vouchers,
+                    persisted_lib,
+                    wallet_state,
+                );
+                (wallet, persisted_lib)
+            } else {
+                let wallet =
+                    Wallet::from_lib_ledger_state(known_keys, state.vouchers, lib, lib_ledger);
+                (wallet, lib)
+            };
+
         Self {
             next_new_voucher_index: state.next_new_voucher_index,
-            wallet: Wallet::from_lib(
-                settings
-                    .known_keys
-                    .clone()
-                    .into_iter()
-                    .map(|(key_id, pk)| (pk, key_id)),
-                state.vouchers,
-                lib,
-                lib_ledger,
-            ),
+            wallet,
+            current_lib,
             updater,
         }
     }
@@ -93,14 +112,29 @@ impl<'u> ServiceState<'u> {
         self.update_state();
     }
 
+    pub fn advance_lib(&mut self, new_lib: HeaderId) {
+        self.current_lib = new_lib;
+        self.update_state();
+    }
+
     pub const fn wallet(&self) -> &Wallet {
         &self.wallet
     }
 
     fn update_state(&self) {
+        let lib_wallet_state = self
+            .wallet
+            .wallet_state_at(self.current_lib)
+            .map(|ws| (self.current_lib, ws))
+            .inspect_err(|e| {
+                warn!(lib=?self.current_lib, err=%e, "Could not snapshot wallet state at LIB");
+            })
+            .ok();
+
         self.updater.update(Some(RecoveryState {
             next_new_voucher_index: self.next_new_voucher_index,
             vouchers: self.wallet.vouchers().clone(),
+            lib_wallet_state,
         }));
     }
 }

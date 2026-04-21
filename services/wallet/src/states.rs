@@ -58,20 +58,20 @@ impl<'u> ServiceState<'u> {
             .into_iter()
             .map(|(key_id, pk)| (pk, key_id));
 
-        let (wallet, current_lib) =
-            if let Some((persisted_lib, wallet_state)) = state.lib_wallet_state {
-                let wallet = Wallet::from_lib_wallet_state(
-                    known_keys,
-                    state.vouchers,
-                    persisted_lib,
-                    wallet_state,
-                );
-                (wallet, persisted_lib)
-            } else {
-                let wallet =
-                    Wallet::from_lib_ledger_state(known_keys, state.vouchers, lib, lib_ledger);
-                (wallet, lib)
-            };
+        let (wallet, current_lib) = if let Some((persisted_lib, wallet_state)) =
+            state.lib_wallet_state
+        {
+            let wallet = Wallet::from_lib_wallet_state(
+                known_keys,
+                state.vouchers,
+                persisted_lib,
+                wallet_state,
+            );
+            (wallet, persisted_lib)
+        } else {
+            let wallet = Wallet::from_lib_ledger_state(known_keys, state.vouchers, lib, lib_ledger);
+            (wallet, lib)
+        };
 
         Self {
             next_new_voucher_index: state.next_new_voucher_index,

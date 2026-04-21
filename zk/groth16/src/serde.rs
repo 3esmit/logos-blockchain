@@ -72,7 +72,10 @@ pub mod serde_fr_vec {
     struct FrWrap(#[serde(with = "serde_fr")] Fr);
 
     pub fn serialize<S: Serializer>(v: &Vec<Fr>, s: S) -> Result<S::Ok, S::Error> {
-        v.iter().map(|x| FrWrap(*x)).collect::<Vec<_>>().serialize(s)
+        v.iter()
+            .map(|x| FrWrap(*x))
+            .collect::<Vec<_>>()
+            .serialize(s)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Fr>, D::Error> {

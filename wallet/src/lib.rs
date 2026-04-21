@@ -21,7 +21,7 @@ use lb_core::{
         },
         tx_builder::MantleTxBuilder,
     },
-    proofs::leader_proof::LeaderProof,
+    proofs::leader_proof::LeaderProof as _,
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -42,7 +42,8 @@ pub struct WalletBlock {
 }
 
 impl WalletBlock {
-    pub fn from_block<Tx: AuthenticatedMantleTx>(block: Block<Tx>, epoch: Epoch) -> Self {
+    #[must_use]
+    pub fn from_block<Tx: AuthenticatedMantleTx>(block: &Block<Tx>, epoch: Epoch) -> Self {
         let transfers: Vec<TransferOp> = block
             .transactions()
             .flat_map(|auth_tx| auth_tx.mantle_tx().transfers())
@@ -67,7 +68,8 @@ pub struct WalletState {
     /// Merkle paths for known vouchers. Updated on every block.
     pub tracked_voucher_paths: VoucherPaths,
     /// Merkle paths snapshotted at the last epoch transition.
-    /// Valid against `claimable_vouchers_root` in `LedgerState` and used for reward claims.
+    /// Valid against `claimable_vouchers_root` in `LedgerState` and used for
+    /// reward claims.
     pub claimable_voucher_paths: VoucherPaths,
 }
 
@@ -254,7 +256,8 @@ impl WalletState {
         VoucherPaths,
     ) {
         // Snapshot tracked paths before pushing the new voucher on epoch transition.
-        // These frozen paths remain valid against `claimable_vouchers_root` in the ledger.
+        // These frozen paths remain valid against `claimable_vouchers_root` in the
+        // ledger.
         let claimable_voucher_paths = if block.epoch > self.epoch {
             self.tracked_voucher_paths.clone()
         } else {
@@ -607,10 +610,12 @@ mod tests {
         wallet.apply_block(&block_1).unwrap();
 
         // v1 is tracked but not yet claimable (no epoch transition yet)
-        assert!(wallet
-            .claimable_voucher_path(block_1.id, &v1_cm)
-            .unwrap()
-            .is_none());
+        assert!(
+            wallet
+                .claimable_voucher_path(block_1.id, &v1_cm)
+                .unwrap()
+                .is_none()
+        );
 
         // Block 2 (epoch 2) -- epoch transition snapshots v1's path as claimable
         // - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
@@ -630,15 +635,19 @@ mod tests {
         wallet.apply_block(&block_2).unwrap();
 
         // v1 is now claimable after epoch transition
-        assert!(wallet
-            .claimable_voucher_path(block_2.id, &v1_cm)
-            .unwrap()
-            .is_some());
+        assert!(
+            wallet
+                .claimable_voucher_path(block_2.id, &v1_cm)
+                .unwrap()
+                .is_some()
+        );
         // v3 is not ours -> not claimable
-        assert!(wallet
-            .claimable_voucher_path(block_2.id, &v3_cm)
-            .unwrap()
-            .is_none());
+        assert!(
+            wallet
+                .claimable_voucher_path(block_2.id, &v3_cm)
+                .unwrap()
+                .is_none()
+        );
 
         // Query the balance of for each pk at different points in the blockchain
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);

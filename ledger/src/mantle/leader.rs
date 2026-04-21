@@ -120,7 +120,7 @@ impl LeaderState {
     }
 
     #[must_use]
-    pub fn vouchers_mmr(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
+    pub const fn vouchers_mmr(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
         &self.vouchers
     }
 

@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
 use lb_chain_service::{
     LibUpdate,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -1002,7 +1002,7 @@ where
             return;
         };
 
-        let wallet_block = WalletBlock::from_block(block, ledger_state.epoch_state().epoch);
+        let wallet_block = WalletBlock::from_block(&block, ledger_state.epoch_state().epoch);
         match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(block_id=?wallet_block.id, "Applied block to wallet");
@@ -1086,9 +1086,11 @@ where
             .map_err(WalletServiceError::CryptarchiaApi)
             .inspect_err(|e| {
                 error!(block_id = ?tip, err = %e, "Failed to fetch missing headers for backfill");
-            })?;
+            })?
+            .try_collect::<Vec<_>>()
+            .await?;
 
-        for header_id in missing_headers.iter().rev().copied() {
+        for header_id in missing_headers.into_iter().rev() {
             if state.wallet().has_processed_block(header_id) {
                 debug!("skipping already processed block");
                 continue;
@@ -1099,8 +1101,7 @@ where
                 .get_ledger_state(header_id)
                 .await?
                 .ok_or(WalletServiceError::LedgerStateNotFound(header_id))?;
-            let wallet_block =
-                WalletBlock::from_block(block, ledger_state.epoch_state().epoch);
+            let wallet_block = WalletBlock::from_block(&block, ledger_state.epoch_state().epoch);
 
             if let Err(e) = state.apply_block(&wallet_block) {
                 error!(

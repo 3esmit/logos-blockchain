@@ -3,8 +3,8 @@ pub const NAME: &str = "devnet";
 pub const SERIALIZED_DEPLOYMENT: &str = "
 blend:
   common:
-    num_blend_layers: 1
-    minimum_network_size: 32
+    num_blend_layers: 3
+    minimum_network_size: 1
     protocol_name: /logos-blockchain-devnet/blend/1.0.0
     data_replication_factor: 0
   core:
@@ -26,10 +26,10 @@ cryptarchia:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 30
+  security_param: 50
   slot_activation_coeff:
     numerator: 1
-    denominator: 20
+    denominator: 30
   learning_rate: 0.5
   sdp_config:
     service_params:
@@ -934,7 +934,7 @@ cryptarchia:
   faucet_pk: faf8a7e44e9f45d35efcd9043c4a55095339e229c4115dbeb6231e2b8422f610
 time:
   slot_duration: '1.000000000'
-  chain_start_time: 2026-03-03 14:49:11.0 +00:00:00
+  chain_start_time: 2026-04-21 00:00:00.0 +00:00:00
 mempool:
   pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0
 ";

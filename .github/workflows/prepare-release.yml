@@ -20,7 +20,8 @@ jobs:
       version: ${{ steps.define-version.outputs.version }}
 
     steps:
-      # Take the version of the tag from which the workflow is dispatched, or use `0.0.0` for test runs with the `release-ci-test` tag.
+      # Take the version of the tag from which the workflow is dispatched, or use `0.0.0` for test runs with the `
+      # release-ci-test` tag (and standard SemVer pre-release/release formats).
       - name: Define version
         id: define-version
         env:
@@ -29,7 +30,7 @@ jobs:
           if [[ "$TAG_NAME" == "${{ env.TEST_TAG_NAME }}" ]]; then
             echo "Test workflow run. Setting version to 0.0.0 for testing."
             VERSION=0.0.0
-          elif [[ "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?)$ ]]; then
+          elif [[ "$TAG_NAME" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+(\.[0-9]+)?)?)$ ]]; then
             echo "Release workflow run for tag '$TAG_NAME'. Setting version to '$TAG_NAME'."
             VERSION="$TAG_NAME"
           else

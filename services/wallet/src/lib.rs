@@ -693,10 +693,11 @@ where
             Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
 
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
-        let path = ledger
-            .mantle_ledger()
-            .voucher_merkle_path(voucher_cm)
-            .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
+        let path = todo!("get path from wallet, not from ledger");
+        // ledger
+        // .mantle_ledger()
+        // .voucher_merkle_path(voucher_cm)
+        // .ok_or(WalletServiceError::VoucherMerklePathNotFound(voucher_cm))?;
         let rewards_root = leader_claim_op.rewards_root;
 
         // TODO: This should happen in KMS
@@ -975,18 +976,19 @@ where
     }
 
     fn find_claimable_voucher(
-        wallet: &Wallet,
-        ledger_state: &LedgerState,
+        _wallet: &Wallet,
+        _ledger_state: &LedgerState,
     ) -> Option<VoucherCommitmentAndNullifier> {
-        for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
-            if ledger_state.mantle_ledger().has_claimable_voucher(cm) {
-                return Some(VoucherCommitmentAndNullifier {
-                    commitment: *cm,
-                    nullifier: *nf,
-                });
-            }
-        }
-        None
+        todo!("find a claimable voucher from wallet, not from ledger");
+        // for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
+        //     if ledger_state.mantle_ledger().has_claimable_voucher(cm) {
+        //         return Some(VoucherCommitmentAndNullifier {
+        //             commitment: *cm,
+        //             nullifier: *nf,
+        //         });
+        //     }
+        // }
+        // None
     }
 
     async fn backfill_if_not_in_sync(

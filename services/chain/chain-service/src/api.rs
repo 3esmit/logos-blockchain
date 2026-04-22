@@ -185,6 +185,24 @@ where
         })
     }
 
+    /// Get the epoch and consensus configs needed to compute epoch from slot.
+    pub async fn get_epoch_config(
+        &self,
+    ) -> Result<(lb_cryptarchia_engine::EpochConfig, lb_cryptarchia_engine::Config), ApiError> {
+        let (tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(ConsensusMsg::GetEpochConfig { tx })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetEpochConfig"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochConfig"))
+        })
+    }
+
     /// Get the epoch state for a given slot
     pub async fn get_epoch_state(
         &self,

@@ -61,6 +61,18 @@ use crate::states::{RecoveryState, ServiceState, Wallet};
 type KmsBackend = PreloadKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
+struct EpochConfig {
+    epoch_config: lb_cryptarchia_engine::EpochConfig,
+    consensus_config: lb_cryptarchia_engine::Config,
+}
+
+impl EpochConfig {
+    fn epoch(&self, slot: lb_cryptarchia_engine::Slot) -> lb_cryptarchia_engine::Epoch {
+        self.epoch_config
+            .epoch(slot, self.consensus_config.base_period_length())
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
     #[error("Ledger state corresponding to block {0} not found")]
@@ -325,6 +337,12 @@ where
         // Subscribe to LIB updates for wallet state pruning
         let mut lib_receiver = cryptarchia_api.subscribe_lib_updates().await?;
 
+        let (epoch_config, consensus_config) = cryptarchia_api.get_epoch_config().await?;
+        let epoch_config = EpochConfig {
+            epoch_config,
+            consensus_config,
+        };
+
         // Initialize wallet from LIB and LIB LedgerState
         let lib = chain_info.lib;
 
@@ -348,6 +366,7 @@ where
             &mut state,
             &storage_adapter,
             &cryptarchia_api,
+            &epoch_config,
         )
         .await?;
 
@@ -357,10 +376,10 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms).await;
+                    Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms, &epoch_config).await;
                 }
                 Ok(event) = new_block_receiver.recv() => {
-                    Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api).await;
+                    Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api, &epoch_config).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
                     Self::handle_lib_update(&lib_update, &storage_adapter, &mut state).await;
@@ -406,9 +425,11 @@ where
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) {
         if let Err(err) =
-            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia).await
+            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, epoch_config)
+                .await
         {
             warn!(err=?err, "Failed backfilling wallet to message tip; continuing to process the message {msg:?}");
         }
@@ -987,6 +1008,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
 
@@ -999,7 +1021,7 @@ where
         // To resolve this, we do a JIT backfill to try to sync the wallet with
         // cryptarchia. If we still have not caught up after the backfill, we return an
         // error to the caller
-        Self::backfill_missing_blocks(tip, state, storage, cryptarchia).await?;
+        Self::backfill_missing_blocks(tip, state, storage, cryptarchia, epoch_config).await?;
 
         if state.wallet().has_processed_block(tip) {
             Ok(())
@@ -1018,6 +1040,7 @@ where
         state: &mut ServiceState<'_>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) {
         let Ok(block) = Self::load_block(
             header_id,
@@ -1030,12 +1053,8 @@ where
             return;
         };
 
-        let Ok(Some(ledger_state)) = cryptarchia_api.get_ledger_state(header_id).await else {
-            error!(block_id=?header_id, "Ledger state not found for new block");
-            return;
-        };
-
-        let wallet_block = WalletBlock::from_block(&block, ledger_state.epoch_state().epoch);
+        let epoch = epoch_config.epoch(block.header().slot());
+        let wallet_block = WalletBlock::from_block(&block, epoch);
         match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(block_id=?wallet_block.id, "Applied block to wallet");
@@ -1047,6 +1066,7 @@ where
                     state,
                     storage_adapter,
                     cryptarchia_api,
+                    epoch_config,
                 )
                 .await
                 {
@@ -1112,6 +1132,7 @@ where
         state: &mut ServiceState<'_>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {
         let missing_headers = cryptarchia_api
             .get_headers_to_lib(tip)
@@ -1130,11 +1151,8 @@ where
             }
 
             let block = Self::load_block(header_id, storage_adapter).await?;
-            let ledger_state = cryptarchia_api
-                .get_ledger_state(header_id)
-                .await?
-                .ok_or(WalletServiceError::LedgerStateNotFound(header_id))?;
-            let wallet_block = WalletBlock::from_block(&block, ledger_state.epoch_state().epoch);
+            let epoch = epoch_config.epoch(block.header().slot());
+            let wallet_block = WalletBlock::from_block(&block, epoch);
 
             if let Err(e) = state.apply_block(&wallet_block) {
                 error!(

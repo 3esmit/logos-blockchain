@@ -1,4 +1,8 @@
-use core::ops::{Deref, DerefMut};
+use core::{
+    marker::PhantomData,
+    num::{self, NonZero},
+    ops::{Deref, DerefMut},
+};
 use std::num::NonZeroU32;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
@@ -275,11 +279,79 @@ impl NonNegativeRatio {
     }
 }
 
+pub trait MinValue {
+    type Type;
+
+    const MIN: Self::Type;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[cfg_attr(
+    feature = "serde",
+    derive(::serde::Serialize, ::serde::Deserialize),
+    serde(bound(deserialize = "Min::Type: ::serde::Deserialize<'de> + PartialOrd"))
+)]
+pub struct NonLessThan<Min>(
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "serde::deserialize_with_min_value::<_, Min>")
+    )]
+    Min::Type,
+    #[cfg_attr(feature = "serde", serde(skip))] PhantomData<Min>,
+)
+where
+    Min: MinValue;
+
+impl<Min> NonLessThan<Min>
+where
+    Min: MinValue<Type: PartialOrd>,
+{
+    pub fn try_from(value: Min::Type) -> Option<Self> {
+        (value >= Min::MIN).then(|| Self(value, PhantomData))
+    }
+}
+
+impl<Min> NonLessThan<Min>
+where
+    Min: MinValue,
+{
+    pub fn get(self) -> Min::Type {
+        self.0
+    }
+}
+
+pub struct GetMinU8<const MIN: u8>;
+impl<const MIN: u8> MinValue for GetMinU8<MIN> {
+    type Type = u8;
+
+    const MIN: Self::Type = MIN;
+}
+pub struct GetMinU16<const MIN: u16>;
+impl<const MIN: u16> MinValue for GetMinU16<MIN> {
+    type Type = u16;
+
+    const MIN: Self::Type = MIN;
+}
+pub struct GetMinU32<const MIN: u32>;
+impl<const MIN: u32> MinValue for GetMinU32<MIN> {
+    type Type = u32;
+
+    const MIN: Self::Type = MIN;
+}
+pub struct GetMinU64<const MIN: u64>;
+impl<const MIN: u64> MinValue for GetMinU64<MIN> {
+    type Type = u64;
+
+    const MIN: Self::Type = MIN;
+}
+
+pub type NonLessThan2U64 = NonLessThan<GetMinU64<2>>;
+
 #[cfg(feature = "serde")]
 mod serde {
-    use serde::Deserialize as _;
+    use serde::Deserialize;
 
-    use crate::math::{F64Ge1, FiniteF64, NonNegativeF64, PositiveF64};
+    use crate::math::{F64Ge1, FiniteF64, MinValue, NonNegativeF64, PositiveF64};
 
     pub(super) fn deserialize<'de, Deserializer>(
         deserializer: Deserializer,
@@ -328,6 +400,23 @@ mod serde {
         F64Ge1::try_from(inner)
             .map_err(|()| serde::de::Error::custom("Deserialized f64 must be >= 1.0"))?;
         Ok(inner)
+    }
+
+    pub(super) fn deserialize_with_min_value<'de, Deserializer, Min>(
+        deserializer: Deserializer,
+    ) -> Result<Min::Type, Deserializer::Error>
+    where
+        Deserializer: serde::Deserializer<'de>,
+        Min: MinValue<Type: PartialOrd + Deserialize<'de>>,
+    {
+        let value = Min::Type::deserialize(deserializer)?;
+        if value >= Min::MIN {
+            Ok(value)
+        } else {
+            Err(serde::de::Error::custom(
+                "Deserialized value is less than the minimum allowed.",
+            ))
+        }
     }
 }
 

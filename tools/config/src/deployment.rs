@@ -20,7 +20,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+use lb_utils::math::{NonLessThan, NonNegativeF64, NonNegativeRatio, U64Bound};
 use time::OffsetDateTime;
 
 use crate::{
@@ -30,7 +30,7 @@ use crate::{
 
 static CHAIN_START_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
 
-const MINIMUM_BLEND_NETWORK_SIZE: u64 = 1;
+const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
 const BLEND_PROTOCOL_NAME: &str = "/blend/integration-tests";
 const DATA_REPLICATION_FACTOR: u64 = 0;
@@ -79,8 +79,10 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
     DeploymentSettings {
         blend: BlendDeploymentSettings {
             common: BlendCommonSettings {
-                minimum_network_size: NonZeroU64::try_from(MINIMUM_BLEND_NETWORK_SIZE)
-                    .expect("Minimum network size cannot be zero."),
+                minimum_network_size: NonLessThan::<U64Bound<2>>::checked_from(
+                    MINIMUM_BLEND_NETWORK_SIZE,
+                )
+                .expect("Minimum network size cannot be less than 2."),
                 num_blend_layers: NonZeroU64::try_from(NUM_BLEND_LAYERS)
                     .expect("Number of blend layers cannot be zero."),
                 protocol_name: StreamProtocol::new(BLEND_PROTOCOL_NAME),

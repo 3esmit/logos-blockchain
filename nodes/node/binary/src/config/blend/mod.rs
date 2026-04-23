@@ -38,6 +38,7 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     #[must_use]
     pub fn into_blend_services_settings(
         self,
@@ -62,7 +63,13 @@ impl ServiceConfig {
             common: CommonSettings {
                 non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
                 num_blend_layers: self.deployment.common.num_blend_layers,
-                minimum_network_size: self.deployment.common.minimum_network_size,
+                minimum_network_size: self
+                    .deployment
+                    .common
+                    .minimum_network_size
+                    .get()
+                    .try_into()
+                    .expect("Minimum network size is at least 2, which is >= than 0."),
                 recovery_path_prefix,
                 time: TimingSettings {
                     epoch_transition_period_in_slots: self

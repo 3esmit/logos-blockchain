@@ -287,7 +287,7 @@ pub trait MinValue {
     derive(::serde::Serialize, ::serde::Deserialize),
     serde(bound(deserialize = "Min::Type: ::serde::Deserialize<'de> + PartialOrd"))
 )]
-pub struct NonLessThan<Min>(
+pub struct AtLeast<Min>(
     #[cfg_attr(
         feature = "serde",
         serde(deserialize_with = "serde::deserialize_with_min_value::<_, Min>")
@@ -297,7 +297,7 @@ pub struct NonLessThan<Min>(
 where
     Min: MinValue;
 
-impl<Min> NonLessThan<Min>
+impl<Min> AtLeast<Min>
 where
     Min: MinValue<Type: PartialOrd>,
 {
@@ -306,7 +306,7 @@ where
     }
 }
 
-impl<Min> NonLessThan<Min>
+impl<Min> AtLeast<Min>
 where
     Min: MinValue,
 {
@@ -327,7 +327,7 @@ pub trait MaxValue {
     derive(::serde::Serialize, ::serde::Deserialize),
     serde(bound(deserialize = "Max::Type: ::serde::Deserialize<'de> + PartialOrd"))
 )]
-pub struct NonMoreThan<Max>(
+pub struct AtMost<Max>(
     #[cfg_attr(
         feature = "serde",
         serde(deserialize_with = "serde::deserialize_with_max_value::<_, Max>")
@@ -337,7 +337,7 @@ pub struct NonMoreThan<Max>(
 where
     Max: MaxValue;
 
-impl<Max> NonMoreThan<Max>
+impl<Max> AtMost<Max>
 where
     Max: MaxValue<Type: PartialOrd>,
 {
@@ -346,7 +346,7 @@ where
     }
 }
 
-impl<Max> NonMoreThan<Max>
+impl<Max> AtMost<Max>
 where
     Max: MaxValue,
 {
@@ -355,54 +355,53 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct U8Bound<const MIN: u8>;
-impl<const MIN: u8> MinValue for U8Bound<MIN> {
-    type Type = u8;
-
-    const MIN: Self::Type = MIN;
+/// A macro to define a newtype wrapper around an unsigned integer type that
+/// enforces a minimum or maximum value constraint. The generated type
+/// implements the `MinValue` and `MaxValue` traits, and provides conversion
+/// methods to and from the underlying integer type. The macro takes the name of
+/// the new type and the underlying unsigned integer type as parameters.
+macro_rules! uint_bound {
+    ($name:ident, $ty:ty) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct $name<const N: $ty>;
+        impl<const N: $ty> MinValue for $name<N> {
+            type Type = $ty;
+            const MIN: Self::Type = N;
+        }
+        impl<const N: $ty> MaxValue for $name<N> {
+            type Type = $ty;
+            const MAX: Self::Type = N;
+        }
+        impl<const MIN: $ty> From<AtLeast<$name<MIN>>> for $ty {
+            fn from(value: AtLeast<$name<MIN>>) -> Self {
+                value.0
+            }
+        }
+        impl<const MIN: $ty> TryFrom<$ty> for AtLeast<$name<MIN>> {
+            type Error = ();
+            fn try_from(value: $ty) -> Result<Self, Self::Error> {
+                (value >= MIN).then_some(Self(value)).ok_or(())
+            }
+        }
+        impl<const MAX: $ty> From<AtMost<$name<MAX>>> for $ty {
+            fn from(value: AtMost<$name<MAX>>) -> Self {
+                value.0
+            }
+        }
+        impl<const MAX: $ty> TryFrom<$ty> for AtMost<$name<MAX>> {
+            type Error = ();
+            fn try_from(value: $ty) -> Result<Self, Self::Error> {
+                (value <= MAX).then_some(Self(value)).ok_or(())
+            }
+        }
+    };
 }
-impl<const MAX: u8> MaxValue for U8Bound<MAX> {
-    type Type = u8;
 
-    const MAX: Self::Type = MAX;
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct U16Bound<const MIN: u16>;
-impl<const MIN: u16> MinValue for U16Bound<MIN> {
-    type Type = u16;
-
-    const MIN: Self::Type = MIN;
-}
-impl<const MAX: u16> MaxValue for U16Bound<MAX> {
-    type Type = u16;
-
-    const MAX: Self::Type = MAX;
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct U32Bound<const MIN: u32>;
-impl<const MIN: u32> MinValue for U32Bound<MIN> {
-    type Type = u32;
-
-    const MIN: Self::Type = MIN;
-}
-impl<const MAX: u32> MaxValue for U32Bound<MAX> {
-    type Type = u32;
-
-    const MAX: Self::Type = MAX;
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct U64Bound<const MIN: u64>;
-impl<const MIN: u64> MinValue for U64Bound<MIN> {
-    type Type = u64;
-
-    const MIN: Self::Type = MIN;
-}
-impl<const MAX: u64> MaxValue for U64Bound<MAX> {
-    type Type = u64;
-
-    const MAX: Self::Type = MAX;
-}
+uint_bound!(U8Bound, u8);
+uint_bound!(U16Bound, u16);
+uint_bound!(U32Bound, u32);
+uint_bound!(U64Bound, u64);
+uint_bound!(U128Bound, u128);
 
 #[cfg(feature = "serde")]
 mod serde {
@@ -550,44 +549,26 @@ mod tests {
 
     #[test]
     fn non_less_than_impl() {
-        assert!(NonLessThan::<U8Bound<2>>::checked_from(1).is_none());
-        assert_eq!(NonLessThan::<U8Bound<2>>::checked_from(2).unwrap().get(), 2);
-        assert!(NonLessThan::<U16Bound<2>>::checked_from(1).is_none());
-        assert_eq!(
-            NonLessThan::<U16Bound<2>>::checked_from(2).unwrap().get(),
-            2
-        );
-        assert!(NonLessThan::<U32Bound<2>>::checked_from(1).is_none());
-        assert_eq!(
-            NonLessThan::<U32Bound<2>>::checked_from(2).unwrap().get(),
-            2
-        );
-        assert!(NonLessThan::<U64Bound<2>>::checked_from(1).is_none());
-        assert_eq!(
-            NonLessThan::<U64Bound<2>>::checked_from(2).unwrap().get(),
-            2
-        );
+        assert!(AtLeast::<U8Bound<2>>::checked_from(1).is_none());
+        assert_eq!(AtLeast::<U8Bound<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(AtLeast::<U16Bound<2>>::checked_from(1).is_none());
+        assert_eq!(AtLeast::<U16Bound<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(AtLeast::<U32Bound<2>>::checked_from(1).is_none());
+        assert_eq!(AtLeast::<U32Bound<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(AtLeast::<U64Bound<2>>::checked_from(1).is_none());
+        assert_eq!(AtLeast::<U64Bound<2>>::checked_from(2).unwrap().get(), 2);
     }
 
     #[test]
     fn non_more_than_impl() {
-        assert!(NonMoreThan::<U8Bound<2>>::checked_from(3).is_none());
-        assert_eq!(NonMoreThan::<U8Bound<2>>::checked_from(2).unwrap().get(), 2);
-        assert!(NonMoreThan::<U16Bound<2>>::checked_from(3).is_none());
-        assert_eq!(
-            NonMoreThan::<U16Bound<2>>::checked_from(2).unwrap().get(),
-            2
-        );
-        assert!(NonMoreThan::<U32Bound<2>>::checked_from(3).is_none());
-        assert_eq!(
-            NonMoreThan::<U32Bound<2>>::checked_from(2).unwrap().get(),
-            2
-        );
-        assert!(NonMoreThan::<U64Bound<2>>::checked_from(3).is_none());
-        assert_eq!(
-            NonMoreThan::<U64Bound<2>>::checked_from(2).unwrap().get(),
-            2
-        );
+        assert!(AtMost::<U8Bound<2>>::checked_from(3).is_none());
+        assert_eq!(AtMost::<U8Bound<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(AtMost::<U16Bound<2>>::checked_from(3).is_none());
+        assert_eq!(AtMost::<U16Bound<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(AtMost::<U32Bound<2>>::checked_from(3).is_none());
+        assert_eq!(AtMost::<U32Bound<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(AtMost::<U64Bound<2>>::checked_from(3).is_none());
+        assert_eq!(AtMost::<U64Bound<2>>::checked_from(2).unwrap().get(), 2);
     }
 
     #[cfg(feature = "serde")]
@@ -650,33 +631,33 @@ mod tests {
 
         #[test]
         fn deser_no_less_than() {
-            assert!(serde_json::from_str::<NonLessThan<U8Bound<2>>>("1").is_err());
+            assert!(serde_json::from_str::<AtLeast<U8Bound<2>>>("1").is_err());
             assert_eq!(
-                serde_json::from_str::<NonLessThan<U8Bound<2>>>("2")
+                serde_json::from_str::<AtLeast<U8Bound<2>>>("2")
                     .unwrap()
                     .get(),
                 2
             );
 
-            assert!(serde_json::from_str::<NonLessThan<U16Bound<2>>>("1").is_err());
+            assert!(serde_json::from_str::<AtLeast<U16Bound<2>>>("1").is_err());
             assert_eq!(
-                serde_json::from_str::<NonLessThan<U16Bound<2>>>("2")
+                serde_json::from_str::<AtLeast<U16Bound<2>>>("2")
                     .unwrap()
                     .get(),
                 2
             );
 
-            assert!(serde_json::from_str::<NonLessThan<U32Bound<2>>>("1").is_err());
+            assert!(serde_json::from_str::<AtLeast<U32Bound<2>>>("1").is_err());
             assert_eq!(
-                serde_json::from_str::<NonLessThan<U32Bound<2>>>("2")
+                serde_json::from_str::<AtLeast<U32Bound<2>>>("2")
                     .unwrap()
                     .get(),
                 2
             );
 
-            assert!(serde_json::from_str::<NonLessThan<U64Bound<2>>>("1").is_err());
+            assert!(serde_json::from_str::<AtLeast<U64Bound<2>>>("1").is_err());
             assert_eq!(
-                serde_json::from_str::<NonLessThan<U64Bound<2>>>("2")
+                serde_json::from_str::<AtLeast<U64Bound<2>>>("2")
                     .unwrap()
                     .get(),
                 2
@@ -685,33 +666,33 @@ mod tests {
 
         #[test]
         fn deser_no_more_than() {
-            assert!(serde_json::from_str::<NonMoreThan<U8Bound<2>>>("3").is_err());
+            assert!(serde_json::from_str::<AtMost<U8Bound<2>>>("3").is_err());
             assert_eq!(
-                serde_json::from_str::<NonMoreThan<U8Bound<2>>>("2")
+                serde_json::from_str::<AtMost<U8Bound<2>>>("2")
                     .unwrap()
                     .get(),
                 2
             );
 
-            assert!(serde_json::from_str::<NonMoreThan<U16Bound<2>>>("3").is_err());
+            assert!(serde_json::from_str::<AtMost<U16Bound<2>>>("3").is_err());
             assert_eq!(
-                serde_json::from_str::<NonMoreThan<U16Bound<2>>>("2")
+                serde_json::from_str::<AtMost<U16Bound<2>>>("2")
                     .unwrap()
                     .get(),
                 2
             );
 
-            assert!(serde_json::from_str::<NonMoreThan<U32Bound<2>>>("3").is_err());
+            assert!(serde_json::from_str::<AtMost<U32Bound<2>>>("3").is_err());
             assert_eq!(
-                serde_json::from_str::<NonMoreThan<U32Bound<2>>>("2")
+                serde_json::from_str::<AtMost<U32Bound<2>>>("2")
                     .unwrap()
                     .get(),
                 2
             );
 
-            assert!(serde_json::from_str::<NonMoreThan<U64Bound<2>>>("3").is_err());
+            assert!(serde_json::from_str::<AtMost<U64Bound<2>>>("3").is_err());
             assert_eq!(
-                serde_json::from_str::<NonMoreThan<U64Bound<2>>>("2")
+                serde_json::from_str::<AtMost<U64Bound<2>>>("2")
                     .unwrap()
                     .get(),
                 2

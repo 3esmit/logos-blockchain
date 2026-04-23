@@ -20,7 +20,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use lb_utils::math::{NonLessThan, NonNegativeF64, NonNegativeRatio, U64Bound};
+use lb_utils::math::{AtLeast, NonNegativeF64, NonNegativeRatio, U64Bound};
 use time::OffsetDateTime;
 
 use crate::{
@@ -79,7 +79,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
     DeploymentSettings {
         blend: BlendDeploymentSettings {
             common: BlendCommonSettings {
-                minimum_network_size: NonLessThan::<U64Bound<2>>::checked_from(
+                minimum_network_size: AtLeast::<U64Bound<2>>::checked_from(
                     MINIMUM_BLEND_NETWORK_SIZE,
                 )
                 .expect("Minimum network size cannot be less than 2."),

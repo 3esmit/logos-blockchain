@@ -2,7 +2,7 @@ use core::{num::NonZeroU64, time::Duration};
 
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_libp2p::protocol_name::StreamProtocol;
-use lb_utils::math::{NonLessThan, NonNegativeF64, U64Bound};
+use lb_utils::math::{AtLeast, NonNegativeF64, U64Bound};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
@@ -126,7 +126,7 @@ pub struct CommonSettings {
     /// `ß_c`: expected number of blending operations for each locally generated
     /// message.
     pub num_blend_layers: NonZeroU64,
-    pub minimum_network_size: NonLessThan<U64Bound<2>>,
+    pub minimum_network_size: AtLeast<U64Bound<2>>,
     pub protocol_name: StreamProtocol,
     pub data_replication_factor: u64,
 }

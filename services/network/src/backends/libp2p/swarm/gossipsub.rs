@@ -68,6 +68,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 // Only do this on first attempt; if a previous attempt already
                 // injected the message locally due to InsufficientPeers, avoid
                 // notifying local subscribers twice.
+                // TODO: Remove this logic once we start re-applying blocks produced locally. In
+                // that case, we don't need to bubble this up since we have already applied the
+                // block before broadcasting it.
                 if retry_count == 0 && self.swarm.is_subscribed(&topic) {
                     log_error!(self.pubsub_messages_tx.send(gossipsub::Message {
                         source: None,

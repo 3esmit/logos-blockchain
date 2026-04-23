@@ -9,7 +9,7 @@ use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
         CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
-        CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
+        CoverTrafficSettings, MessageDelayerSettings, MinimumNetworkSize, SchedulerSettings,
         Settings as BlendDeploymentSettings,
     },
     cryptarchia::deployment::{
@@ -20,7 +20,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use lb_utils::math::{AtLeast, NonNegativeF64, NonNegativeRatio, U64Bound};
+use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use time::OffsetDateTime;
 
 use crate::{
@@ -79,10 +79,8 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
     DeploymentSettings {
         blend: BlendDeploymentSettings {
             common: BlendCommonSettings {
-                minimum_network_size: AtLeast::<U64Bound<2>>::checked_from(
-                    MINIMUM_BLEND_NETWORK_SIZE,
-                )
-                .expect("Minimum network size cannot be less than 2."),
+                minimum_network_size: MinimumNetworkSize::try_new(MINIMUM_BLEND_NETWORK_SIZE)
+                    .expect("Minimum network size cannot be less than 2."),
                 num_blend_layers: NonZeroU64::try_from(NUM_BLEND_LAYERS)
                     .expect("Number of blend layers cannot be zero."),
                 protocol_name: StreamProtocol::new(BLEND_PROTOCOL_NAME),

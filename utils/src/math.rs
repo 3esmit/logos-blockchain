@@ -275,139 +275,11 @@ impl NonNegativeRatio {
     }
 }
 
-pub trait MinValue {
-    type Type;
-
-    const MIN: Self::Type;
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-#[cfg_attr(
-    feature = "serde",
-    derive(::serde::Serialize, ::serde::Deserialize),
-    serde(bound(deserialize = "Min::Type: ::serde::Deserialize<'de> + PartialOrd"))
-)]
-pub struct AtLeast<Min>(
-    #[cfg_attr(
-        feature = "serde",
-        serde(deserialize_with = "serde::deserialize_with_min_value::<_, Min>")
-    )]
-    Min::Type,
-)
-where
-    Min: MinValue;
-
-impl<Min> AtLeast<Min>
-where
-    Min: MinValue<Type: PartialOrd>,
-{
-    pub fn checked_from(value: Min::Type) -> Option<Self> {
-        (value >= Min::MIN).then(|| Self(value))
-    }
-}
-
-impl<Min> AtLeast<Min>
-where
-    Min: MinValue,
-{
-    pub fn get(self) -> Min::Type {
-        self.0
-    }
-}
-
-pub trait MaxValue {
-    type Type;
-
-    const MAX: Self::Type;
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-#[cfg_attr(
-    feature = "serde",
-    derive(::serde::Serialize, ::serde::Deserialize),
-    serde(bound(deserialize = "Max::Type: ::serde::Deserialize<'de> + PartialOrd"))
-)]
-pub struct AtMost<Max>(
-    #[cfg_attr(
-        feature = "serde",
-        serde(deserialize_with = "serde::deserialize_with_max_value::<_, Max>")
-    )]
-    Max::Type,
-)
-where
-    Max: MaxValue;
-
-impl<Max> AtMost<Max>
-where
-    Max: MaxValue<Type: PartialOrd>,
-{
-    pub fn checked_from(value: Max::Type) -> Option<Self> {
-        (value <= Max::MAX).then(|| Self(value))
-    }
-}
-
-impl<Max> AtMost<Max>
-where
-    Max: MaxValue,
-{
-    pub fn get(self) -> Max::Type {
-        self.0
-    }
-}
-
-/// A macro to define a newtype wrapper around an unsigned integer type that
-/// enforces a minimum or maximum value constraint. The generated type
-/// implements the `MinValue` and `MaxValue` traits, and provides conversion
-/// methods to and from the underlying integer type. The macro takes the name of
-/// the new type and the underlying unsigned integer type as parameters.
-macro_rules! uint_bound {
-    ($name:ident, $ty:ty) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-        pub struct $name<const N: $ty>;
-        impl<const N: $ty> MinValue for $name<N> {
-            type Type = $ty;
-            const MIN: Self::Type = N;
-        }
-        impl<const N: $ty> MaxValue for $name<N> {
-            type Type = $ty;
-            const MAX: Self::Type = N;
-        }
-        impl<const MIN: $ty> From<AtLeast<$name<MIN>>> for $ty {
-            fn from(value: AtLeast<$name<MIN>>) -> Self {
-                value.0
-            }
-        }
-        impl<const MIN: $ty> TryFrom<$ty> for AtLeast<$name<MIN>> {
-            type Error = ();
-            fn try_from(value: $ty) -> Result<Self, Self::Error> {
-                (value >= MIN).then_some(Self(value)).ok_or(())
-            }
-        }
-        impl<const MAX: $ty> From<AtMost<$name<MAX>>> for $ty {
-            fn from(value: AtMost<$name<MAX>>) -> Self {
-                value.0
-            }
-        }
-        impl<const MAX: $ty> TryFrom<$ty> for AtMost<$name<MAX>> {
-            type Error = ();
-            fn try_from(value: $ty) -> Result<Self, Self::Error> {
-                (value <= MAX).then_some(Self(value)).ok_or(())
-            }
-        }
-    };
-}
-
-uint_bound!(U8Bound, u8);
-uint_bound!(U16Bound, u16);
-uint_bound!(U32Bound, u32);
-uint_bound!(U64Bound, u64);
-uint_bound!(U128Bound, u128);
-
 #[cfg(feature = "serde")]
 mod serde {
-    use serde::Deserialize;
+    use serde::Deserialize as _;
 
-    use crate::math::{F64Ge1, FiniteF64, MaxValue, MinValue, NonNegativeF64, PositiveF64};
+    use crate::math::{F64Ge1, FiniteF64, NonNegativeF64, PositiveF64};
 
     pub(super) fn deserialize<'de, Deserializer>(
         deserializer: Deserializer,
@@ -456,40 +328,6 @@ mod serde {
         F64Ge1::try_from(inner)
             .map_err(|()| serde::de::Error::custom("Deserialized f64 must be >= 1.0"))?;
         Ok(inner)
-    }
-
-    pub(super) fn deserialize_with_min_value<'de, Deserializer, Min>(
-        deserializer: Deserializer,
-    ) -> Result<Min::Type, Deserializer::Error>
-    where
-        Deserializer: serde::Deserializer<'de>,
-        Min: MinValue<Type: PartialOrd + Deserialize<'de>>,
-    {
-        let value = Min::Type::deserialize(deserializer)?;
-        if value >= Min::MIN {
-            Ok(value)
-        } else {
-            Err(serde::de::Error::custom(
-                "Deserialized value is less than the minimum allowed.",
-            ))
-        }
-    }
-
-    pub(super) fn deserialize_with_max_value<'de, Deserializer, Max>(
-        deserializer: Deserializer,
-    ) -> Result<Max::Type, Deserializer::Error>
-    where
-        Deserializer: serde::Deserializer<'de>,
-        Max: MaxValue<Type: PartialOrd + Deserialize<'de>>,
-    {
-        let value = Max::Type::deserialize(deserializer)?;
-        if value <= Max::MAX {
-            Ok(value)
-        } else {
-            Err(serde::de::Error::custom(
-                "Deserialized value is greater than the maximum allowed.",
-            ))
-        }
     }
 }
 
@@ -545,30 +383,6 @@ mod tests {
         assert!(F64Ge1::try_from(2u64).is_ok());
         assert!(F64Ge1::try_from(FiniteF64::MAX_REPRESENTABLE_U64).is_ok());
         assert!(F64Ge1::try_from(FiniteF64::MAX_REPRESENTABLE_U64 + 1).is_err());
-    }
-
-    #[test]
-    fn non_less_than_impl() {
-        assert!(AtLeast::<U8Bound<2>>::checked_from(1).is_none());
-        assert_eq!(AtLeast::<U8Bound<2>>::checked_from(2).unwrap().get(), 2);
-        assert!(AtLeast::<U16Bound<2>>::checked_from(1).is_none());
-        assert_eq!(AtLeast::<U16Bound<2>>::checked_from(2).unwrap().get(), 2);
-        assert!(AtLeast::<U32Bound<2>>::checked_from(1).is_none());
-        assert_eq!(AtLeast::<U32Bound<2>>::checked_from(2).unwrap().get(), 2);
-        assert!(AtLeast::<U64Bound<2>>::checked_from(1).is_none());
-        assert_eq!(AtLeast::<U64Bound<2>>::checked_from(2).unwrap().get(), 2);
-    }
-
-    #[test]
-    fn non_more_than_impl() {
-        assert!(AtMost::<U8Bound<2>>::checked_from(3).is_none());
-        assert_eq!(AtMost::<U8Bound<2>>::checked_from(2).unwrap().get(), 2);
-        assert!(AtMost::<U16Bound<2>>::checked_from(3).is_none());
-        assert_eq!(AtMost::<U16Bound<2>>::checked_from(2).unwrap().get(), 2);
-        assert!(AtMost::<U32Bound<2>>::checked_from(3).is_none());
-        assert_eq!(AtMost::<U32Bound<2>>::checked_from(2).unwrap().get(), 2);
-        assert!(AtMost::<U64Bound<2>>::checked_from(3).is_none());
-        assert_eq!(AtMost::<U64Bound<2>>::checked_from(2).unwrap().get(), 2);
     }
 
     #[cfg(feature = "serde")]
@@ -627,76 +441,6 @@ mod tests {
             assert!((*ok.value - 1.0).abs() < f64::EPSILON);
 
             assert!(serde_json::from_str::<F64Ge1>(r#"{"value": 1.1}"#).is_err());
-        }
-
-        #[test]
-        fn deser_no_less_than() {
-            assert!(serde_json::from_str::<AtLeast<U8Bound<2>>>("1").is_err());
-            assert_eq!(
-                serde_json::from_str::<AtLeast<U8Bound<2>>>("2")
-                    .unwrap()
-                    .get(),
-                2
-            );
-
-            assert!(serde_json::from_str::<AtLeast<U16Bound<2>>>("1").is_err());
-            assert_eq!(
-                serde_json::from_str::<AtLeast<U16Bound<2>>>("2")
-                    .unwrap()
-                    .get(),
-                2
-            );
-
-            assert!(serde_json::from_str::<AtLeast<U32Bound<2>>>("1").is_err());
-            assert_eq!(
-                serde_json::from_str::<AtLeast<U32Bound<2>>>("2")
-                    .unwrap()
-                    .get(),
-                2
-            );
-
-            assert!(serde_json::from_str::<AtLeast<U64Bound<2>>>("1").is_err());
-            assert_eq!(
-                serde_json::from_str::<AtLeast<U64Bound<2>>>("2")
-                    .unwrap()
-                    .get(),
-                2
-            );
-        }
-
-        #[test]
-        fn deser_no_more_than() {
-            assert!(serde_json::from_str::<AtMost<U8Bound<2>>>("3").is_err());
-            assert_eq!(
-                serde_json::from_str::<AtMost<U8Bound<2>>>("2")
-                    .unwrap()
-                    .get(),
-                2
-            );
-
-            assert!(serde_json::from_str::<AtMost<U16Bound<2>>>("3").is_err());
-            assert_eq!(
-                serde_json::from_str::<AtMost<U16Bound<2>>>("2")
-                    .unwrap()
-                    .get(),
-                2
-            );
-
-            assert!(serde_json::from_str::<AtMost<U32Bound<2>>>("3").is_err());
-            assert_eq!(
-                serde_json::from_str::<AtMost<U32Bound<2>>>("2")
-                    .unwrap()
-                    .get(),
-                2
-            );
-
-            assert!(serde_json::from_str::<AtMost<U64Bound<2>>>("3").is_err());
-            assert_eq!(
-                serde_json::from_str::<AtMost<U64Bound<2>>>("2")
-                    .unwrap()
-                    .get(),
-                2
-            );
         }
     }
 }

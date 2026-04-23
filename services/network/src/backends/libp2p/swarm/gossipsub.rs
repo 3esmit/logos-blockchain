@@ -64,8 +64,11 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         match self.swarm.broadcast(&topic, message.to_vec()) {
             Ok(id) => {
                 tracing::trace!("Broadcasted message with id: {id} to topic: {topic}");
-                // self-notification because libp2p doesn't do it
-                if self.swarm.is_subscribed(&topic) {
+                // self-notification because libp2p doesn't do it.
+                // Only do this on first attempt; if a previous attempt already
+                // injected the message locally due to InsufficientPeers, avoid
+                // notifying local subscribers twice.
+                if retry_count == 0 && self.swarm.is_subscribed(&topic) {
                     log_error!(self.pubsub_messages_tx.send(gossipsub::Message {
                         source: None,
                         data: message.into(),

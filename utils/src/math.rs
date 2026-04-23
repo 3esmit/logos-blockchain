@@ -1,6 +1,5 @@
 use core::{
     marker::PhantomData,
-    num::{self, NonZero},
     ops::{Deref, DerefMut},
 };
 use std::num::NonZeroU32;
@@ -297,7 +296,6 @@ pub struct NonLessThan<Min>(
         serde(deserialize_with = "serde::deserialize_with_min_value::<_, Min>")
     )]
     Min::Type,
-    #[cfg_attr(feature = "serde", serde(skip))] PhantomData<Min>,
 )
 where
     Min: MinValue;
@@ -307,7 +305,7 @@ where
     Min: MinValue<Type: PartialOrd>,
 {
     pub fn try_from(value: Min::Type) -> Option<Self> {
-        (value >= Min::MIN).then(|| Self(value, PhantomData))
+        (value >= Min::MIN).then(|| Self(value))
     }
 }
 
@@ -320,38 +318,100 @@ where
     }
 }
 
-pub struct GetMinU8<const MIN: u8>;
-impl<const MIN: u8> MinValue for GetMinU8<MIN> {
+pub trait MaxValue {
+    type Type;
+
+    const MAX: Self::Type;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[cfg_attr(
+    feature = "serde",
+    derive(::serde::Serialize, ::serde::Deserialize),
+    serde(bound(deserialize = "Max::Type: ::serde::Deserialize<'de> + PartialOrd"))
+)]
+pub struct NonMoreThan<Max>(
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "serde::deserialize_with_max_value::<_, Max>")
+    )]
+    Max::Type,
+)
+where
+    Max: MaxValue;
+
+impl<Max> NonMoreThan<Max>
+where
+    Max: MaxValue<Type: PartialOrd>,
+{
+    pub fn checked_from(value: Max::Type) -> Option<Self> {
+        (value <= Max::MAX).then(|| Self(value))
+    }
+}
+
+impl<Max> NonMoreThan<Max>
+where
+    Max: MaxValue,
+{
+    pub fn get(self) -> Max::Type {
+        self.0
+    }
+}
+
+#[derive(Debug)]
+pub struct U8<const MIN: u8>;
+impl<const MIN: u8> MinValue for U8<MIN> {
     type Type = u8;
 
     const MIN: Self::Type = MIN;
 }
-pub struct GetMinU16<const MIN: u16>;
-impl<const MIN: u16> MinValue for GetMinU16<MIN> {
+impl<const MAX: u8> MaxValue for U8<MAX> {
+    type Type = u8;
+
+    const MAX: Self::Type = MAX;
+}
+#[derive(Debug)]
+pub struct U16<const MIN: u16>;
+impl<const MIN: u16> MinValue for U16<MIN> {
     type Type = u16;
 
     const MIN: Self::Type = MIN;
 }
-pub struct GetMinU32<const MIN: u32>;
-impl<const MIN: u32> MinValue for GetMinU32<MIN> {
+impl<const MAX: u16> MaxValue for U16<MAX> {
+    type Type = u16;
+
+    const MAX: Self::Type = MAX;
+}
+#[derive(Debug)]
+pub struct U32<const MIN: u32>;
+impl<const MIN: u32> MinValue for U32<MIN> {
     type Type = u32;
 
     const MIN: Self::Type = MIN;
 }
-pub struct GetMinU64<const MIN: u64>;
-impl<const MIN: u64> MinValue for GetMinU64<MIN> {
+impl<const MAX: u32> MaxValue for U32<MAX> {
+    type Type = u32;
+
+    const MAX: Self::Type = MAX;
+}
+#[derive(Debug)]
+pub struct U64<const MIN: u64>;
+impl<const MIN: u64> MinValue for U64<MIN> {
     type Type = u64;
 
     const MIN: Self::Type = MIN;
 }
+impl<const MAX: u64> MaxValue for U64<MAX> {
+    type Type = u64;
 
-pub type NonLessThan2U64 = NonLessThan<GetMinU64<2>>;
+    const MAX: Self::Type = MAX;
+}
 
 #[cfg(feature = "serde")]
 mod serde {
     use serde::Deserialize;
 
-    use crate::math::{F64Ge1, FiniteF64, MinValue, NonNegativeF64, PositiveF64};
+    use crate::math::{F64Ge1, FiniteF64, MaxValue, MinValue, NonNegativeF64, PositiveF64};
 
     pub(super) fn deserialize<'de, Deserializer>(
         deserializer: Deserializer,
@@ -418,6 +478,23 @@ mod serde {
             ))
         }
     }
+
+    pub(super) fn deserialize_with_max_value<'de, Deserializer, Max>(
+        deserializer: Deserializer,
+    ) -> Result<Max::Type, Deserializer::Error>
+    where
+        Deserializer: serde::Deserializer<'de>,
+        Max: MaxValue<Type: PartialOrd + Deserialize<'de>>,
+    {
+        let value = Max::Type::deserialize(deserializer)?;
+        if value <= Max::MAX {
+            Ok(value)
+        } else {
+            Err(serde::de::Error::custom(
+                "Deserialized value is greater than the maximum allowed.",
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -472,6 +549,30 @@ mod tests {
         assert!(F64Ge1::try_from(2u64).is_ok());
         assert!(F64Ge1::try_from(FiniteF64::MAX_REPRESENTABLE_U64).is_ok());
         assert!(F64Ge1::try_from(FiniteF64::MAX_REPRESENTABLE_U64 + 1).is_err());
+    }
+
+    #[test]
+    fn non_less_than_impl() {
+        assert!(NonLessThan::<U8<2>>::try_from(1).is_none());
+        assert_eq!(NonLessThan::<U8<2>>::try_from(2).unwrap().get(), 2);
+        assert!(NonLessThan::<U16<2>>::try_from(1).is_none());
+        assert_eq!(NonLessThan::<U16<2>>::try_from(2).unwrap().get(), 2);
+        assert!(NonLessThan::<U32<2>>::try_from(1).is_none());
+        assert_eq!(NonLessThan::<U32<2>>::try_from(2).unwrap().get(), 2);
+        assert!(NonLessThan::<U64<2>>::try_from(1).is_none());
+        assert_eq!(NonLessThan::<U64<2>>::try_from(2).unwrap().get(), 2);
+    }
+
+    #[test]
+    fn non_more_than_impl() {
+        assert!(NonMoreThan::<U8<2>>::checked_from(3).is_none());
+        assert_eq!(NonMoreThan::<U8<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(NonMoreThan::<U16<2>>::checked_from(3).is_none());
+        assert_eq!(NonMoreThan::<U16<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(NonMoreThan::<U32<2>>::checked_from(3).is_none());
+        assert_eq!(NonMoreThan::<U32<2>>::checked_from(2).unwrap().get(), 2);
+        assert!(NonMoreThan::<U64<2>>::checked_from(3).is_none());
+        assert_eq!(NonMoreThan::<U64<2>>::checked_from(2).unwrap().get(), 2);
     }
 
     #[cfg(feature = "serde")]
@@ -530,6 +631,76 @@ mod tests {
             assert!((*ok.value - 1.0).abs() < f64::EPSILON);
 
             assert!(serde_json::from_str::<F64Ge1>(r#"{"value": 1.1}"#).is_err());
+        }
+
+        #[test]
+        fn deser_no_less_than() {
+            assert!(serde_json::from_str::<NonLessThan<U8<2>>>("1").is_err());
+            assert_eq!(
+                serde_json::from_str::<NonLessThan<U8<2>>>("2")
+                    .unwrap()
+                    .get(),
+                2
+            );
+
+            assert!(serde_json::from_str::<NonLessThan<U16<2>>>("1").is_err());
+            assert_eq!(
+                serde_json::from_str::<NonLessThan<U16<2>>>("2")
+                    .unwrap()
+                    .get(),
+                2
+            );
+
+            assert!(serde_json::from_str::<NonLessThan<U32<2>>>("1").is_err());
+            assert_eq!(
+                serde_json::from_str::<NonLessThan<U32<2>>>("2")
+                    .unwrap()
+                    .get(),
+                2
+            );
+
+            assert!(serde_json::from_str::<NonLessThan<U64<2>>>("1").is_err());
+            assert_eq!(
+                serde_json::from_str::<NonLessThan<U64<2>>>("2")
+                    .unwrap()
+                    .get(),
+                2
+            );
+        }
+
+        #[test]
+        fn deser_no_more_than() {
+            assert!(serde_json::from_str::<NonMoreThan<U8<2>>>("3").is_err());
+            assert_eq!(
+                serde_json::from_str::<NonMoreThan<U8<2>>>("2")
+                    .unwrap()
+                    .get(),
+                2
+            );
+
+            assert!(serde_json::from_str::<NonMoreThan<U16<2>>>("3").is_err());
+            assert_eq!(
+                serde_json::from_str::<NonMoreThan<U16<2>>>("2")
+                    .unwrap()
+                    .get(),
+                2
+            );
+
+            assert!(serde_json::from_str::<NonMoreThan<U32<2>>>("3").is_err());
+            assert_eq!(
+                serde_json::from_str::<NonMoreThan<U32<2>>>("2")
+                    .unwrap()
+                    .get(),
+                2
+            );
+
+            assert!(serde_json::from_str::<NonMoreThan<U64<2>>>("3").is_err());
+            assert_eq!(
+                serde_json::from_str::<NonMoreThan<U64<2>>>("2")
+                    .unwrap()
+                    .get(),
+                2
+            );
         }
     }
 }

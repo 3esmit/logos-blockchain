@@ -1125,13 +1125,25 @@ where
             "Received LIB update"
         );
 
-        state.advance_lib(lib_update.new_lib);
-        state.prune_states(lib_update.pruned_blocks.all());
-        let immutable_blocks: Vec<Block<Tx>> =
-            futures::stream::iter(lib_update.pruned_blocks.immutable_blocks.values())
-                .filter_map(async |header_id: &HeaderId| storage_adapter.get_block(header_id).await)
-                .collect::<Vec<_>>()
-                .await;
+        state.advance_lib(
+            lib_update.new_lib,
+            lib_update.pruned_blocks.all(),
+            Self::collect_claimed_nullifiers_from_blocks(
+                lib_update.pruned_blocks.immutable_blocks.values(),
+                storage_adapter,
+            )
+            .await,
+        );
+    }
+
+    async fn collect_claimed_nullifiers_from_blocks(
+        blocks: impl Iterator<Item = &HeaderId>,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> impl IntoIterator<Item = VoucherNullifier> {
+        let immutable_blocks: Vec<Block<Tx>> = futures::stream::iter(blocks)
+            .filter_map(async |header_id| storage_adapter.get_block(header_id).await)
+            .collect::<Vec<_>>()
+            .await;
         let claimed_nullifiers: Vec<VoucherNullifier> = immutable_blocks
             .into_iter()
             .flat_map(|block: Block<Tx>| block.into_transactions().into_iter())
@@ -1148,7 +1160,7 @@ where
                 }
             })
             .collect();
-        state.prune_vouchers(claimed_nullifiers);
+        claimed_nullifiers.into_iter()
     }
 
     #[expect(

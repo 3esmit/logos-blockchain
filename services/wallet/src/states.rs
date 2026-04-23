@@ -104,23 +104,15 @@ impl<'u> ServiceState<'u> {
         Ok(())
     }
 
-    pub fn prune_states(&mut self, pruned_blocks: impl IntoIterator<Item = HeaderId>) {
-        self.wallet.prune_states(pruned_blocks);
-        self.update_state();
-    }
-
-    pub fn prune_vouchers(
+    pub fn advance_lib(
         &mut self,
+        new_lib: HeaderId,
+        pruned_blocks: impl IntoIterator<Item = HeaderId>,
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
     ) {
-        self.wallet.prune_vouchers(pruned_nullifiers);
-        self.update_state();
-    }
-
-    // TODO: refactor: merge this with `prune_states` and `prune_vouchers`
-    // since they are always called together (and should be).
-    pub fn advance_lib(&mut self, new_lib: HeaderId) {
         self.lib = new_lib;
+        self.wallet.prune_states(pruned_blocks);
+        self.wallet.prune_vouchers(pruned_nullifiers);
         self.update_state();
     }
 

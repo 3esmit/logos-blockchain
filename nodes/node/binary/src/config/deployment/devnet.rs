@@ -3,9 +3,9 @@ pub const NAME: &str = "devnet";
 pub const SERIALIZED_DEPLOYMENT: &str = "
 blend:
   common:
-    num_blend_layers: 1
-    minimum_network_size: 32
-    protocol_name: /logos-blockchain-devnet/blend/1.0.0
+    num_blend_layers: 3
+    minimum_network_size: 1
+    protocol_name: /logos-blockchain-devnet-0.1.3-rc.3/blend/1.0.0
     data_replication_factor: 0
   core:
     scheduler:
@@ -18,18 +18,18 @@ blend:
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
-  kademlia_protocol_name: /logos-blockchain-devnet/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-devnet/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-devnet/chainsync/1.0.0
+  kademlia_protocol_name: /logos-blockchain-devnet-0.1.3-rc.3/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-devnet-0.1.3-rc.3/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-devnet-0.1.3-rc.3/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 30
+  security_param: 50
   slot_activation_coeff:
     numerator: 1
-    denominator: 20
+    denominator: 30
   learning_rate: 0.5
   sdp_config:
     service_params:
@@ -41,7 +41,7 @@ cryptarchia:
     min_stake:
       threshold: 1
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain-devnet/cryptarchia/1.0.0
+  gossipsub_protocol: /logos-blockchain-devnet-0.1.3-rc.3/cryptarchia/1.0.0
   genesis_state:
     mantle_tx:
       ops:
@@ -1000,5 +1000,5 @@ time:
   slot_duration: '1.000000000'
   chain_start_time: 2026-03-03 14:49:11.0 +00:00:00
 mempool:
-  pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0
+  pubsub_topic: /logos-blockchain-devnet-0.1.3-rc.3/mempool/1.0.0
 ";

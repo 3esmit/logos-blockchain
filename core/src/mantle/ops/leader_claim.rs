@@ -220,7 +220,7 @@ impl Operation for LeaderClaimOp {
 
 #[cfg(test)]
 mod tests {
-    use lb_utxotree::DynamicMerkleTree;
+    use lb_mmr::MerkleMountainRange;
 
     use super::*;
     use crate::proofs::leader_claim_proof::LeaderClaimPrivate;
@@ -229,12 +229,10 @@ mod tests {
     fn validate_accepts_valid_proof_of_claim() {
         let voucher_secret = VoucherSecret::from(Fr::from(7u64));
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
-        let (voucher_tree, voucher_index) =
-            DynamicMerkleTree::<VoucherCm, ZkHasher>::new().insert(voucher_cm);
-        let voucher_root = RewardsRoot::from(voucher_tree.root());
-        let voucher_path = voucher_tree
-            .path(voucher_index)
-            .expect("voucher path should exist");
+        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
+            .push_with_paths(voucher_cm, &mut [])
+            .expect("MMR shouldn't be full");
+        let voucher_root = RewardsRoot::from(mmr.frontier_root());
         let tx_hash = TxHash::from(Fr::from(11u64));
         let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
             LeaderClaimPublic::new(voucher_root.into(), tx_hash.0),

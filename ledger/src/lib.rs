@@ -14,7 +14,8 @@ pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, VerificationError,
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Transaction as _, Utxo, Value,
+        VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
         ledger::Operation as _,
         ops::{
@@ -33,6 +34,7 @@ use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
+use tracing::warn;
 
 use crate::mantle::helpers::MantleOperationVerificationHelper;
 
@@ -344,6 +346,8 @@ impl LedgerState {
         let mut total_fee_burned: GasCost = 0.into();
         let mut total_fee_tip: GasCost = 0.into();
         for tx in txs {
+            warn!(tx_hash = ?tx.hash(), mantle_tx_hash = ?tx.mantle_tx().hash(), "YJYJ: applying tx");
+
             let balance;
             (self, balance) = self.try_apply_tx::<_, Constants>(config, &tx)?;
 
@@ -542,6 +546,12 @@ impl LedgerState {
 
         let mut balance: Balance = 0;
         let tx_hash = tx.hash();
+        warn!(
+            n_ops = tx.ops_with_proof().count(),
+            ops = ?tx.ops_with_proof().collect::<Vec<_>>(),
+            ?tx_hash,
+            "YJYJ: ops from tx"
+        );
         for (op, proof) in tx.ops_with_proof() {
             match (op, proof) {
                 // The signature for channel ops can be verified before reaching this point,

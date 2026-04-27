@@ -7,8 +7,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use super::Status;
 use crate::{
@@ -112,6 +113,12 @@ where
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
         let keys: BTreeSet<Key> = self.pending_items.iter().cloned().collect();
+        let items = self
+            .get_items_by_keys(keys.clone())
+            .await?
+            .collect::<Vec<_>>()
+            .await;
+        warn!(n_keys = keys.len(), n_items = items.len(), "YJYJ: view");
         self.get_items_by_keys(keys).await
     }
 

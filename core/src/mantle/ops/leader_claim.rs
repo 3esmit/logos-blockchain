@@ -5,6 +5,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::warn;
 
 use crate::{
     crypto::ZkHasher,
@@ -181,11 +182,13 @@ impl Operation for LeaderClaimOp {
     fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the nullifier isn't in the set
         if ctx.nullifiers.contains(&self.voucher_nullifier) {
+            warn!("YJYJ: duplicated voucher nf");
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
         }
 
         // Check that the voucher root is the same as in the ledger
         if ctx.claimable_vouchers_root != &self.rewards_root {
+            warn!("YJYJ: vouchers root mismatch");
             return Err(LeaderClaimError::VouchersRootMismatch);
         }
 
@@ -194,9 +197,11 @@ impl Operation for LeaderClaimOp {
             voucher_root: ctx.claimable_vouchers_root.0,
             mantle_tx_hash: ctx.tx_hash.0,
         }) {
+            warn!("YJYJ: invalid PoC");
             return Err(LeaderClaimError::InvalidPoC);
         }
 
+        warn!("YJYJ: valid claim");
         Ok(())
     }
 

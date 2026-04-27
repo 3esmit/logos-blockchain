@@ -43,7 +43,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{oneshot, watch};
-use tracing::{Level, debug, error, info, instrument, span, trace};
+use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
 pub use crate::wallet::LeaderWalletConfig;
@@ -592,6 +592,7 @@ where
         let mut valid_txs = Vec::new();
         let mut invalid_tx_hashes = Vec::new();
 
+        warn!("YJYJ: reading tx stream");
         while let Some(tx) = tx_stream.next().await {
             let tx_hash = tx.hash();
             match ledger_state
@@ -602,11 +603,15 @@ where
                 ) {
                 Ok(new_state) => {
                     ledger_state = new_state;
+                    tracing::warn!(
+                        "YJYJ: tx {:?} is valid and will be included in the proposed block",
+                        tx_hash
+                    );
                     valid_txs.push(tx);
                 }
                 Err(err) => {
-                    tracing::debug!(
-                        "failed to apply tx {:?} during block assembly: {:?}",
+                    tracing::warn!(
+                        "YJYJ: failed to apply tx {:?} during block assembly: {:?}",
                         tx_hash,
                         err
                     );
@@ -614,6 +619,11 @@ where
                 }
             }
         }
+        warn!(
+            n_valid_txs = valid_txs.len(),
+            n_invalid_txs = invalid_tx_hashes.len(),
+            "YJYJ: all read from tx stream"
+        );
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -630,6 +640,7 @@ where
             .take(MAX_BLOCK_TRANSACTIONS)
             .collect()
             .await;
+        warn!(n_selected_txs = txs.len(), "YJYJ: selected txs");
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
@@ -725,7 +736,10 @@ where
         )
         .await?;
 
-        mempool.post_tx(signed_tx).await.map_err(Error::Mempool)
+        let tx_hash = signed_tx.hash();
+        let result = mempool.post_tx(signed_tx).await.map_err(Error::Mempool);
+        warn!(?tx_hash, ?result, "YJYJ: handled claim");
+        result
     }
 
     async fn get_tip_ledger_state(

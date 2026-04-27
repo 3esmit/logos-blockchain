@@ -13,6 +13,7 @@ use lb_core::{
 use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{backend::MempoolError, storage::MempoolStorageAdapter};
 
@@ -55,6 +56,11 @@ where
             .to_bytes()
             .map_err(|e| MempoolError::DynamicPoolError(e.into()))?;
 
+        warn!(
+            item_bytes_len = item_bytes.len(),
+            "YJYJ: storing item to storage"
+        );
+
         let tx_hash: TxHash = key.into();
         let mut transactions = HashMap::new();
         transactions.insert(tx_hash, item_bytes);
@@ -72,10 +78,12 @@ where
         keys: &BTreeSet<Self::Key>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, Self::Error> {
         if keys.is_empty() {
+            warn!(n_keys = keys.len(), "YJYJ: get_items: keys are empty");
             return Ok(Box::pin(futures::stream::empty()));
         }
 
         let tx_hashes: BTreeSet<TxHash> = keys.iter().cloned().map(Into::into).collect();
+        warn!(n_tx_hashes = tx_hashes.len(), "YJYJ: get_items");
 
         let (reply_channel, reply_rx) = tokio::sync::oneshot::channel();
         self.storage_relay
@@ -92,7 +100,18 @@ where
             MempoolError::DynamicPoolError("Failed to receive transactions response".into())
         })?;
 
-        let item_stream = tx_stream.filter_map(async |bytes| Self::Item::from_bytes(&bytes).ok());
+        let item_stream =
+            tx_stream.filter_map(async |bytes| match Self::Item::from_bytes(&bytes) {
+                Ok(item) => Some(item),
+                Err(e) => {
+                    warn!(
+                        n_bytes = bytes.len(),
+                        error = ?e,
+                        "YJYJ: failed to deserialize item loaded from storage"
+                    );
+                    None
+                }
+            });
 
         Ok(Box::pin(item_stream))
     }

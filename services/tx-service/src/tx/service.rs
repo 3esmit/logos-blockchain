@@ -28,6 +28,7 @@ use overwatch::{
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::{broadcast, oneshot};
+use tracing::warn;
 
 use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
@@ -388,10 +389,12 @@ where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
+        warn!("YJYJ: handling mempool add");
         let item_for_broadcast = item.clone();
 
         match pool.add_item(key, item).await {
             Ok(_id) => {
+                warn!("YJYJ: add_item succeeded");
                 Self::handle_add_success(
                     pool,
                     &state_updater,
@@ -423,7 +426,7 @@ where
         reply_channel: oneshot::Sender<Pin<Box<dyn futures::Stream<Item = Pool::Item> + Send>>>,
     ) {
         let pending_items = pool.pending_item_count();
-        tracing::trace!(pending_items, "Handling mempool View message");
+        tracing::warn!(pending_items, "YJYJ: Handling mempool View message");
 
         let items = pool
             .view(ancestor_hint)

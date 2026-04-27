@@ -9,6 +9,7 @@ use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use lb_poseidon2::{Digest, ZkHash};
 use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tracing::warn;
 
 use crate::{
     crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
@@ -407,6 +408,7 @@ impl SignedMantleTx {
                         mantle_tx_hash: tx_hash.into(),
                     });
                     if !ok {
+                        warn!("YJYJ: invalid PoC while deser tx");
                         return Err(VerificationError::InvalidProofOfClaim { op_index: idx });
                     }
                 }

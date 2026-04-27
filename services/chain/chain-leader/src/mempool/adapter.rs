@@ -8,6 +8,7 @@ use lb_core::{
 use lb_tx_service::MempoolMsg;
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
+use tracing::warn;
 
 use super::MempoolAdapter as MempoolAdapterTrait;
 
@@ -31,6 +32,7 @@ where
         &self,
         ancestor_hint: HeaderId,
     ) -> Result<Pin<Box<dyn Stream<Item = Tx> + Send>>, overwatch::DynError> {
+        warn!("YJYJ: getting mempool view");
         let (reply_channel, receiver) = oneshot::channel();
 
         self.mempool_relay
@@ -44,6 +46,7 @@ where
         let view_stream = receiver
             .await
             .map_err(|e| overwatch::DynError::from(format!("Failed to get mempool view: {e}")))?;
+        warn!("YJYJ: got view stream");
 
         Ok(view_stream)
     }

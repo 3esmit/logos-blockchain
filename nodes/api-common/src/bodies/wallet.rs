@@ -86,6 +86,25 @@ pub mod transfer_funds {
     }
 }
 
+pub mod fund {
+    use lb_core::{header::HeaderId, mantle::MantleTx};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletFundTxRequestBody {
+        pub tip: Option<HeaderId>,
+        pub tx: MantleTx,
+        pub funding_public_keys: Vec<ZkPublicKey>,
+        pub change_public_key: ZkPublicKey,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletFundTxResponseBody {
+        pub tx: MantleTx,
+    }
+}
+
 pub mod sign {
     use lb_core::mantle::TxHash;
     use lb_key_management_system_keys::keys::{

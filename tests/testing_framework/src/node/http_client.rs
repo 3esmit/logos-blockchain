@@ -8,8 +8,9 @@ use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_chain_service::CryptarchiaInfo;
 use lb_core::{header::HeaderId, mantle::SignedMantleTx, sdp::Declaration};
 use lb_http_api_common::{
-    bodies::wallet::transfer_funds::{
-        WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
+    bodies::wallet::{
+        fund::{WalletFundTxRequestBody, WalletFundTxResponseBody},
+        transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
 };
@@ -122,6 +123,13 @@ impl NodeHttpClient {
         self.http_client
             .transfer_funds(self.base_url.clone(), body)
             .await
+    }
+
+    pub async fn fund_tx(
+        &self,
+        body: WalletFundTxRequestBody,
+    ) -> Result<WalletFundTxResponseBody, Error> {
+        self.http_client.fund_tx(self.base_url.clone(), body).await
     }
 
     pub async fn get_sdp_declarations(&self) -> Result<Vec<Declaration>, Error> {

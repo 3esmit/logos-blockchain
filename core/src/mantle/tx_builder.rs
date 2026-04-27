@@ -28,12 +28,20 @@ pub struct MantleTxBuilder {
 impl MantleTxBuilder {
     #[must_use]
     pub fn new(context: MantleTxContext) -> Self {
-        Self {
-            mantle_tx: MantleTx {
+        Self::from_mantle_tx(
+            MantleTx {
                 ops: vec![],
                 execution_gas_price: 0.into(),
                 storage_gas_price: 0.into(),
             },
+            context,
+        )
+    }
+
+    #[must_use]
+    pub fn from_mantle_tx(mantle_tx: MantleTx, context: MantleTxContext) -> Self {
+        Self {
+            mantle_tx,
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
             channel_withdraw_proofs: HashMap::new(),

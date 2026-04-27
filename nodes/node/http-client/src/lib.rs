@@ -12,12 +12,13 @@ use lb_groth16::fr_to_bytes;
 use lb_http_api_common::{
     bodies::wallet::{
         balance::WalletBalanceResponseBody,
+        fund::{WalletFundTxRequestBody, WalletFundTxResponseBody},
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
         BLOCKS, BLOCKS_DETAIL, BLOCKS_STREAM, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
         MEMPOOL_ADD_TX,
-        wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
+        wallet::{BALANCE, FUND_TX, TRANSACTIONS_TRANSFER_FUNDS},
     },
     settings::default_max_body_size,
 };
@@ -308,6 +309,19 @@ impl CommonHttpClient {
     ) -> Result<WalletTransferFundsResponseBody, Error> {
         let request_url = base_url
             .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Post a request to fund tx
+    pub async fn fund_tx(
+        &self,
+        base_url: Url,
+        body: WalletFundTxRequestBody,
+    ) -> Result<WalletFundTxResponseBody, Error> {
+        let request_url = base_url
+            .join(FUND_TX.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

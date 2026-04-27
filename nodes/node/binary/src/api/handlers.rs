@@ -432,14 +432,14 @@ where
             handle.relay::<WalletService>().await?,
         );
 
-        let tx_context = wallet.get_tx_context(None).await?;
+        let tx_context = wallet.get_tx_context(req.tip).await?;
         let tx_builder = MantleTxBuilder::new(tx_context).push_op(Op::ChannelDeposit(req.deposit));
         let lb_wallet_service::TipResponse {
             tip,
             response: funded_tx_builder,
         } = wallet
             .fund_tx(
-                None,
+                req.tip,
                 tx_builder,
                 req.change_public_key,
                 req.funding_public_keys,
@@ -752,9 +752,12 @@ where
 }
 
 pub mod wallet {
-    use lb_http_api_common::bodies::wallet::sign::{
-        WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody, WalletSignTxZkRequestBody,
-        WalletSignTxZkResponseBody,
+    use lb_http_api_common::bodies::wallet::{
+        fund::{WalletFundTxRequestBody, WalletFundTxResponseBody},
+        sign::{
+            WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
+            WalletSignTxZkRequestBody, WalletSignTxZkResponseBody,
+        },
     };
     use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -904,6 +907,79 @@ pub mod wallet {
             }
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
         }
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::FUND_TX,
+        responses(
+            (status = 200, description = "Fund transaction"),
+            (status = 500, description = "Internal server error", body = String),
+        )
+        )]
+    pub async fn post_fund_tx<WalletService, StorageAdapter, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletFundTxRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Send
+            + Sync
+            + Display
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let tx_context = wallet.get_tx_context(req.tip).await?;
+            let tx_builder = MantleTxBuilder::from_mantle_tx(req.tx.clone(), tx_context);
+            let lb_wallet_service::TipResponse {
+                response: funded_tx_builder,
+                ..
+            } = wallet
+                .fund_tx(
+                    req.tip,
+                    tx_builder,
+                    req.change_public_key,
+                    req.funding_public_keys,
+                )
+                .await?;
+
+            Ok::<_, DynError>(WalletFundTxResponseBody {
+                tx: funded_tx_builder.build(),
+            })
+        })
     }
 
     #[utoipa::path(

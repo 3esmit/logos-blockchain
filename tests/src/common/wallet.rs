@@ -59,7 +59,6 @@ pub async fn current_utxos_for_public_key(
         },
         |block: &ApiBlock| {
             blocks.push(block.clone());
-
             None
         },
     )

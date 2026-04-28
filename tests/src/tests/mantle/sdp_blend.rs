@@ -12,37 +12,28 @@ use testing_framework_core::scenario::DynError;
 use tokio::time::sleep;
 use tracing::Level;
 
-/// Inactivity period in sessions. If no SDP_ACTIVE proof is submitted for this
-/// many sessions, the declaration enters the inactive state.
-const INACTIVITY_PERIOD: u64 = 1;
-
-/// Retention period in sessions. After inactivity_period + retention_period
-/// sessions without activity, the declaration is removed from the ledger.
-const RETENTION_PERIOD: u64 = 1;
+const NODE_COUNT: usize = 2;
 
 /// End-to-end test for blend SDP activity proofs:
 ///
 /// 1. Spawn two validators with blend declarations in the genesis transaction.
-/// 2. Wait long enough that declarations would be removed if no SDP_ACTIVE
-///    activity proofs were submitted (inactivity_period + retention_period
-///    sessions past genesis).
+/// 2. Wait long enough that declarations would be removed if no activity
+///    message was submitted during `inactivity_period + retention_period`
+///    sessions.
 /// 3. Verify that both declarations are still present, proving that the nodes
-///    automatically submitted valid activity proofs that the ledger accepted.
+///    automatically submitted valid activity messages that the ledger accepted.
 #[tokio::test]
-#[expect(
-    clippy::large_futures,
-    reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
-)]
-async fn blend_sdp_activity_e2e() {
+async fn sdp_blend_activity() {
     let (_base, nodes) = start_local_manual_cluster_with_layout(
-        "blend-sdp",
-        "mantle-blend-sdp",
+        "sdp-blend-activity",
+        "mantle-sdp",
         DeploymentBuilder::new(
-            TfTopologyConfig::with_node_numbers(2).with_test_context(Some("blend_sdp".to_owned())),
+            TfTopologyConfig::with_node_numbers(NODE_COUNT)
+                .with_test_context(Some("sdp_blend_activity".to_owned())),
         ),
-        2,
+        NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        |config| Ok::<_, DynError>(blend_sdp_test_config(config)),
+        |config| Ok::<_, DynError>(test_config(config)),
     )
     .await;
 
@@ -53,11 +44,10 @@ async fn blend_sdp_activity_e2e() {
     let declarations = wait_for_declarations(&node0.client, Duration::from_secs(30)).await;
     assert_eq!(
         declarations.len(),
-        2,
-        "genesis should include blend declarations for both validators, got {}",
+        NODE_COUNT,
+        "genesis should include declarations for all nodes, but got {}",
         declarations.len()
     );
-    println!("declarations_before: {declarations:?}");
 
     // Wait past the point where declarations would be removed if no activity
     // proofs were submitted.
@@ -70,11 +60,11 @@ async fn blend_sdp_activity_e2e() {
     //
     // We wait for more sessions to give a solid margin and ensure that if
     // activity proofs are being submitted, they keep the declarations alive.
-    let blocks_per_session = blend_sdp_blocks_per_session();
+    let blocks_per_session = blocks_per_session();
     let survival_sessions = INACTIVITY_PERIOD + RETENTION_PERIOD + 2;
     let target_height = survival_sessions * blocks_per_session + 2;
     println!(
-        "Waiting for {target_height} blocks ({survival_sessions} sessions, {blocks_per_session} blocks/session) to ensure blend declarations would be removed without activity proofs",
+        "Waiting for {target_height} blocks ({survival_sessions} sessions, {blocks_per_session} blocks/session)",
     );
 
     wait_for_nodes_height(
@@ -84,23 +74,26 @@ async fn blend_sdp_activity_e2e() {
     )
     .await;
 
-    // Declarations must still be present — this proves SDP_ACTIVE proofs were
-    // submitted and accepted, keeping the declarations alive.
+    // Declarations must still be present — this proves that activity messages were
+    // submitted/accepted, keeping the declarations alive.
     let declarations_after = node0
         .client
         .get_sdp_declarations()
         .await
         .expect("querying SDP declarations should succeed");
 
+    // Check if at least one declaration is still present because blocks may have
+    // been produced by only one nodes by coincidence
     assert!(
         !declarations_after.is_empty(),
-        "at least one blend declaration should survive past the inactivity window, \
-         but none remain. activity proofs may not have been submitted"
+        "At least one blend declaration should survive past the inactivity window. Activity proofs may not have been submitted/accepted"
     );
-    println!("declarations_after: {declarations_after:?}");
 }
 
-fn blend_sdp_test_config(mut config: RunConfig) -> RunConfig {
+const INACTIVITY_PERIOD: u64 = 1;
+const RETENTION_PERIOD: u64 = 1;
+
+fn test_config(mut config: RunConfig) -> RunConfig {
     let (epoch_config, security_param, slot_activation_coeff) = cryptarchia_config();
     config.deployment.time.slot_duration = Duration::from_secs(1);
     config.deployment.cryptarchia.epoch_config = epoch_config;
@@ -124,7 +117,7 @@ fn blend_sdp_test_config(mut config: RunConfig) -> RunConfig {
     config
 }
 
-fn blend_sdp_blocks_per_session() -> u64 {
+fn blocks_per_session() -> u64 {
     let (epoch_config, security_param, slot_activation_coeff) = cryptarchia_config();
     let base_period = base_period_length(security_param, slot_activation_coeff);
     let slots_per_epoch = epoch_length(
@@ -146,7 +139,7 @@ fn cryptarchia_config() -> (EpochConfig, NonZero<u32>, NonNegativeRatio) {
         epoch_period_nonce_stabilization: 1.try_into().unwrap(),
     };
     let security_param = NonZero::new(2).unwrap();
-    let slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+    let slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
     (epoch_config, security_param, slot_activation_coeff)
 }
 
@@ -157,9 +150,7 @@ async fn wait_for_declarations(
     tokio::time::timeout(duration, async {
         loop {
             if let Ok(declarations) = node.get_sdp_declarations().await {
-                if !declarations.is_empty() {
-                    break declarations;
-                }
+                return declarations;
             }
 
             sleep(Duration::from_millis(200)).await;

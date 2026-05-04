@@ -268,6 +268,10 @@ where
     fn walk_back_before(&self, branch: &Branch<Id>, slot: Slot) -> Branch<Id> {
         let mut current = branch;
         while current.slot > slot {
+            assert!(
+                current.id != current.parent,
+                "shouldn't meet genesis block before reaching target slot: {slot:?}"
+            );
             current = &self.branches[&current.parent];
         }
         *current
@@ -286,6 +290,10 @@ where
                 None
             } else {
                 let branch = &self.branches[&current];
+                assert!(
+                    current != branch.parent,
+                    "shouldn't meet genesis block before reaching target"
+                );
                 current = branch.parent;
                 Some(branch.id)
             }

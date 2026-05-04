@@ -31,11 +31,11 @@ strip    = "none"    # Don't strip symbols to allow for better profiling results
 members = [
   "blend/core",
   "blend/crypto",
-  "block-tracker",
   "blend/message",
   "blend/network",
   "blend/proofs",
   "blend/scheduling",
+  "block-tracker",
   "c-bindings",
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",

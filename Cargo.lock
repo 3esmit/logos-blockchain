@@ -4183,6 +4183,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-block-tracker"
+version = "0.1.2"
+dependencies = [
+ "rpds",
+]
+
+[[package]]
 name = "logos-blockchain-c"
 version = "0.1.2"
 dependencies = [
@@ -5235,6 +5242,7 @@ version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures",
+ "logos-blockchain-block-tracker",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",

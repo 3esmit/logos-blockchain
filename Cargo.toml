@@ -31,6 +31,7 @@ strip    = "none"    # Don't strip symbols to allow for better profiling results
 members = [
   "blend/core",
   "blend/crypto",
+  "block-tracker",
   "blend/message",
   "blend/network",
   "blend/proofs",
@@ -111,6 +112,7 @@ lb-blend-network                   = { default-features = false, package = "logo
 lb-blend-proofs                    = { default-features = false, package = "logos-blockchain-blend-proofs", path = "./blend/proofs" }
 lb-blend-scheduling                = { default-features = false, package = "logos-blockchain-blend-scheduling", path = "./blend/scheduling" }
 lb-blend-service                   = { default-features = false, package = "logos-blockchain-blend-service", path = "./services/blend" }
+lb-block-tracker                   = { default-features = false, package = "logos-blockchain-block-tracker", path = "./block-tracker" }
 lb-cfgsync                         = { default-features = false, package = "logos-blockchain-cfgsync", path = "./testnet/cfgsync" }
 lb-chain-broadcast-service         = { default-features = false, package = "logos-blockchain-chain-broadcast-service", path = "./services/chain/broadcast-service" }
 lb-chain-leader-service            = { default-features = false, package = "logos-blockchain-chain-leader-service", path = "./services/chain/chain-leader" }

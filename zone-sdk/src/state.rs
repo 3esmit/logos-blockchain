@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
+use lb_block_tracker::{BlockTree, BlockView};
 use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction as _, ops::channel::MsgId, tx::TxHash},
@@ -56,7 +57,50 @@ pub struct PendingInscription {
     pub payload: Vec<u8>,
 }
 
+/// Per-block channel data fed to [`ChannelLens`].
+///
+/// The driver pre-summarizes a raw L1 block into this shape:
+/// - `safe_txs`: tx hashes in this block that match our local pending set (txs
+///   we care about that landed on chain).
+/// - `inscriptions`: channel inscriptions in this block, in observed order.
+#[derive(Debug, Clone)]
+pub struct ChannelBlock {
+    pub safe_txs: Vec<TxHash>,
+    pub inscriptions: Vec<InscriptionInfo>,
+}
+
+/// Strategy for accumulating per-branch channel state.
+///
+/// State is a `HashTrieSetSync<TxHash>` of "safe" txs — those of ours
+/// that have been seen on this branch. `apply` extends the parent's set
+/// with the txs in this block.
+#[derive(Debug)]
+pub struct ChannelLens;
+
+impl BlockView for ChannelLens {
+    type Input = ChannelBlock;
+    type State = HashTrieSetSync<TxHash>;
+
+    fn apply(&self, parent: &Self::State, input: &Self::Input) -> Self::State {
+        let mut state = parent.clone();
+        for tx in &input.safe_txs {
+            state.insert_mut(*tx);
+        }
+        state
+    }
+
+    fn default_state() -> Self::State {
+        HashTrieSetSync::new_sync()
+    }
+}
+
 /// Transaction state tracker.
+///
+/// Splits responsibility cleanly:
+/// - Chain-derived state (per-branch safe-tx set, per-block inscriptions,
+///   parent lineage, LIB) lives in `tree`, driven by [`ChannelLens`].
+/// - Locally-driven mempool state (pending inscriptions, lineage indices, the
+///   finalized-msg cursor) lives in this struct directly.
 pub struct TxState {
     /// Local pending inscriptions indexed by tx hash.
     pending: HashMap<TxHash, PendingInscription>,
@@ -64,32 +108,21 @@ pub struct TxState {
     pending_by_parent: HashMap<MsgId, Vec<TxHash>>,
     /// Non-inscription pending txs (e.g. `set_keys`).
     pending_other: HashMap<TxHash, SignedMantleTx>,
-    /// Per-block cumulative safe sets.
-    block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
-    /// Block parent relationships for pruning.
-    parent_map: HashMap<HeaderId, HeaderId>,
-    /// Current LIB for pruning.
-    current_lib: HeaderId,
-    /// Channel inscriptions per L1 block (unfinalized window only).
-    block_inscriptions: HashMap<HeaderId, Vec<InscriptionInfo>>,
     /// Last finalized channel tip — used as parent when pending is empty.
     finalized_msg: MsgId,
+    /// Per-branch chain-derived state (safe-tx set + per-block inscriptions).
+    tree: BlockTree<HeaderId, ChannelLens>,
 }
 
 impl TxState {
     #[must_use]
     pub fn new(lib: HeaderId, finalized_msg: MsgId) -> Self {
-        let mut block_states = BTreeMap::new();
-        block_states.insert(lib, HashTrieSetSync::new_sync());
         Self {
             pending: HashMap::new(),
             pending_by_parent: HashMap::new(),
             pending_other: HashMap::new(),
-            block_states,
-            parent_map: HashMap::new(),
-            current_lib: lib,
-            block_inscriptions: HashMap::new(),
             finalized_msg,
+            tree: BlockTree::new(lib),
         }
     }
 
@@ -145,56 +178,41 @@ impl TxState {
         our_txs: impl IntoIterator<Item = TxHash>,
         inscriptions: Vec<InscriptionInfo>,
     ) {
-        // Store parent relationship for pruning
-        self.parent_map.insert(block_id, parent_id);
+        // Pre-filter our_txs to the ones we know about. Same semantics as
+        // before: only txs in our pending sets contribute to the safe set.
+        // BlockTree handles missing parent (uses default state) — needed
+        // for slot-range backfill where LIB advanced between batches.
+        let safe_txs: Vec<TxHash> = our_txs
+            .into_iter()
+            .filter(|tx| self.pending.contains_key(tx) || self.pending_other.contains_key(tx))
+            .collect();
+        self.tree.process(
+            block_id,
+            parent_id,
+            ChannelBlock {
+                safe_txs,
+                inscriptions,
+            },
+            &ChannelLens,
+        );
 
-        // Build cumulative safe set from parent. Parent may be missing
-        // when blocks are processed from slot-range backfill and LIB has
-        // advanced between batches (pruning the parent). Starting with an
-        // empty set is conservative: txs show as "pending" until seen in
-        // a subsequent block with a known parent.
-        let mut safe_set = self
-            .block_states
-            .get(&parent_id)
-            .cloned()
-            .unwrap_or_default();
-
-        for tx in our_txs {
-            if self.pending.contains_key(&tx) || self.pending_other.contains_key(&tx) {
-                safe_set = safe_set.insert(tx);
-            }
-        }
-        self.block_states.insert(block_id, safe_set);
-
-        // Store channel inscriptions for this block
-        if !inscriptions.is_empty() {
-            self.block_inscriptions.insert(block_id, inscriptions);
-        }
-
-        // When lib advances: update finalized_msg and prune.
-        // NOTE: we do NOT remove pending txs here. Pending txs are only
-        // removed when confirmed by backfill ground truth (canonical
-        // finalized blocks from the node). The safe set is used for
-        // branch-relative status (pending_txs resubmission) but not
-        // as proof of canonical finalization — it can include blocks
-        // from orphaned branches in concurrent scenarios.
-        if lib != self.current_lib {
-            // Compute finalized_msg BEFORE pruning — walk from new LIB
-            // backwards to find the latest inscription in the finalized range.
+        // When lib advances: update finalized_msg, advance the tree (which
+        // prunes blocks below the new LIB and any sibling branches).
+        // NOTE: pending txs are NOT removed here — that's done by backfill
+        // ground truth.
+        if lib != *self.tree.lib() {
+            // Compute finalized_msg BEFORE advancing — the walk needs the
+            // pre-advance lineage.
             self.finalized_msg = self.channel_tip_at(lib);
+            let _pruned = self.tree.advance_lib(lib);
 
-            // Prune ancestors of new lib (but not lib itself)
-            let mut prune_cursor = self.parent_map.get(&lib).copied();
-            while let Some(b) = prune_cursor {
-                self.block_states.remove(&b);
-                self.block_inscriptions.remove(&b);
-                prune_cursor = self.parent_map.remove(&b);
-            }
-
-            // Remove finalized tx hashes from all safe sets. Using remove
-            // (rather than rebuild) preserves rpds memory sharing between
-            // block states for non-finalized txs.
-            if let Some(lib_safe_set) = self.block_states.get(&lib) {
+            // Optimization: shrink remaining safe sets by removing tx
+            // hashes that are no longer in our pending sets (i.e. were
+            // confirmed finalized externally). Without this, descendant
+            // safe sets grow without bound — correctness is unaffected
+            // (pending_txs filters by current pending set), but memory
+            // would leak.
+            if let Some(lib_safe_set) = self.tree.state_at(&lib) {
                 let finalized_hashes: Vec<TxHash> = lib_safe_set
                     .iter()
                     .filter(|hash| {
@@ -202,42 +220,13 @@ impl TxState {
                     })
                     .copied()
                     .collect();
-                for safe_set in self.block_states.values_mut() {
-                    for tx_hash in &finalized_hashes {
-                        *safe_set = safe_set.remove(tx_hash);
+                if !finalized_hashes.is_empty() {
+                    for safe_set in self.tree.iter_states_mut() {
+                        for tx_hash in &finalized_hashes {
+                            *safe_set = safe_set.remove(tx_hash);
+                        }
                     }
                 }
-            }
-
-            self.prune_orphans(lib);
-            self.current_lib = lib;
-        }
-    }
-
-    /// Remove orphaned blocks whose parent was pruned.
-    fn prune_orphans(&mut self, lib: HeaderId) {
-        loop {
-            let orphans: Vec<_> = self
-                .parent_map
-                .iter()
-                .filter_map(|(id, parent)| {
-                    if *id == lib {
-                        return None; // lib is root
-                    }
-                    let parent_is_lib = *parent == lib;
-                    let parent_exists = self.parent_map.contains_key(parent);
-                    (!parent_is_lib && !parent_exists).then_some(*id)
-                })
-                .collect();
-
-            if orphans.is_empty() {
-                break;
-            }
-
-            for orphan in orphans {
-                self.block_states.remove(&orphan);
-                self.block_inscriptions.remove(&orphan);
-                self.parent_map.remove(&orphan);
             }
         }
     }
@@ -251,8 +240,8 @@ impl TxState {
     /// iteration order is arbitrary.
     pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx)> {
         let safe = self
-            .block_states
-            .get(&tip)
+            .tree
+            .state_at(&tip)
             .cloned()
             .unwrap_or_else(HashTrieSetSync::new_sync);
 
@@ -314,8 +303,8 @@ impl TxState {
             .map(|i| i.tx_hash)
             .collect();
         let safe: std::collections::HashSet<TxHash> = self
-            .block_states
-            .get(&tip)
+            .tree
+            .state_at(&tip)
             .map(|s| s.iter().copied().collect())
             .unwrap_or_default();
 
@@ -371,13 +360,13 @@ impl TxState {
     /// Check if we have state for a block.
     #[must_use]
     pub fn has_block(&self, block_id: &HeaderId) -> bool {
-        self.block_states.contains_key(block_id)
+        self.tree.state_at(block_id).is_some()
     }
 
     /// Current LIB.
     #[must_use]
     pub const fn lib(&self) -> HeaderId {
-        self.current_lib
+        *self.tree.lib()
     }
 
     /// All pending transactions (for checkpoint serialization).
@@ -443,29 +432,23 @@ impl TxState {
         }
     }
 
-    /// Derive the channel tip `MsgId` at a given L1 block by walking backwards
-    /// through the block tree and finding the most recent inscription.
-    /// Returns `finalized_msg` if no inscriptions are found in the
-    /// unfinalized window.
+    /// Derive the channel tip `MsgId` at a given L1 block by walking the
+    /// inputs from current LIB up to `block_id` and finding the latest
+    /// inscription. Returns `finalized_msg` if no inscriptions are found
+    /// in the unfinalized window or the block is unknown.
     #[must_use]
     pub fn channel_tip_at(&self, block_id: HeaderId) -> MsgId {
-        let mut current = block_id;
-        loop {
-            if let Some(inscs) = self.block_inscriptions.get(&current)
-                && let Some(last) = inscs.last()
-            {
+        let lib = *self.tree.lib();
+        if block_id == lib {
+            return self.finalized_msg;
+        }
+        let inputs = self.tree.inputs_between(&lib, &block_id);
+        for input in inputs.iter().rev() {
+            if let Some(last) = input.inscriptions.last() {
                 return last.this_msg;
             }
-
-            if current == self.current_lib {
-                return self.finalized_msg;
-            }
-
-            match self.parent_map.get(&current) {
-                Some(&parent) => current = parent,
-                None => return self.finalized_msg,
-            }
         }
+        self.finalized_msg
     }
 
     /// Detect a channel update between old and new L1 tips.
@@ -490,9 +473,24 @@ impl TxState {
             return None;
         }
 
-        let new_branch = self.collect_inscriptions_on_branch(new_tip);
-        let old_branch = self.collect_inscriptions_on_branch(old_tip);
+        // Find the divergence point. Anything strictly above LCM on either
+        // branch is the linear delta between the two chains.
+        let lcm = self.tree.find_lcm(&old_tip, &new_tip)?;
+        let old_branch: Vec<InscriptionInfo> = self
+            .tree
+            .inputs_between(&lcm, &old_tip)
+            .into_iter()
+            .flat_map(|i| i.inscriptions.iter().cloned())
+            .collect();
+        let new_branch: Vec<InscriptionInfo> = self
+            .tree
+            .inputs_between(&lcm, &new_tip)
+            .into_iter()
+            .flat_map(|i| i.inscriptions.iter().cloned())
+            .collect();
 
+        // Same MsgId can appear on both branches (e.g. a competitor block
+        // re-included our inscription); filter those out as no-op moves.
         let new_chain: std::collections::HashSet<MsgId> =
             new_branch.iter().map(|i| i.this_msg).collect();
         let old_chain: std::collections::HashSet<MsgId> =
@@ -554,29 +552,11 @@ impl TxState {
     /// in oldest-first order.
     #[must_use]
     pub fn collect_inscriptions_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
-        let mut blocks = Vec::new();
-        let mut current = tip;
-
-        loop {
-            blocks.push(current);
-            if current == self.current_lib {
-                break;
-            }
-            match self.parent_map.get(&current) {
-                Some(&parent) => current = parent,
-                None => break,
-            }
-        }
-
-        blocks.reverse();
-        blocks
+        let lib = *self.tree.lib();
+        self.tree
+            .inputs_between(&lib, &tip)
             .into_iter()
-            .flat_map(|block_id| {
-                self.block_inscriptions
-                    .get(&block_id)
-                    .cloned()
-                    .unwrap_or_default()
-            })
+            .flat_map(|i| i.inscriptions.iter().cloned())
             .collect()
     }
 }
@@ -738,8 +718,8 @@ mod tests {
         state.process_block(b2, b1, genesis, vec![], vec![]);
 
         // Verify fork blocks exist before lib advances
-        assert!(state.block_states.contains_key(&b1));
-        assert!(state.block_states.contains_key(&b2));
+        assert!(state.has_block(&b1));
+        assert!(state.has_block(&b2));
 
         // Continue main chain, lib advances to a3
         state.process_block(a2, a1, genesis, vec![], vec![]);
@@ -751,34 +731,25 @@ mod tests {
         // - a3 (new lib) should exist
 
         assert!(
-            !state.block_states.contains_key(&genesis),
+            !state.has_block(&genesis),
             "genesis (old lib) should be pruned"
         );
-        assert!(!state.block_states.contains_key(&a1), "a1 should be pruned");
-        assert!(!state.block_states.contains_key(&a2), "a2 should be pruned");
-        assert!(
-            !state.block_states.contains_key(&b1),
-            "orphan b1 should be pruned"
-        );
-        assert!(
-            !state.block_states.contains_key(&b2),
-            "orphan b2 should be pruned"
-        );
+        assert!(!state.has_block(&a1), "a1 should be pruned");
+        assert!(!state.has_block(&a2), "a2 should be pruned");
+        assert!(!state.has_block(&b1), "orphan b1 should be pruned");
+        assert!(!state.has_block(&b2), "orphan b2 should be pruned");
 
-        assert!(state.block_states.contains_key(&a3), "lib should exist");
+        assert!(state.has_block(&a3), "lib should exist");
 
         // Continue and verify pruning continues working
         state.process_block(a4, a3, a3, vec![], vec![]);
         state.process_block(a5, a4, a5, vec![], vec![]); // lib advances to a5
         state.process_block(a6, a5, a5, vec![], vec![]);
 
-        assert!(
-            !state.block_states.contains_key(&a3),
-            "old lib should be pruned"
-        );
-        assert!(!state.block_states.contains_key(&a4), "a4 should be pruned");
-        assert!(state.block_states.contains_key(&a5), "new lib should exist");
-        assert!(state.block_states.contains_key(&a6), "tip should exist");
+        assert!(!state.has_block(&a3), "old lib should be pruned");
+        assert!(!state.has_block(&a4), "a4 should be pruned");
+        assert!(state.has_block(&a5), "new lib should exist");
+        assert!(state.has_block(&a6), "tip should exist");
     }
 
     fn msg_id(n: u8) -> MsgId {

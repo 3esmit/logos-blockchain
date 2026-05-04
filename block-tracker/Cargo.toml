@@ -1,0 +1,19 @@
+[package]
+categories  = { workspace = true }
+description = "Generic per-branch state tracker over a block tree, with reorg and LIB support."
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-block-tracker"
+publish     = false
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+rpds = { workspace = true }

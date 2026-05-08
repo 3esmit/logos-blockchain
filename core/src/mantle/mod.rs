@@ -1,5 +1,6 @@
 use std::{hash::Hash, pin::Pin};
 
+use bytes::Bytes;
 use futures::Stream;
 use thiserror::Error;
 
@@ -188,4 +189,11 @@ pub trait TxSelect {
 pub enum Error {
     #[error("Invalid witness")]
     InvalidWitness,
+}
+
+pub type DependencyId = Bytes;
+
+trait TransactionDependencies: Transaction {
+    fn consumes(&self) -> impl Iterator<Item = DependencyId>;
+    fn produces(&self) -> impl Iterator<Item = DependencyId>;
 }

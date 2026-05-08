@@ -5120,6 +5120,7 @@ name = "logos-blockchain-tx-service"
 version = "0.1.2"
 dependencies = [
  "async-trait",
+ "bytes",
  "futures",
  "logos-blockchain-core",
  "logos-blockchain-network-service",

@@ -3,7 +3,9 @@ use nom::IResult;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
+use super::{
+    DependencyId, OpProof, SignedMantleTx, TransactionDependencies, ops::sdp::SDPDeclareOp,
+};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
@@ -160,6 +162,16 @@ impl GasCalculator for GenesisTx {
     fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
         // Genesis transactions have zero gas cost as per spec
         Ok(0.into())
+    }
+}
+
+impl TransactionDependencies for GenesisTx {
+    fn consumes(&self) -> impl Iterator<Item = DependencyId> {
+        std::iter::empty()
+    }
+
+    fn produces(&self) -> impl Iterator<Item = DependencyId> {
+        std::iter::empty()
     }
 }
 

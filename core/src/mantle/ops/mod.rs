@@ -15,6 +15,7 @@ use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
+    DependencyId, NoteId,
     gas::{Gas, GasConstants},
     ops::{
         leader_claim::LeaderClaimOp,
@@ -172,6 +173,32 @@ impl Op {
             Self::SDPActive(_) => Constants::SDP_ACTIVE,
             Self::LeaderClaim(_) => Constants::LEADER_CLAIM,
             Self::Transfer(_) => Constants::TRANSFER,
+        }
+    }
+
+    pub fn consumes(&self) -> impl Iterator<Item = DependencyId> {
+        match self {
+            Self::ChannelInscribe(op) => Box::new(std::iter::once(DependencyId::copy_from_slice(
+                op.parent.as_ref(),
+            ))) as Box<dyn Iterator<Item = DependencyId>>,
+            Self::Transfer(op) => {
+                Box::new(op.inputs.iter().map(|note_id: &NoteId| note_id.as_bytes()))
+            }
+            _ => Box::new(std::iter::empty()),
+        }
+    }
+
+    pub fn produces(&self) -> impl Iterator<Item = DependencyId> {
+        match self {
+            Self::ChannelInscribe(op) => Box::new(std::iter::once(DependencyId::copy_from_slice(
+                Hasher::digest(&op.inscription).as_slice(),
+            ))) as Box<dyn Iterator<Item = DependencyId>>,
+            Self::Transfer(op) => Box::new(
+                op.outputs
+                    .utxos(op)
+                    .map(|utxo| DependencyId::copy_from_slice(utxo.id().as_bytes().as_ref())),
+            ),
+            _ => Box::new(std::iter::empty()),
         }
     }
 }

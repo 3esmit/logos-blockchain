@@ -5133,6 +5133,7 @@ dependencies = [
  "overwatch",
  "overwatch-derive",
  "rand 0.8.5",
+ "rpds",
  "serde",
  "serde_json",
  "tempfile",

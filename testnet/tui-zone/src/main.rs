@@ -1,5 +1,5 @@
 use clap::Parser as _;
-use logos_blockchain_tui_zone::{InscribeArgs, run};
+use logos_blockchain_tui_zone::{Cli, run};
 use tracing_subscriber::{
     Layer as _, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
@@ -24,6 +24,6 @@ async fn main() {
         .with(file_layer)
         .init();
 
-    let args = InscribeArgs::parse();
-    run(args).await;
+    let cli = Cli::parse();
+    run(cli).await;
 }

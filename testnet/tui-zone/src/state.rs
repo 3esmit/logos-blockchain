@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use lb_key_management_system_service::keys::Ed25519PublicKey;
 use lb_zone_sdk::{sequencer::SequencerCheckpoint, state::InscriptionInfo};
 use uuid::Uuid;
@@ -49,22 +47,8 @@ pub struct InMemoryZoneState {
     checkpoint: Option<SequencerCheckpoint>,
 }
 
-impl InMemoryZoneState {
-    /// Find a stored message by uuid in canonical or finalized. Used to
-    /// read back `is_ours` for a message we've seen before.
-    pub fn get(&self, tx_uuid: &Uuid) -> Option<&AppMessage> {
-        self.canonical
-            .iter()
-            .chain(self.finalized.iter())
-            .find(|m| &m.tx_uuid == tx_uuid)
-    }
-}
-
 impl ZoneState for InMemoryZoneState {
     fn apply(&mut self, msg: AppMessage) {
-        // Preserve `is_ours` on re-apply: if we already stored this uuid
-        // (e.g. optimistically on publish), do not overwrite with a
-        // chain-decoded copy whose `is_ours` is false.
         if !self.contains(&msg.tx_uuid) {
             self.canonical.push(msg);
         }
@@ -78,7 +62,6 @@ impl ZoneState for InMemoryZoneState {
     fn finalize(&mut self, payloads: &[Vec<u8>]) {
         for payload in payloads {
             if let Some(msg) = AppMessage::from_bytes(payload) {
-                // Move from canonical to finalized, preserving is_ours.
                 let existing = self
                     .canonical
                     .iter()

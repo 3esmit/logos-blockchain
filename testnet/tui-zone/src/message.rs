@@ -11,10 +11,6 @@ use uuid::Uuid;
 pub struct AppMessage {
     pub tx_uuid: Uuid,
     pub text: String,
-    /// Local-only flag: true when this sequencer created the message.
-    /// Not serialized over the wire (chain payload is just `tx_uuid` + `text`).
-    #[serde(skip)]
-    pub is_ours: bool,
 }
 
 impl AppMessage {
@@ -22,7 +18,6 @@ impl AppMessage {
         Self {
             tx_uuid: Uuid::new_v4(),
             text,
-            is_ours: true,
         }
     }
 

@@ -12,7 +12,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
+        AuthenticatedMantleTx, DependencyId, StorageSize, Transaction, TransactionDependencies,
+        TransactionHasher, Value,
         channel::Channels,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
@@ -284,6 +285,16 @@ impl Transaction for MantleTx {
     }
 }
 
+impl TransactionDependencies for MantleTx {
+    fn consumes(&self) -> impl Iterator<Item = DependencyId> {
+        self.ops().iter().flat_map(Op::consumes)
+    }
+
+    fn produces(&self) -> impl Iterator<Item = DependencyId> {
+        self.ops().iter().flat_map(Op::produces)
+    }
+}
+
 impl From<SignedMantleTx> for MantleTx {
     fn from(signed_tx: SignedMantleTx) -> Self {
         signed_tx.mantle_tx
@@ -544,6 +555,16 @@ impl Transaction for SignedMantleTx {
 
     fn as_signing(&self) -> Vec<u8> {
         self.mantle_tx.as_signing()
+    }
+}
+
+impl TransactionDependencies for SignedMantleTx {
+    fn consumes(&self) -> impl Iterator<Item = DependencyId> {
+        self.mantle_tx.consumes()
+    }
+
+    fn produces(&self) -> impl Iterator<Item = DependencyId> {
+        self.mantle_tx.produces()
     }
 }
 

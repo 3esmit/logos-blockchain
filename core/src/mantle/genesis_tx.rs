@@ -167,11 +167,11 @@ impl GasCalculator for GenesisTx {
 
 impl TransactionDependencies for GenesisTx {
     fn consumes(&self) -> impl Iterator<Item = DependencyId> {
-        std::iter::empty()
+        self.tx.mantle_tx.0.iter().flat_map(Op::consumes)
     }
 
     fn produces(&self) -> impl Iterator<Item = DependencyId> {
-        std::iter::empty()
+        self.tx.mantle_tx.0.iter().flat_map(Op::produces)
     }
 }
 

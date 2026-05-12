@@ -34,7 +34,9 @@ where
         let missing_deps: HashSet<DependencyId> =
             consumes.difference(&self.processed_deps).cloned().collect();
         let pending_deps_count = missing_deps.len();
-        if !missing_deps.is_empty() {
+        if missing_deps.is_empty() {
+            self.ready_txs.insert_mut(tx.hash(), tx);
+        } else {
             for dep in missing_deps {
                 if let Some(entry) = self.dep_to_tx.get_mut(&dep) {
                     entry.insert_mut(tx.hash());
@@ -46,8 +48,6 @@ where
             self.tx_pending_count
                 .insert_mut(tx.hash(), pending_deps_count);
             self.orphan_txs.insert_mut(tx.hash(), tx);
-        } else {
-            self.ready_txs.insert_mut(tx.hash(), tx);
         }
     }
 
@@ -129,11 +129,7 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    fn tx(
-        id: &'static str,
-        consumes: Vec<&'static str>,
-        produces: Vec<&'static str>,
-    ) -> TestTx {
+    fn tx(id: &'static str, consumes: Vec<&'static str>, produces: Vec<&'static str>) -> TestTx {
         TestTx {
             id,
             consumes,
@@ -156,10 +152,8 @@ mod tests {
     }
 
     // ── test ─────────────────────────────────────────────────────────────────
-
-    /// Ports the diamond-dependency scenario from the Python reference
-    /// implementation (smart_mempool.py __main__ block).
-    ///
+    /// Diamond dependency test
+    /// ```
     /// Dependency graph:
     ///   root (pre-existing)
     ///     └── tx_genesis (root → genesis)
@@ -169,6 +163,7 @@ mod tests {
     ///                  ├── tx_chain   (coin_x → coin_z)       ─────────────┐
     ///                  └── tx_combine (token_a + coin_y → nft_1 + coin_w) ─┤
     ///                         └── tx_settle (coin_z + coin_w → coin_final) ┘
+    /// ```
     #[test]
     fn test_diamond_dependency_graph() {
         let mut tracker: TxTrackerState<TestTx, TestTxId> = TxTrackerState::new();
@@ -197,9 +192,16 @@ mod tests {
         assert_eq!(ready_names(&tracker), vec!["tx_genesis"]);
         assert_eq!(
             orphan_names(&tracker),
-            ["tx_mint_a", "tx_mint_b", "tx_fund", "tx_chain", "tx_combine", "tx_settle"]
-                .into_iter()
-                .collect()
+            [
+                "tx_mint_a",
+                "tx_mint_b",
+                "tx_fund",
+                "tx_chain",
+                "tx_combine",
+                "tx_settle"
+            ]
+            .into_iter()
+            .collect()
         );
 
         // tx_genesis confirmed → unlocks tx_mint_a, tx_mint_b, tx_fund
@@ -210,10 +212,13 @@ mod tests {
         );
         assert_eq!(
             orphan_names(&tracker),
-            ["tx_chain", "tx_combine", "tx_settle"].into_iter().collect()
+            ["tx_chain", "tx_combine", "tx_settle"]
+                .into_iter()
+                .collect()
         );
 
-        // tx_fund confirmed → unlocks tx_chain (coin_x); tx_combine drops 2→1 (coin_y still missing)
+        // tx_fund confirmed → unlocks tx_chain (coin_x); tx_combine drops 2→1 (coin_y
+        // still missing)
         tracker.tx_in_block(&TestTxId("tx_fund"));
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
@@ -228,19 +233,29 @@ mod tests {
         tracker.tx_in_block(&TestTxId("tx_mint_a"));
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
-            ["tx_chain", "tx_combine", "tx_mint_b"].into_iter().collect()
+            ["tx_chain", "tx_combine", "tx_mint_b"]
+                .into_iter()
+                .collect()
         );
-        assert_eq!(orphan_names(&tracker), ["tx_settle"].into_iter().collect());
+        assert_eq!(
+            orphan_names(&tracker),
+            std::iter::once("tx_settle").collect()
+        );
 
-        // tx_chain confirmed → coin_z satisfied; tx_settle drops 2→1 (coin_w still missing)
+        // tx_chain confirmed → coin_z satisfied; tx_settle drops 2→1 (coin_w still
+        // missing)
         tracker.tx_in_block(&TestTxId("tx_chain"));
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_combine", "tx_mint_b"].into_iter().collect()
         );
-        assert_eq!(orphan_names(&tracker), ["tx_settle"].into_iter().collect());
+        assert_eq!(
+            orphan_names(&tracker),
+            std::iter::once("tx_settle").collect()
+        );
 
-        // tx_combine confirmed → coin_w satisfied; tx_settle drops 1→0, diamond resolved
+        // tx_combine confirmed → coin_w satisfied; tx_settle drops 1→0, diamond
+        // resolved
         tracker.tx_in_block(&TestTxId("tx_combine"));
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),

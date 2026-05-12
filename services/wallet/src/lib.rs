@@ -1104,7 +1104,7 @@ where
                 }
             }
             Err(e) => {
-                error!(err=%e, "unexexpected error while applying block to wallet");
+                error!(err=%e, "unexpected error while applying block to wallet");
             }
         }
     }

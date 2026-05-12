@@ -5122,6 +5122,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",

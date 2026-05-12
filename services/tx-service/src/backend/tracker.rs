@@ -3,6 +3,7 @@ use std::{collections::HashSet, hash::Hash};
 use lb_core::mantle::{DependencyId, TransactionDependencies};
 use rpds::{HashTrieMap, HashTrieSet};
 
+#[derive(Clone, Debug)]
 pub struct TxTrackerState<Tx, TxId>
 where
     TxId: Eq + Hash,

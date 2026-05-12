@@ -23,6 +23,7 @@ workspace = true
 async-trait        = { workspace = true }
 bytes              = { workspace = true }
 futures            = { workspace = true }
+lb-chain-service   = { workspace = true }
 lb-core            = { workspace = true }
 lb-network-service = { workspace = true }
 lb-services-utils  = { workspace = true }

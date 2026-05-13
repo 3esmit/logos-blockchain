@@ -74,6 +74,32 @@ where
     }
 }
 
+#[cfg(test)]
+impl<Tx, TxId> TxTrackerState<Tx, TxId>
+where
+    TxId: Eq + Hash + Clone,
+{
+    pub fn is_ready(&self, id: &TxId) -> bool {
+        self.ready_txs.contains_key(id)
+    }
+
+    pub fn is_orphan(&self, id: &TxId) -> bool {
+        self.orphan_txs.contains_key(id)
+    }
+
+    pub fn has_processed_dep(&self, dep: &DependencyId) -> bool {
+        self.processed_deps.contains(dep)
+    }
+
+    pub fn ready_count(&self) -> usize {
+        self.ready_txs.size()
+    }
+
+    pub fn orphan_count(&self) -> usize {
+        self.orphan_txs.size()
+    }
+}
+
 pub fn pop<K, V>(map: &mut HashTrieMap<K, V>, key: &K) -> Option<V>
 where
     V: Clone,

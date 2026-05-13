@@ -1409,7 +1409,7 @@ mod tests {
 
         let signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
         let blend_proof = ActivityProof {
-            session: 42,
+            epoch: 42.into(),
             signing_key: signing_key.public_key(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
@@ -1462,7 +1462,7 @@ mod tests {
         };
 
         let blend_proof = ActivityProof {
-            session: u64::MAX,
+            epoch: u32::MAX.into(),
             signing_key: signing_key.public_key(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
@@ -1951,7 +1951,7 @@ mod tests {
     #[test]
     fn test_encode_reject_excessive_sdp_active() {
         let blend_proof = ActivityProof {
-            session: u64::MAX,
+            epoch: u32::MAX.into(),
             signing_key: Ed25519Key::from_bytes(&[1; 32]).public_key(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),

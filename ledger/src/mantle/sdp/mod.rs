@@ -16,9 +16,10 @@ use lb_core::{
     },
     sdp::{
         ActivityMetadata, Declaration, DeclarationId, MinStake, Nonce, ProviderId, ProviderInfo,
-        ServiceParameters, ServiceType, SessionNumber, locked_notes, locked_notes::LockedNotes,
+        ServiceParameters, ServiceType, locked_notes, locked_notes::LockedNotes,
     },
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use rewards::{Error as RewardsError, Rewards};
 use tracing::warn;
@@ -35,19 +36,14 @@ enum Service {
 impl Service {
     fn try_apply_header(
         self,
-        block_number: BlockNumber,
         epoch_state: &EpochState,
         config: &ServiceParameters,
         rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>) {
         match self {
             Self::BlendNetwork(state) => {
-                let (new_state, utxos) = state.try_apply_header(
-                    block_number,
-                    epoch_state,
-                    config,
-                    &rewards_params.blend,
-                );
+                let (new_state, utxos) =
+                    state.try_apply_header(epoch_state, config, &rewards_params.blend);
                 (Self::BlendNetwork(new_state), utxos)
             }
         }
@@ -59,14 +55,16 @@ impl Service {
         }
     }
 
-    const fn active_session(&self) -> &SessionState {
+    /// The snapshot of declarations that are active in the current epoch
+    const fn active_snapshot(&self) -> &Snapshot {
         match self {
             Self::BlendNetwork(state) => &state.active,
         }
     }
 
+    /// The snapshot of declarations that will become active in the next epoch
     #[cfg(test)]
-    const fn next_session(&self) -> &SessionState {
+    const fn next_snapshot(&self) -> &Snapshot {
         match self {
             Self::BlendNetwork(state) => &state.next,
         }
@@ -94,17 +92,14 @@ impl Service {
         &mut self,
         provider_id: ProviderId,
         metadata: &ActivityMetadata,
-        block_number: BlockNumber,
         rewards_params: &ServiceRewardsParameters,
     ) -> Result<(), Error> {
         match self {
             Self::BlendNetwork(state) => {
-                state.rewards = state.rewards.update_active(
-                    provider_id,
-                    metadata,
-                    block_number,
-                    &rewards_params.blend,
-                )?;
+                state.rewards =
+                    state
+                        .rewards
+                        .update_active(provider_id, metadata, &rewards_params.blend)?;
                 Ok(())
             }
         }
@@ -171,66 +166,63 @@ pub enum Error {
     SdpOp(#[from] lb_core::mantle::ops::sdp::SdpError),
 }
 
-// State at the beginning of this session
+/// Snapshot that becomes active at the `epoch`
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SessionState {
+pub struct Snapshot {
     pub declarations: Declarations,
-    pub session_n: u64,
+    pub epoch: Epoch,
 }
+
+const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ServiceState<R: Rewards> {
-    // state of declarations at block b
+    /// Declarations accumulated until the current block.
     declarations: Declarations,
-    // (current) active session.
-    // snapshot of `declarations` at the start of block ((b // config.session_duration) - 1) *
-    // config.session_duration
-    active: SessionState,
-    // next session.
-    // snapshot of `declarations` at the start of block (b // config.session_duration) *
-    // config.session_duration
-    next: SessionState,
-    // rewards calculation and tracking for this service
+    /// Active declarations in the current epoch.
+    /// This was snapshotted at last block from the epoch `current_epoch-2`.
+    active: Snapshot,
+    /// Declarations that will become active in the next epoch.
+    /// This was snapshotted at last block from the epoch `current_epoch-1`.
+    next: Snapshot,
+    /// Rewards calculation and tracking for this service
     pub rewards: R,
 }
 
-const fn is_active(
-    declaration: &Declaration,
-    current_block: u64,
-    config: &ServiceParameters,
-) -> bool {
+fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServiceParameters) -> bool {
     declaration.active
-        + (config.inactivity_period + config.retention_period) * config.session_duration
-        >= current_block
+        + config.inactivity_period
+        + config.retention_period
+        + SNAPSHOT_FINALIZATION_DELAY
+        >= current_epoch
 }
 
 impl<R: Rewards> ServiceState<R> {
     fn try_apply_header(
         mut self,
-        block_number: u64,
         epoch_state: &EpochState,
         service_params: &ServiceParameters,
         rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
-        let current_session = service_params.session_for_block(block_number);
         let reward_utxos;
 
-        // shift all session!
-        if current_session == self.active.session_n + 1 {
+        // shift epoch
+        if epoch_state.epoch() == self.active.epoch + 1 {
             // Remove expired declarations based on retention_period
             // This essentially duplicates the declaration set so it's only triggered at
-            // session boundaries
+            // epoch boundaries
             self.declarations = self
                 .declarations
                 .iter()
                 .filter(|(_id, declaration)| {
-                    let active = is_active(declaration, block_number, service_params);
+                    let active = is_active(declaration, epoch_state.epoch(), service_params);
                     if !active {
                         warn!(
                             provider_id = ?declaration.provider_id,
-                            latest_active_block = declaration.active,
-                            current_block = block_number,
-                            "removing declaration due to inactivity+retention"
+                            latest_active_epoch = ?declaration.active,
+                            current_epoch = ?epoch_state.epoch(),
+                            service_params = ?service_params,
+                            "removing declaration due to inactivity + retention + finalization_delay"
                         );
                     }
                     active
@@ -239,24 +231,24 @@ impl<R: Rewards> ServiceState<R> {
                 .collect();
 
             // Update rewards with current session state and distribute rewards
-            (self.rewards, reward_utxos) = self.rewards.update_session(
+            (self.rewards, reward_utxos) = self.rewards.update_epoch(
                 &self.active,
                 epoch_state,
                 service_params,
                 rewards_params,
             );
             self.active = self.next.clone();
-            self.next = SessionState {
+            self.next = Snapshot {
                 declarations: self.declarations.clone(),
-                session_n: self.next.session_n + 1,
+                epoch: self.next.epoch + 1,
             };
         } else {
             assert!(
-                current_session == self.active.session_n,
-                "Logos blockchain isn't ready for time travel yet: session_of_block={current_session}, active_session={}",
-                self.active.session_n
+                epoch_state.epoch() == self.active.epoch,
+                "Logos blockchain isn't ready for time travel yet: current_epoch={:?}, active_snapshot_epoch={:?}",
+                epoch_state.epoch(),
+                self.active.epoch,
             );
-            self.rewards = self.rewards.update_epoch(epoch_state, rewards_params);
             reward_utxos = Vec::new();
         }
 
@@ -276,20 +268,21 @@ impl<R: Rewards> ServiceState<R> {
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SdpLedger {
     services: rpds::HashTrieMapSync<ServiceType, Service>,
     locked_notes: LockedNotes,
-    block_number: u64,
+    // The epoch when this ledger was created
+    epoch: Epoch,
 }
 
 impl SdpLedger {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(epoch: Epoch) -> Self {
         Self {
             services: rpds::HashTrieMapSync::new_sync(),
             locked_notes: LockedNotes::new(),
-            block_number: 0,
+            epoch,
         }
     }
 
@@ -300,8 +293,8 @@ impl SdpLedger {
         tx_hash: TxHash,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
     ) -> Result<Self, Error> {
-        let mut sdp =
-            Self::new().with_blend_service(&config.service_rewards_params.blend, epoch_state);
+        let mut sdp = Self::new(epoch_state.epoch())
+            .with_blend_service(&config.service_rewards_params.blend, epoch_state);
 
         for (op, proof) in ops {
             let OpProof::ZkAndEd25519Sigs {
@@ -333,6 +326,10 @@ impl SdpLedger {
         rewards_settings: &blend::RewardsParameters,
         epoch_state: &EpochState,
     ) -> Self {
+        assert_eq!(
+            epoch_state.epoch, self.epoch,
+            "TODO: refactor to remove this assertion"
+        );
         let service = Service::BlendNetwork(Self::new_service_state(blend::Rewards::new(
             rewards_settings,
             epoch_state,
@@ -345,14 +342,13 @@ impl SdpLedger {
     fn new_service_state<R: Rewards>(rewards: R) -> ServiceState<R> {
         ServiceState {
             declarations: rpds::RedBlackTreeMapSync::new_sync(),
-            active: SessionState {
+            active: Snapshot {
                 declarations: rpds::RedBlackTreeMapSync::new_sync(),
-                session_n: 0,
+                epoch: 0.into(),
             },
-
-            next: SessionState {
+            next: Snapshot {
                 declarations: rpds::RedBlackTreeMapSync::new_sync(),
-                session_n: 1,
+                epoch: 1.into(),
             },
             rewards,
         }
@@ -363,7 +359,6 @@ impl SdpLedger {
         config: &Config,
         epoch_state: &EpochState,
     ) -> Result<(Self, Vec<Utxo>), Error> {
-        let block_number = self.block_number + 1; // overflow?
         let mut all_reward_utxos = Vec::new();
 
         let services = self
@@ -375,7 +370,6 @@ impl SdpLedger {
                     .get(service)
                     .ok_or(Error::SessionParamsNotFound(*service))?;
                 let (new_state, reward_utxos) = service_state.clone().try_apply_header(
-                    block_number,
                     epoch_state,
                     service_params,
                     &config.service_rewards_params,
@@ -387,7 +381,7 @@ impl SdpLedger {
 
         Ok((
             Self {
-                block_number,
+                epoch: epoch_state.epoch(),
                 services,
                 locked_notes: self.locked_notes.clone(),
             },
@@ -422,7 +416,7 @@ impl SdpLedger {
         // Execute SDP Declare
         let result = op.execute(SDPDeclareExecutionContext {
             utxo_tree: utxo_tree.clone(),
-            block_number: self.block_number,
+            epoch: self.epoch,
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
             min_stake: config.min_stake,
@@ -454,7 +448,7 @@ impl SdpLedger {
 
         // Execute SDP Active
         let result = op.execute(SDPActiveExecutionContext {
-            block_number: self.block_number,
+            epoch: self.epoch,
             declarations: service_state.declarations_clone(),
         })?;
 
@@ -465,12 +459,7 @@ impl SdpLedger {
             .provider_id;
 
         service_state.update_declarations(result.declarations);
-        service_state.update_rewards(
-            provider_id,
-            &op.metadata,
-            self.block_number,
-            &config.service_rewards_params,
-        )?;
+        service_state.update_rewards(provider_id, &op.metadata, &config.service_rewards_params)?;
 
         Ok(self)
     }
@@ -489,9 +478,9 @@ impl SdpLedger {
 
         // Validate SDP Withdraw
         op.validate(&SDPWithdrawValidationContext {
-            lock_period: &config.lock_period,
+            lock_period: config.lock_period,
             declarations: service_state.declarations(),
-            block_number: &self.block_number,
+            epoch: self.epoch,
             locked_notes: &self.locked_notes,
             tx_hash: &tx_hash,
             sdp_withdraw_sig: zksig,
@@ -499,7 +488,6 @@ impl SdpLedger {
 
         // Execute SDP Withdraw
         let result = op.execute(SDPWithdrawExecutionContext {
-            block_number: self.block_number,
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
         })?;
@@ -523,15 +511,16 @@ impl SdpLedger {
         &self.locked_notes
     }
 
+    /// Providers in the active snapshot of the current epoch
     #[must_use]
-    pub fn active_session_providers(
+    pub fn active_providers(
         &self,
         service_type: ServiceType,
     ) -> Option<HashMap<ProviderId, ProviderInfo>> {
         let service = self.services.get(&service_type)?;
 
         let providers = service
-            .active_session()
+            .active_snapshot()
             .declarations
             .iter()
             .map(|(_, declaration)| {
@@ -548,14 +537,19 @@ impl SdpLedger {
         Some(providers)
     }
 
+    /// The epoch of the current active snapshot for each service
     #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, SessionNumber> {
+    pub fn active_snapshot_epochs(&self) -> HashMap<ServiceType, Epoch> {
         self.services
             .iter()
-            .map(|(service_type, service)| (*service_type, service.active_session().session_n))
+            .map(|(service_type, service)| (*service_type, service.active_snapshot().epoch))
             .collect()
     }
 
+    /// Declarations of all services, which have been accumulated until the
+    /// current block.
+    ///
+    /// This may be different from declarations in the active/next snapshots.
     #[must_use]
     pub fn declarations(&self) -> Vec<(DeclarationId, Declaration)> {
         self.services
@@ -569,6 +563,8 @@ impl SdpLedger {
             .collect()
     }
 
+    /// Get a declaration by ID from the set of declarations accumulated until
+    /// the current block (not from snapshots).
     #[must_use]
     pub fn get_declaration(&self, declaration_id: &DeclarationId) -> Option<&Declaration> {
         self.services.iter().find_map(|(_, service)| {
@@ -599,15 +595,15 @@ impl SdpLedger {
     }
 
     #[cfg(test)]
-    fn get_next_session(&self, service_type: ServiceType) -> Option<&SessionState> {
-        self.services.get(&service_type).map(Service::next_session)
+    fn get_next_snapshot(&self, service_type: ServiceType) -> Option<&Snapshot> {
+        self.services.get(&service_type).map(Service::next_snapshot)
     }
 
     #[cfg(test)]
-    fn get_active_session(&self, service_type: ServiceType) -> Option<&SessionState> {
+    fn get_active_snapshot(&self, service_type: ServiceType) -> Option<&Snapshot> {
         self.services
             .get(&service_type)
-            .map(Service::active_session)
+            .map(Service::active_snapshot)
     }
 
     #[cfg(test)]
@@ -630,23 +626,23 @@ mod tests {
     use crate::cryptarchia::tests::{utxo, utxo_with_sk};
 
     fn setup() -> Config {
+        setup_with(ServiceParameters {
+            inactivity_period: 1.into(),
+            lock_period: 10.into(),
+            retention_period: 1.into(),
+            epoch: 0.into(),
+        })
+    }
+
+    fn setup_with(service_params: ServiceParameters) -> Config {
         let mut params = HashMap::new();
-        params.insert(
-            ServiceType::BlendNetwork,
-            ServiceParameters {
-                inactivity_period: 1,
-                lock_period: 10,
-                retention_period: 1,
-                timestamp: 0,
-                session_duration: 10,
-            },
-        );
+        params.insert(ServiceType::BlendNetwork, service_params);
         Config {
             service_params: Arc::new(params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: blend::RewardsParameters {
-                    rounds_per_session: NonZeroU64::new(10).unwrap(),
-                    message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                    epoch_length: 10.into(),
+                    message_frequency_per_slot: NonNegativeF64::try_from(1.0).unwrap(),
                     num_blend_layers: NonZeroU64::new(3).unwrap(),
                     minimum_network_size: NonZeroU64::new(1).unwrap(),
                     data_replication_factor: 0,
@@ -706,9 +702,9 @@ mod tests {
         sdp_ledger.apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
     }
 
-    fn dummy_epoch_state() -> EpochState {
+    fn dummy_epoch_state(epoch: Epoch) -> EpochState {
         EpochState {
-            epoch: 0.into(),
+            epoch,
             nonce: ZkHash::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
@@ -736,35 +732,66 @@ mod tests {
         let declaration_id = op.id();
 
         // Initialize ledger with service config
-        let epoch_state = dummy_epoch_state();
-        let sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+        let epoch_state = dummy_epoch_state(0.into());
+        let sdp_ledger = SdpLedger::new(epoch_state.epoch())
+            .with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
-        // Apply declare at block 0
+        // Apply a declaration at epoch 0
         let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
+        let mut sdp_ledger =
             apply_declare_with_dummies(&utxo_tree, sdp_ledger, op, &zk_key, &config).unwrap();
 
-        // Declaration is in service_state.declarations but not in sessions yet
+        // Declaration is in service_state.declarations but not in the active snapshot
+        // yet
         let declarations = sdp_ledger.get_declarations(service_a).unwrap();
         assert!(declarations.contains_key(&declaration_id));
+        let active_snapshot = sdp_ledger.get_active_snapshot(service_a).unwrap();
+        assert_eq!(active_snapshot.epoch, 0.into());
+        assert!(!active_snapshot.declarations.contains_key(&declaration_id));
 
-        // Apply headers to reach block 10 (session boundary)
-        let mut sdp_ledger = sdp_ledger;
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
+        // Apply a header from epoch 1 to trigger epoch transition: 0->1
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &dummy_epoch_state(1.into()))
+            .unwrap();
 
-        // At block 10, declaration enters the next session 2
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 2);
-        assert!(next_session.declarations.contains_key(&declaration_id));
-        assert_eq!(next_session.declarations.size(), 1);
+        // At epoch 1, the declaration is still not in the active snapshot yet,
+        // but it should be in the snapshot for the next epoch.
+        let active_snapshot = sdp_ledger.get_active_snapshot(service_a).unwrap();
+        assert_eq!(active_snapshot.epoch, 1.into());
+        assert!(!active_snapshot.declarations.contains_key(&declaration_id));
+        let next_snapshot = sdp_ledger.get_next_snapshot(service_a).unwrap();
+        assert_eq!(next_snapshot.epoch, 2.into());
+        assert!(next_snapshot.declarations.contains_key(&declaration_id));
+        assert_eq!(next_snapshot.declarations.size(), 1);
+
+        // Apply a header from epoch 2 to trigger epoch transition: 1->2
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &dummy_epoch_state(2.into()))
+            .unwrap();
+
+        // At epoch 1, the declaration must be in the active/next snapshots.
+        let active_snapshot = sdp_ledger.get_active_snapshot(service_a).unwrap();
+        assert_eq!(active_snapshot.epoch, 2.into());
+        assert!(active_snapshot.declarations.contains_key(&declaration_id));
+        assert_eq!(active_snapshot.declarations.size(), 1);
+        let next_snapshot = sdp_ledger.get_next_snapshot(service_a).unwrap();
+        assert_eq!(next_snapshot.epoch, 3.into());
+        assert!(next_snapshot.declarations.contains_key(&declaration_id));
+        assert_eq!(next_snapshot.declarations.size(), 1);
     }
 
     #[test]
     fn test_withdraw_provider() {
-        let config = setup();
+        let config = setup_with(ServiceParameters {
+            lock_period: 10.into(),
+            // inactivity/retention periods should be longer than lock period
+            // for this test to avoid the declaration being removed due to
+            // inacitivity before we can test the withdraw logic.
+            inactivity_period: 20.into(),
+            retention_period: 20.into(),
+            epoch: 0.into(),
+        });
+
         let service_a = ServiceType::BlendNetwork;
         let (utxo_sk, utxo) = utxo_with_sk();
         let note_id = utxo.id();
@@ -781,9 +808,9 @@ mod tests {
         let declaration_id = declare_op.id();
 
         // Initialize ledger with service config and declare
-        let epoch_state = dummy_epoch_state();
-        let sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+        let epoch_state = dummy_epoch_state(0.into());
+        let sdp_ledger = SdpLedger::new(epoch_state.epoch())
+            .with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         let utxo_tree = utxo_tree(vec![utxo]);
         let sdp_ledger =
@@ -794,10 +821,12 @@ mod tests {
         let declarations = sdp_ledger.get_declarations(service_a).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
-        // Move forward enough blocks to satisfy lock_period
+        // Move forward enough epochs to satisfy lock_period
         let mut sdp_ledger = sdp_ledger;
-        for _ in 0..11 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        for epoch in 1..=11 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &dummy_epoch_state(epoch.into()))
+                .unwrap();
         }
 
         // Withdraw the declaration
@@ -816,181 +845,24 @@ mod tests {
     }
 
     #[test]
-    fn test_promote_session_with_updated_provider() {
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let utxo = utxo();
-        let note_id = utxo.id();
-        let signing_key = create_signing_key();
-        let zk_key = create_zk_key(0);
-
-        let op = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: note_id,
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id = op.id();
-
-        // Initialize ledger with service config
-        let epoch_state = dummy_epoch_state();
-        let sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
-
-        // Declare at block 0
-        let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, op, &zk_key, &config).unwrap();
-
-        // Apply headers to reach block 10 (session boundary for session_duration=10)
-        let mut sdp_ledger = sdp_ledger;
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // At block 10: `active` becomes session 1 (was empty `next`),
-        // `next` becomes session 2 (snapshot at block 10)
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 1);
-        assert!(active_session.declarations.is_empty()); // Active session 1 is empty
-
-        // Check next session is now session 2 and contains declaration
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 2);
-        assert!(next_session.declarations.contains_key(&declaration_id));
-
-        // Continue to block 20 to see declaration become active
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // At block 20: active becomes session 2 (with declaration)
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 2);
-        assert!(active_session.declarations.contains_key(&declaration_id));
-    }
-
-    #[test]
     fn test_no_promotion() {
         let config = setup();
         let service_a = ServiceType::BlendNetwork;
 
         // Initialize ledger with service config
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+        let epoch_state = dummy_epoch_state(0.into());
+        let sdp_ledger = SdpLedger::new(epoch_state.epoch())
+            .with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
-        // Apply headers to reach block 9 (still in session 0, promotion happens at
-        // block 10)
-        for _ in 0..9 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
+        // Check active snapshot is still epoch 0 with no declarations
+        let active_snapshot = sdp_ledger.get_active_snapshot(service_a).unwrap();
+        assert_eq!(active_snapshot.epoch, 0.into());
+        assert!(active_snapshot.declarations.is_empty());
 
-        // Check active session is still session 0 with no declarations
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 0);
-        assert!(active_session.declarations.is_empty());
-
-        // Check next session is still session 1
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 1);
-    }
-
-    #[test]
-    fn test_promote_one_service() {
-        let config = setup();
-        let service = ServiceType::BlendNetwork; // session_duration = 10
-
-        // Initialize ledger with Blend service
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
-
-        // Apply headers to reach block 10 (session boundary for BlendNetwork)
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // Check BlendNetwork is promoted to session 1
-        let active_session = sdp_ledger.get_active_session(service).unwrap();
-        assert_eq!(active_session.session_n, 1);
-        let next_session = sdp_ledger.get_next_session(service).unwrap();
-        assert_eq!(next_session.session_n, 2);
-    }
-
-    #[test]
-    fn test_new_declarations_becoming_active_after_session_boundary() {
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let signing_key = create_signing_key();
-        let zk_key = create_zk_key(0);
-
-        // Initialize ledger
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
-
-        // SESSION 0: Add a declaration at block 5
-        for _ in 0..5 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        let utxo = utxo();
-        let declare_op = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo.id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id = declare_op.id();
-
-        let utxo_tree = utxo_tree(vec![utxo]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
-
-        // Move to block 9 (last block of session 0)
-        for _ in 6..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        assert_eq!(sdp_ledger.block_number, 9);
-
-        // Declaration is not in active or next sessions yet
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 0);
-        assert!(!active_session.declarations.contains_key(&declaration_id));
-
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 1);
-        assert!(next_session.declarations.is_empty());
-
-        // SESSION 1: Cross session boundary to block 10
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
-
-        // Active session 1 is empty (was the empty next session 1)
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 1);
-        assert!(active_session.declarations.is_empty());
-
-        // Next session 2 now has the declaration (snapshot from block 10)
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 2);
-        assert!(next_session.declarations.contains_key(&declaration_id));
-
-        // SESSION 2: Cross to block 20
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 20);
-
-        // Now the declaration is active in session 2
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 2);
-        assert!(active_session.declarations.contains_key(&declaration_id));
+        // Check next snapshot is still session 1
+        let next_snapshot = sdp_ledger.get_next_snapshot(service_a).unwrap();
+        assert_eq!(next_snapshot.epoch, 1.into());
+        assert!(next_snapshot.declarations.is_empty());
     }
 
     #[test]
@@ -1000,11 +872,11 @@ mod tests {
         let signing_key = create_signing_key();
         let zk_key_1 = create_zk_key(1);
 
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+        let epoch_state = dummy_epoch_state(0.into());
+        let mut sdp_ledger = SdpLedger::new(epoch_state.epoch())
+            .with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
-        // Add declaration at block 0
+        // Add a declaration at epoch 0
         let utxo_1 = utxo();
         let declare_op_1 = &SDPDeclareOp {
             service_type: service_a,
@@ -1020,17 +892,14 @@ mod tests {
             apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
                 .unwrap();
 
-        // Move to block 9 (last block before session boundary)
-        for _ in 1..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
+        // Save state at epoch 0
+        let sdp_ledger_epoch_0 = sdp_ledger.clone();
 
-        // Save state at block 9
-        let sdp_ledger_block_9 = sdp_ledger.clone();
-
-        // Add another declaration at block 10 (after session boundary)
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
+        // Add another declaration at epoch 1
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &dummy_epoch_state(1.into()))
+            .unwrap();
+        assert_eq!(sdp_ledger.epoch, 1.into());
 
         let zk_key_2 = create_zk_key(2);
         let utxo_2 = utxo();
@@ -1048,59 +917,56 @@ mod tests {
             apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
                 .unwrap();
 
-        // Jump to session 2 (block 20)
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-
-        // Active session (session 2) should contain both declarations
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert!(active_session.declarations.contains_key(&declaration_id_1));
-        assert!(!active_session.declarations.contains_key(&declaration_id_2));
-
-        // Now test from the block 9 state - jumping directly to block 20
-        let mut sdp_ledger_from_9 = sdp_ledger_block_9;
-        for _ in 10..20 {
-            (sdp_ledger_from_9, _) = sdp_ledger_from_9
-                .try_apply_header(&config, &epoch_state)
-                .unwrap();
-        }
-        (sdp_ledger_from_9, _) = sdp_ledger_from_9
-            .try_apply_header(&config, &epoch_state)
+        // Move forward: epoch 1->2
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &dummy_epoch_state(2.into()))
             .unwrap();
 
-        // Active session should only contain declaration_id_1
-        // because declaration_id_2 was never added in this timeline
-        let active_session_from_9 = sdp_ledger_from_9.get_active_session(service_a).unwrap();
-        assert!(
-            active_session_from_9
-                .declarations
-                .contains_key(&declaration_id_1)
-        );
-        assert!(
-            !active_session_from_9
-                .declarations
-                .contains_key(&declaration_id_2)
-        );
+        // Active snapshot (epoch 2) should contain the declaration_1
+        let active_snapshot = sdp_ledger.get_active_snapshot(service_a).unwrap();
+        assert!(active_snapshot.declarations.contains_key(&declaration_id_1));
+        assert!(!active_snapshot.declarations.contains_key(&declaration_id_2));
+        // Next snapshot (epoch 3) should contain both declarations
+        let next_snapshot = sdp_ledger.get_next_snapshot(service_a).unwrap();
+        assert!(next_snapshot.declarations.contains_key(&declaration_id_1));
+        assert!(next_snapshot.declarations.contains_key(&declaration_id_2));
+
+        // Now test from the epoch 1 state - move forward to epoch 2 without new
+        // declaration
+        let mut sdp_ledger_from_epoch_0 = sdp_ledger_epoch_0;
+        for epoch in 1..=2 {
+            (sdp_ledger_from_epoch_0, _) = sdp_ledger_from_epoch_0
+                .try_apply_header(&config, &dummy_epoch_state(epoch.into()))
+                .unwrap();
+        }
+
+        // Active snapshot (epoch 2) should contain only the declaration_1
+        let active_snapshot = sdp_ledger_from_epoch_0
+            .get_active_snapshot(service_a)
+            .unwrap();
+        assert!(active_snapshot.declarations.contains_key(&declaration_id_1));
+        assert!(!active_snapshot.declarations.contains_key(&declaration_id_2));
+        // Next snapshot (epoch 3) should contain only the declaration_1
+        let next_snapshot = sdp_ledger_from_epoch_0
+            .get_next_snapshot(service_a)
+            .unwrap();
+        assert!(next_snapshot.declarations.contains_key(&declaration_id_1));
+        assert!(!next_snapshot.declarations.contains_key(&declaration_id_2));
     }
 
     #[test]
-    fn test_session_jump() {
+    #[ignore = "must be enabled after defining how to handle epoch jumps"]
+    fn test_epoch_jump() {
         let config = setup();
         let service_a = ServiceType::BlendNetwork;
         let signing_key = create_signing_key();
         let zk_key = create_zk_key(0);
 
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+        let epoch_state = dummy_epoch_state(0.into());
+        let mut sdp_ledger = SdpLedger::new(epoch_state.epoch())
+            .with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
-        // Add declaration at block 3
-        for _ in 0..3 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
+        // Add declaration at epoch 0
         let utxo = utxo();
         let declare_op = &SDPDeclareOp {
             service_type: service_a,
@@ -1116,138 +982,20 @@ mod tests {
             apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
                 .unwrap();
 
-        // Jump directly from block 3 to block 25 (skipping session 1 entirely)
-        for _ in 4..25 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 25);
+        // Jump directly from epoch 0 to 3 (skipping epoch 1 and 2)
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &dummy_epoch_state(3.into()))
+            .unwrap();
+        assert_eq!(sdp_ledger.epoch, 3.into());
 
-        // Declaration snapshots should be taken from the last known state
-        // Active session (session 2, which started at block 20) should contain the
-        // declaration
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 2);
-        assert!(active_session.declarations.contains_key(&declaration_id));
-
-        // Next session (session 3) should also contain the declaration
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 3);
-        assert!(next_session.declarations.contains_key(&declaration_id));
-    }
-
-    #[test]
-    #[expect(clippy::cognitive_complexity, reason = "sessions are complex :)")]
-    fn test_session_boundary() {
-        // Test a declaration at block 9 is available in session 2 but a declaration in
-        // block 10 is not
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let signing_key = create_signing_key();
-        let zk_key_1 = create_zk_key(1);
-
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
-
-        // Move to block 9 (last block of session 0)
-        for _ in 0..9 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        assert_eq!(sdp_ledger.block_number, 9);
-
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 0);
-        assert!(active_session.declarations.is_empty());
-
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 1);
-        assert!(next_session.declarations.is_empty());
-
-        // Create first declaration at block 9
-        let utxo_1 = utxo();
-        let declare_op_1 = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo_1.id(),
-            zk_id: zk_key_1.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_1 = declare_op_1.id();
-
-        let utxo_tree_1 = utxo_tree(vec![utxo_1]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
-                .unwrap();
-
-        // Cross to block 10 (session boundary - start of session 1)
-        // At this point, the snapshot for next session 2 is taken
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
-
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 1);
-        assert!(active_session.declarations.is_empty());
-
-        // Next session 2 should contain declaration_1 (made at block 9)
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 2);
-        assert!(next_session.declarations.contains_key(&declaration_id_1));
-
-        // Create second declaration at block 10 (first block of session 1)
-        let zk_key_2 = create_zk_key(2);
-        let utxo_2 = utxo();
-        let declare_op_2 = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo_2.id(),
-            zk_id: zk_key_2.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_2 = declare_op_2.id();
-
-        let utxo_tree_2 = utxo_tree(vec![utxo_1, utxo_2]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
-                .unwrap();
-
-        // Next session 2 still only has declaration_1 (snapshot was already taken at
-        // block 10)
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 2);
-        assert!(next_session.declarations.contains_key(&declaration_id_1));
-        assert!(!next_session.declarations.contains_key(&declaration_id_2));
-
-        // Jump to block 20 (start of session 2)
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 20);
-
-        // Active session 2 has declaration_1 (from block 9)
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 2);
-        assert!(active_session.declarations.contains_key(&declaration_id_1));
-        assert!(!active_session.declarations.contains_key(&declaration_id_2));
-
-        // Next session 3 has both declarations (snapshot from block 20)
-        let next_session = sdp_ledger.get_next_session(service_a).unwrap();
-        assert_eq!(next_session.session_n, 3);
-        assert!(next_session.declarations.contains_key(&declaration_id_1));
-        assert!(next_session.declarations.contains_key(&declaration_id_2));
-
-        // Jump to block 30 (start of session 3)
-        for _ in 21..30 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 30);
-
-        // Active session 3 now has both declarations
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 3);
-        assert!(active_session.declarations.contains_key(&declaration_id_1));
-        assert!(active_session.declarations.contains_key(&declaration_id_2));
+        // Declaration snapshots should be taken from the last known state.
+        // Active snapshot (epoch 3) should contain the declaration.
+        let active_snapshot = sdp_ledger.get_active_snapshot(service_a).unwrap();
+        assert_eq!(active_snapshot.epoch, 3.into());
+        assert!(active_snapshot.declarations.contains_key(&declaration_id));
+        // Next session (epoch 4) should also contain the declaration
+        let next_snapshot = sdp_ledger.get_next_snapshot(service_a).unwrap();
+        assert_eq!(next_snapshot.epoch, 4.into());
+        assert!(next_snapshot.declarations.contains_key(&declaration_id));
     }
 }

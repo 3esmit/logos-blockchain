@@ -1,18 +1,19 @@
 use lb_core::{
     crypto::ZkHash,
-    sdp::{Declaration, DeclarationId, ProviderId, ServiceParameters, ServiceType, SessionNumber},
+    sdp::{Declaration, DeclarationId, ProviderId, ServiceParameters, ServiceType},
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 
-use crate::{EpochState, UtxoTree, mantle::sdp::SessionState};
+use crate::{EpochState, UtxoTree, mantle::sdp::Snapshot};
 
-pub fn create_test_session_state(
+pub fn create_test_snapshot(
     provider_ids: &[ProviderId],
     service_type: ServiceType,
-    session_n: SessionNumber,
-) -> SessionState {
+    epoch: Epoch,
+) -> Snapshot {
     let mut declarations = rpds::RedBlackTreeMapSync::new_sync();
     for (i, provider_id) in provider_ids.iter().enumerate() {
         let declaration = Declaration {
@@ -21,16 +22,16 @@ pub fn create_test_session_state(
             locked_note_id: Fr::from(i as u64).into(),
             locators: vec![],
             zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
-            created: 0,
-            active: 0,
+            created: 0.into(),
+            active: 0.into(),
             withdrawn: None,
             nonce: 0,
         };
         declarations = declarations.insert(DeclarationId([i as u8; 32]), declaration);
     }
-    SessionState {
+    Snapshot {
         declarations,
-        session_n,
+        epoch,
     }
 }
 
@@ -43,21 +44,20 @@ pub fn create_provider_id(byte: u8) -> ProviderId {
 
 pub fn create_service_parameters() -> ServiceParameters {
     ServiceParameters {
-        lock_period: 10,
-        inactivity_period: 1,
-        retention_period: 1,
-        timestamp: 0,
-        session_duration: 10,
+        lock_period: 10.into(),
+        inactivity_period: 1.into(),
+        retention_period: 1.into(),
+        epoch: 0.into(),
     }
 }
 
-pub fn dummy_epoch_state() -> EpochState {
-    dummy_epoch_state_with(0, 0)
+pub fn dummy_epoch_state(epoch: Epoch) -> EpochState {
+    dummy_epoch_state_with(epoch, 0)
 }
 
-pub fn dummy_epoch_state_with(epoch: u32, nonce: u64) -> EpochState {
+pub fn dummy_epoch_state_with(epoch: Epoch, nonce: u64) -> EpochState {
     EpochState {
-        epoch: epoch.into(),
+        epoch,
         nonce: ZkHash::from(BigUint::from(nonce)),
         utxos: UtxoTree::default(),
         total_stake: 0,

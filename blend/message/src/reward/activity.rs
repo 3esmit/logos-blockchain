@@ -57,7 +57,8 @@ impl ActivityProof {
         )?;
 
         Ok(Self::new(
-            proof.session,
+            // TODO: change `new` to accept `Epoch` instead of `SessionNumber`.
+            proof.epoch.into_inner().into(),
             BlendingToken::new(proof.signing_key, proof_of_quota, proof_of_selection),
         ))
     }
@@ -86,7 +87,8 @@ pub fn activity_threshold(
 impl From<&ActivityProof> for lb_core::sdp::blend::ActivityProof {
     fn from(proof: &ActivityProof) -> Self {
         Self {
-            session: proof.session_number,
+            // TODO: replace `ActivityProof::session_number` with `Epoch`.
+            epoch: proof.session_number.try_into().expect("must be u32"),
             signing_key: *proof.token.signing_key(),
             proof_of_quota: (*proof.token.proof_of_quota()).into(),
             proof_of_selection: (*proof.token.proof_of_selection()).into(),

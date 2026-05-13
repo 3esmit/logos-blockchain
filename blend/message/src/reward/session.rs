@@ -84,6 +84,8 @@ impl BlendingTokenEvaluation {
 }
 
 /// Deterministic unbiased randomness for a session.
+// TODO: remove this after eliminating session concept from this crate.
+// We already have [`EpochRandomness`] in `lb-core` crate.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRandomness(#[serde(with = "serde_big_array::BigArray")] [u8; 64]);
 

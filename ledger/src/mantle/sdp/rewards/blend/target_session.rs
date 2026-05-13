@@ -2,61 +2,63 @@ use std::{cmp::Ordering, collections::HashMap, iter::once};
 
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
-    reward::{BlendingTokenEvaluation, HammingDistance},
+    reward::{BlendingTokenEvaluation, HammingDistance, SessionRandomness},
 };
 use lb_core::{
     mantle::{Utxo, Value},
-    sdp::{ProviderId, ServiceType, SessionNumber},
+    sdp::{ProviderId, ServiceType},
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use crate::mantle::sdp::rewards::{
     Error,
-    blend::{RewardsParameters, current_session::CurrentSessionState},
+    blend::{RewardsParameters, current_session::CurrentEpochState},
     distribute_rewards,
 };
 
-/// The immutable state of the target session for which rewards are being
-/// calculated. The target session is `s-1` if `s` is the current session.
+/// The immutable state of the target epoch for which rewards are being
+/// calculated. The target epoch is E-1 if E is the current epoch.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct TargetSessionState<ProofsVerifier> {
-    /// The target session number
-    session_number: SessionNumber,
-    /// The providers in the target session (their public keys and indices).
+pub struct TargetEpochState<ProofsVerifier> {
+    /// target epoch E-1
+    epoch: Epoch,
+    /// The providers who were active during the target epoch E-1
+    /// (their public keys and indices).
     providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
-    /// Parameters for evaluating activity proofs in the target session
+    /// Parameters for evaluating activity proofs in the target epoch E-1
     token_evaluation: BlendingTokenEvaluation,
-    /// Verifiers for `PoQ` and `PoSel`.
-    /// These are created from epoch states collected in the target session.
-    proof_verifiers: Vec<ProofsVerifier>,
-    /// Session incomes stabilized from session `s-1`
-    session_income: Value,
+    /// Verifier for `PoQ` and `PoSel`.
+    /// These are created from the [`EpochState`] of the target epoch E-1.
+    proof_verifier: ProofsVerifier,
+    /// Income stabilized from the target epoch E-1.
+    income: Value,
 }
 
-impl<ProofsVerifier> TargetSessionState<ProofsVerifier> {
+impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
     pub const fn new(
-        session_number: SessionNumber,
+        epoch: Epoch,
         providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
         token_evaluation: BlendingTokenEvaluation,
-        proof_verifiers: Vec<ProofsVerifier>,
-        session_income: Value,
+        proof_verifier: ProofsVerifier,
+        income: Value,
     ) -> Self {
         Self {
-            session_number,
+            epoch,
             providers,
             token_evaluation,
-            proof_verifiers,
-            session_income,
+            proof_verifier,
+            income,
         }
     }
 
-    pub const fn session_number(&self) -> SessionNumber {
-        self.session_number
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
     }
 
-    pub const fn session_income(&self) -> Value {
-        self.session_income
+    pub const fn income(&self) -> Value {
+        self.income
     }
 
     pub fn providers(&self) -> impl Iterator<Item = (&ProviderId, &(ZkPublicKey, u64))> {
@@ -71,7 +73,7 @@ impl<ProofsVerifier> TargetSessionState<ProofsVerifier> {
     }
 }
 
-impl<ProofsVerifier> TargetSessionState<ProofsVerifier>
+impl<ProofsVerifier> TargetEpochState<ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -79,13 +81,13 @@ where
         &self,
         provider_id: &ProviderId,
         proof: &lb_core::sdp::blend::ActivityProof,
-        current_session_state: &CurrentSessionState,
+        current_session_state: &CurrentEpochState,
         settings: &RewardsParameters,
     ) -> Result<(ZkPublicKey, HammingDistance), Error> {
-        if proof.session != self.session_number {
-            return Err(Error::InvalidSession {
-                expected: self.session_number,
-                got: proof.session,
+        if proof.epoch != self.epoch {
+            return Err(Error::InvalidEpoch {
+                expected: self.epoch,
+                got: proof.epoch,
             });
         }
 
@@ -99,24 +101,19 @@ where
             .get(provider_id)
             .ok_or_else(|| Error::UnknownProvider(Box::new(*provider_id)))?;
 
-        // Try to verify the proof with each of the available verifiers
-        let verified_proof = self
-            .proof_verifiers
-            .iter()
-            .find_map(|verifier| {
-                lb_blend_message::reward::ActivityProof::verify_and_build(
-                    proof,
-                    verifier,
-                    index,
-                    num_providers,
-                )
-                .ok()
-            })
-            .ok_or(Error::InvalidProof)?;
+        let verified_proof = lb_blend_message::reward::ActivityProof::verify_and_build(
+            proof,
+            &self.proof_verifier,
+            index,
+            num_providers,
+        )
+        .map_err(|_| Error::InvalidProof)?;
 
         let Some(hamming_distance) = self.token_evaluation.evaluate(
             verified_proof.token(),
-            current_session_state.session_randomness(),
+            // TODO: pass `EpochRandomness` directly to `evaluate`
+            // after eliminating session concept from `lb-blend-message`.
+            SessionRandomness::from(<[u8; 64]>::from(current_session_state.epoch_randomness())),
         ) else {
             return Err(Error::InvalidProof);
         };
@@ -125,23 +122,23 @@ where
     }
 }
 
-/// Tracks activity proofs submitted for the target session whose rewards are
-/// being calculated. The target session is `s-1` if `s` is the current session.
+/// Tracks activity proofs submitted for the target epoch whose rewards are
+/// being calculated. The target epoch is E-1 if E is the current epoch.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct TargetSessionTracker {
-    /// Collecting proofs submitted by providers in the target session.
+pub struct TargetEpochTracker {
+    /// Collecting proofs submitted by providers in the target epoch.
     submitted_proofs: HashTrieMapSync<ProviderId, (ZkPublicKey, HammingDistance)>,
     /// Tracking the minimum Hamming distance among submitted proofs.
     min_hamming_distance: MinHammingDistance,
 }
 
-impl Default for TargetSessionTracker {
+impl Default for TargetEpochTracker {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TargetSessionTracker {
+impl TargetEpochTracker {
     pub fn new() -> Self {
         Self {
             submitted_proofs: HashTrieMapSync::new_sync(),
@@ -152,13 +149,13 @@ impl TargetSessionTracker {
     pub fn insert(
         &self,
         provider_id: ProviderId,
-        session: SessionNumber,
+        epoch: Epoch,
         zk_id: ZkPublicKey,
         hamming_distance: HammingDistance,
     ) -> Result<Self, Error> {
         if self.submitted_proofs.contains_key(&provider_id) {
             return Err(Error::DuplicateActiveMessage {
-                session,
+                epoch,
                 provider_id: Box::new(provider_id),
             });
         }
@@ -172,10 +169,9 @@ impl TargetSessionTracker {
         })
     }
 
-    pub fn finalize(
+    pub fn finalize<ProofsVerifier>(
         &self,
-        session_number: SessionNumber,
-        session_income: u64,
+        target_epoch_state: &TargetEpochState<ProofsVerifier>,
     ) -> (Self, Vec<Utxo>) {
         if self.submitted_proofs.is_empty() {
             return (Self::new(), vec![]);
@@ -185,7 +181,7 @@ impl TargetSessionTracker {
         let premium_providers = &self.min_hamming_distance.providers;
 
         // Calculate base reward
-        let base_reward = session_income
+        let base_reward = target_epoch_state.income()
             / (self.submitted_proofs.size() as u64 + premium_providers.size() as u64);
 
         // Calculate reward for each provider
@@ -201,7 +197,11 @@ impl TargetSessionTracker {
 
         (
             Self::new(),
-            distribute_rewards(rewards, session_number, ServiceType::BlendNetwork),
+            distribute_rewards(
+                rewards,
+                target_epoch_state.epoch(),
+                ServiceType::BlendNetwork,
+            ),
         )
     }
 }

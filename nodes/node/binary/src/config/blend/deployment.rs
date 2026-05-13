@@ -106,13 +106,10 @@ impl Settings {
         RewardsParameters {
             activity_threshold_sensitivity: self.core.activity_threshold_sensitivity,
             data_replication_factor: self.common.data_replication_factor,
-            message_frequency_per_round: self.core.scheduler.cover.message_frequency_per_round,
+            message_frequency_per_slot: self.core.scheduler.cover.message_frequency_per_round,
             minimum_network_size: self.common.minimum_network_size.into(),
             num_blend_layers: self.common.num_blend_layers,
-            rounds_per_session: self.rounds_per_session(
-                cryptarchia_deployment.slots_per_epoch(),
-                &time_deployment.slot_duration,
-            ),
+            epoch_length: cryptarchia_deployment.slots_per_epoch().into(),
         }
     }
 }

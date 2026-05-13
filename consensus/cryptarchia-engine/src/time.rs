@@ -1,4 +1,8 @@
-use std::{num::NonZero, ops::Add, time::Duration};
+use std::{
+    num::NonZero,
+    ops::{Add, Sub},
+    time::Duration,
+};
 
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
@@ -140,6 +144,22 @@ impl Add<u32> for Epoch {
 
     fn add(self, rhs: u32) -> Self::Output {
         Self(self.0 + rhs)
+    }
+}
+
+impl Add<Self> for Epoch {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub<Self> for Epoch {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
     }
 }
 

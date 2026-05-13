@@ -5,6 +5,7 @@ use core::str::FromStr;
 use std::hash::Hash;
 
 use blake2::{Blake2b, Digest as _};
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use multiaddr::{Multiaddr, Protocol};
 use nom::{IResult, Parser as _, bytes::complete::take};
@@ -17,6 +18,7 @@ use crate::{
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
+// TODO: remove this after eliminating session concept completely
 pub type SessionNumber = u64;
 pub type StakeThreshold = u64;
 
@@ -30,18 +32,15 @@ pub struct MinStake {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
-    pub lock_period: u64,
-    pub inactivity_period: u64,
-    pub retention_period: u64,
-    pub timestamp: BlockNumber,
-    pub session_duration: BlockNumber,
-}
-
-impl ServiceParameters {
-    #[must_use]
-    pub const fn session_for_block(&self, block_number: BlockNumber) -> SessionNumber {
-        block_number / self.session_duration
-    }
+    /// Minimum epochs during which a declaration cannot be withdrawn
+    pub lock_period: Epoch,
+    /// Maximum epochs during which an activity message must be sent
+    pub inactivity_period: Epoch,
+    /// Epochs after which a declaration can be safely deleted by Garbage
+    /// Collection
+    pub retention_period: Epoch,
+    // Epoch number at which this parameter was set
+    pub epoch: Epoch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -177,9 +176,9 @@ pub struct Declaration {
     pub locked_note_id: NoteId,
     pub locators: Vec<Locator>,
     pub zk_id: ZkPublicKey,
-    pub created: BlockNumber,
-    pub active: BlockNumber,
-    pub withdrawn: Option<BlockNumber>,
+    pub created: Epoch,
+    pub active: Epoch,
+    pub withdrawn: Option<Epoch>,
     pub nonce: Nonce,
 }
 
@@ -191,15 +190,15 @@ pub struct ProviderInfo {
 
 impl Declaration {
     #[must_use]
-    pub fn new(block_number: BlockNumber, declaration_msg: &DeclarationMessage) -> Self {
+    pub fn new(epoch: Epoch, declaration_msg: &DeclarationMessage) -> Self {
         Self {
             service_type: declaration_msg.service_type,
             provider_id: declaration_msg.provider_id,
             locked_note_id: declaration_msg.locked_note_id,
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
-            created: block_number,
-            active: block_number,
+            created: epoch,
+            active: epoch,
             withdrawn: None,
             nonce: 0,
         }
@@ -284,12 +283,12 @@ impl ActivityMetadata {
     }
 }
 
-fn parse_session_number(input: &[u8]) -> IResult<&[u8], SessionNumber> {
-    let (input, bytes) = take(size_of::<SessionNumber>()).parse(input)?;
-    let session_bytes: [u8; 8] = bytes
+fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
+    let (input, bytes) = take(size_of::<Epoch>()).parse(input)?;
+    let epoch_bytes: [u8; 4] = bytes
         .try_into()
         .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-    Ok((input, SessionNumber::from_le_bytes(session_bytes)))
+    Ok((input, u32::from_le_bytes(epoch_bytes).into()))
 }
 
 #[cfg(test)]

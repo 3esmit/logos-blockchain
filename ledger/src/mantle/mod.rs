@@ -1,4 +1,5 @@
 pub use lb_core::mantle::channel;
+use lb_cryptarchia_engine::Epoch;
 pub mod helpers;
 pub mod leader;
 pub mod sdp;
@@ -21,7 +22,7 @@ use lb_core::{
         },
     },
     sdp::{
-        Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber,
+        Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType,
         locked_notes::LockedNotes,
     },
 };
@@ -66,7 +67,7 @@ impl LedgerState {
     pub fn new(config: &Config, epoch_state: &EpochState) -> Self {
         Self {
             channels: channel::Channels::new(),
-            sdp: sdp::SdpLedger::new()
+            sdp: sdp::SdpLedger::new(epoch_state.epoch())
                 .with_blend_service(&config.sdp_config.service_rewards_params.blend, epoch_state),
             leaders: leader::LeaderState::new(),
         }
@@ -119,12 +120,12 @@ impl LedgerState {
         &self,
         service_type: ServiceType,
     ) -> Option<HashMap<ProviderId, ProviderInfo>> {
-        self.sdp.active_session_providers(service_type)
+        self.sdp.active_providers(service_type)
     }
 
     #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, SessionNumber> {
-        self.sdp.active_sessions()
+    pub fn active_sessions(&self) -> HashMap<ServiceType, Epoch> {
+        self.sdp.active_snapshot_epochs()
     }
 
     #[must_use]

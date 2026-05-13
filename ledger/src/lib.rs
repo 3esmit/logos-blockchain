@@ -27,9 +27,9 @@ use lb_core::{
         tx::{GasPrices, MantleTxContext, MantleTxGasContext},
     },
     proofs::leader_proof,
-    sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
+    sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Field as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
@@ -498,7 +498,7 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, SessionNumber> {
+    pub fn active_sessions(&self) -> HashMap<ServiceType, Epoch> {
         self.mantle_ledger.active_sessions()
     }
 

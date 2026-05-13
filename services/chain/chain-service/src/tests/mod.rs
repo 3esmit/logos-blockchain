@@ -245,31 +245,35 @@ fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
     service_params.insert(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
-            lock_period: 10,
-            inactivity_period: 1,
-            retention_period: 1,
-            timestamp: 0,
-            session_duration: 10,
+            lock_period: 10.into(),
+            inactivity_period: 1.into(),
+            retention_period: 1.into(),
+            epoch: 0.into(),
         },
     );
+    let epoch_config = EpochConfig {
+        epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
+        epoch_period_nonce_buffer: 3.try_into().unwrap(),
+        epoch_period_nonce_stabilization: 4.try_into().unwrap(),
+    };
+    let consensus_config = lb_cryptarchia_engine::Config::new(
+        security_param,
+        NonNegativeRatio::new(1, 10.try_into().unwrap()),
+        1.0.try_into().unwrap(),
+    );
+    let epoch_length = epoch_config
+        .epoch_length(consensus_config.base_period_length())
+        .into();
 
     lb_ledger::Config {
-        epoch_config: EpochConfig {
-            epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
-            epoch_period_nonce_buffer: 3.try_into().unwrap(),
-            epoch_period_nonce_stabilization: 4.try_into().unwrap(),
-        },
-        consensus_config: lb_cryptarchia_engine::Config::new(
-            security_param,
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
-            1.0.try_into().unwrap(),
-        ),
+        epoch_config,
+        consensus_config,
         sdp_config: lb_ledger::mantle::sdp::Config {
             service_params: Arc::new(service_params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
-                    rounds_per_session: 10.try_into().unwrap(),
-                    message_frequency_per_round: 1.0.try_into().unwrap(),
+                    epoch_length,
+                    message_frequency_per_slot: 1.0.try_into().unwrap(),
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),
                     data_replication_factor: 0,

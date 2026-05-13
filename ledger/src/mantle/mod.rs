@@ -116,7 +116,7 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn active_session_providers(
+    pub fn active_providers(
         &self,
         service_type: ServiceType,
     ) -> Option<HashMap<ProviderId, ProviderInfo>> {
@@ -124,7 +124,7 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, Epoch> {
+    pub fn active_snapshot_epochs(&self) -> HashMap<ServiceType, Epoch> {
         self.sdp.active_snapshot_epochs()
     }
 

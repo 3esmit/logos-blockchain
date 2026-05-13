@@ -24,7 +24,7 @@ use futures::{
     FutureExt as _, Stream, StreamExt as _, TryStreamExt as _, future::join_all, stream,
 };
 use lb_chain_broadcast_service::{
-    BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate,
+    ActiveProviders, BlockBroadcastMsg, BlockBroadcastService, BlockInfo,
 };
 use lb_core::{
     block::{Block, genesis::GenesisBlock},
@@ -433,7 +433,7 @@ impl Cryptarchia {
         self.consensus.branches().get(block_id).is_some()
     }
 
-    fn active_session_providers(
+    fn active_providers(
         &self,
         block_id: &HeaderId,
         service_type: ServiceType,
@@ -444,20 +444,20 @@ impl Cryptarchia {
             .ok_or(Error::HeaderIdNotFound(*block_id))?;
 
         ledger
-            .active_session_providers(service_type)
+            .active_providers(service_type)
             .ok_or(Error::ServiceSessionNotFound(service_type))
     }
 
-    fn active_sessions_numbers(
+    fn active_snapshot_epochs(
         &self,
         block_id: &HeaderId,
-    ) -> Result<HashMap<ServiceType, u64>, Error> {
+    ) -> Result<HashMap<ServiceType, Epoch>, Error> {
         let ledger = self
             .ledger
             .state(block_id)
             .ok_or(Error::HeaderIdNotFound(*block_id))?;
 
-        Ok(ledger.active_sessions())
+        Ok(ledger.active_snapshot_epochs())
     }
 }
 
@@ -1022,11 +1022,11 @@ where
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
-        let previous_session_numbers = match cryptarchia.active_sessions_numbers(&prev_lib) {
-            Ok(session_numbers) => session_numbers,
+        let previous_snapshot_epochs = match cryptarchia.active_snapshot_epochs(&prev_lib) {
+            Ok(previous_snapshot_epochs) => previous_snapshot_epochs,
             Err(e) => {
-                warn!("Error getting previous session numbers: {e}");
-                ServiceType::iter().map(|s| (s, 0)).collect()
+                warn!("Error getting previous active snapshot epochs: {e}");
+                ServiceType::iter().map(|s| (s, 0.into())).collect()
             }
         };
 
@@ -1100,11 +1100,11 @@ where
                 warn!("No LIB-update subscribers to notify: {e}");
             }
 
-            Self::broadcast_session_updates_for_block(
+            Self::broadcast_new_active_providers_for_block(
                 cryptarchia,
                 &new_lib,
                 relays,
-                Some(&previous_session_numbers),
+                Some(&previous_snapshot_epochs),
             )
             .await;
         }
@@ -1287,7 +1287,8 @@ where
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
             warn!("No new-block subscribers to notify: {e}");
         }
-        Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
+        Self::broadcast_new_active_providers_for_block(&cryptarchia, &init_tip.id(), relays, None)
+            .await;
 
         // Phase 1: Collect only block IDs in (LIB, tip].
         info!(
@@ -1535,53 +1536,50 @@ where
         (cryptarchia, storage_blocks_to_remove)
     }
 
-    async fn broadcast_session_updates_for_block(
+    async fn broadcast_new_active_providers_for_block(
         cryptarchia: &Cryptarchia,
         block_id: &HeaderId,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        previous_sessions: Option<&HashMap<ServiceType, u64>>,
+        previous_epochs: Option<&HashMap<ServiceType, Epoch>>,
     ) {
-        let Ok(new_sessions) = cryptarchia.active_sessions_numbers(block_id) else {
-            error!("Could not get active session numbers for block {block_id:?}");
+        let Ok(new_epochs) = cryptarchia.active_snapshot_epochs(block_id) else {
+            error!("Could not get active snapshot epochs for block {block_id:?}");
             return;
         };
 
-        for (service, new_session_number) in &new_sessions {
-            Self::handle_service_update(
+        for (service, new_epoch) in &new_epochs {
+            Self::broadcast_new_active_providers(
                 cryptarchia,
                 block_id,
                 relays,
-                previous_sessions,
+                previous_epochs,
                 service,
-                new_session_number,
+                *new_epoch,
             )
             .await;
         }
     }
 
-    async fn handle_service_update(
+    async fn broadcast_new_active_providers(
         cryptarchia: &Cryptarchia,
         block_id: &HeaderId,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        previous_sessions: Option<&HashMap<ServiceType, u64>>,
+        previous_epochs: Option<&HashMap<ServiceType, Epoch>>,
         service: &ServiceType,
-        new_session_number: &u64,
+        new_epoch: Epoch,
     ) {
-        // If `previous_sessions` is provided, check if the session number has changed.
+        // If `previous_epochs` is provided, check if the epoch has changed.
         // Otherwise, always broadcast (for initialization).
-        if previous_sessions.is_some_and(|prev| {
-            prev.get(service)
-                .copied()
-                .expect("previous session number is set")
-                == *new_session_number
+        if previous_epochs.is_some_and(|prev| {
+            prev.get(service).copied().expect("previous epoch is set") == new_epoch
         }) {
             return;
         }
 
-        match cryptarchia.active_session_providers(block_id, *service) {
+        match cryptarchia.active_providers(block_id, *service) {
             Ok(providers) => {
-                let update = SessionUpdate {
-                    session_number: *new_session_number,
+                let new_active_providers = ActiveProviders {
+                    epoch: new_epoch,
                     providers,
                 };
 
@@ -1589,16 +1587,16 @@ where
 
                 let broadcast_future = match service {
                     ServiceType::BlendNetwork => {
-                        broadcast_blend_session(broadcast_relay, update).boxed()
+                        broadcast_blend_providers(broadcast_relay, new_active_providers).boxed()
                     }
                 };
 
                 if let Err(e) = broadcast_future.await {
-                    error!("Failed to broadcast session update for {service:?}: {e}");
+                    error!("Failed to broadcast new active providers for {service:?}: {e}");
                 }
             }
             Err(e) => {
-                error!("Could not get session providers for service {service:?}: {e}");
+                error!("Could not get new active providers for service {service:?}: {e}");
             }
         }
     }
@@ -1614,12 +1612,12 @@ async fn broadcast_finalized_block(
         .map_err(|(error, _)| Box::new(error) as DynError)
 }
 
-async fn broadcast_blend_session(
+async fn broadcast_blend_providers(
     broadcast_relay: &BroadcastRelay,
-    session: SessionUpdate,
+    providers: ActiveProviders,
 ) -> Result<(), DynError> {
     broadcast_relay
-        .send(BlockBroadcastMsg::BroadcastBlendSession(session))
+        .send(BlockBroadcastMsg::BroadcastBlendProviders(providers))
         .await
         .map_err(|(error, _)| Box::new(error) as DynError)
 }

@@ -6,6 +6,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 use lb_blend::scheduling::membership::Membership;
+use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
@@ -17,16 +18,13 @@ pub struct MembershipInfo<NodeId> {
     pub membership: Membership<NodeId>,
     // `None` if membership is empty.
     pub zk: Option<ZkInfo>,
-    pub session_number: u64,
+    pub epoch: Epoch,
 }
 
 impl<NodeId> MembershipInfo<NodeId> {
     #[cfg(test)]
     #[must_use]
-    pub fn from_membership_and_session_number(
-        membership: Membership<NodeId>,
-        session_number: u64,
-    ) -> Self {
+    pub fn from_membership_and_epoch(membership: Membership<NodeId>, epoch: Epoch) -> Self {
         let zk = if membership.is_empty() {
             None
         } else {
@@ -35,19 +33,19 @@ impl<NodeId> MembershipInfo<NodeId> {
         Self {
             membership,
             zk,
-            session_number,
+            epoch,
         }
     }
 }
 
 #[derive(Clone)]
 #[cfg_attr(test, derive(Default))]
-/// ZK info for a new session.
+/// ZK info for a new epoch.
 pub struct ZkInfo {
     /// The merkle root of the ZK public keys of all core nodes.
     pub root: ZkHash,
     /// The merkle path (and selectors) proving the node's ZK public key is part
-    /// of the session merkle tree. This is `None` for edge nodes.
+    /// of the epoch merkle tree. This is `None` for edge nodes.
     pub core_and_path_selectors: Option<CorePathAndSelectors>,
 }
 

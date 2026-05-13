@@ -490,16 +490,16 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn active_session_providers(
+    pub fn active_providers(
         &self,
         service_type: ServiceType,
     ) -> Option<HashMap<ProviderId, ProviderInfo>> {
-        self.mantle_ledger.active_session_providers(service_type)
+        self.mantle_ledger.active_providers(service_type)
     }
 
     #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, Epoch> {
-        self.mantle_ledger.active_sessions()
+    pub fn active_snapshot_epochs(&self) -> HashMap<ServiceType, Epoch> {
+        self.mantle_ledger.active_snapshot_epochs()
     }
 
     #[must_use]

@@ -4251,6 +4251,7 @@ dependencies = [
  "derivative",
  "futures",
  "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
  "overwatch",
  "serde",
  "tokio",

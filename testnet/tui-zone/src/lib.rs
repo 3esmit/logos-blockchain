@@ -192,6 +192,7 @@ pub async fn run_setup(args: SetupArgs) {
     let channel_id_bytes: [u8; 32] = admin_pk.to_bytes();
     let channel_id = ChannelId::from(channel_id_bytes);
     let channel_id_hex = hex::encode(channel_id.as_ref());
+    println!("Channel ID: {channel_id_hex}");
 
     let pubkeys: Vec<_> = keys.iter().map(Ed25519Key::public_key).collect();
 

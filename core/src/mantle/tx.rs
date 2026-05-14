@@ -287,11 +287,19 @@ impl Transaction for MantleTx {
 
 impl TransactionDependencies for MantleTx {
     fn consumes(&self) -> impl Iterator<Item = DependencyId> {
-        self.ops().iter().flat_map(Op::consumes)
+        let consumes: HashSet<DependencyId> = self.ops().iter().flat_map(Op::consumes).collect();
+        let produces: HashSet<DependencyId> = self.ops().iter().flat_map(Op::produces).collect();
+        let external_consumes: HashSet<DependencyId> =
+            consumes.difference(&produces).cloned().collect();
+        external_consumes.into_iter()
     }
 
     fn produces(&self) -> impl Iterator<Item = DependencyId> {
-        self.ops().iter().flat_map(Op::produces)
+        let consumes: HashSet<DependencyId> = self.ops().iter().flat_map(Op::consumes).collect();
+        let produces: HashSet<DependencyId> = self.ops().iter().flat_map(Op::produces).collect();
+        let external_produces: HashSet<DependencyId> =
+            produces.difference(&consumes).cloned().collect();
+        external_produces.into_iter()
     }
 }
 

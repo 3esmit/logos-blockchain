@@ -64,7 +64,7 @@ where
         event: &ProcessedBlockEvent,
     ) -> Result<(), ForksTrackerError> {
         let ProcessedBlockEvent { block_id, tip, .. } = event;
-        let BlockInfo {
+        let BlockInfo::<Tx> {
             parent,
             transactions,
         } = self.block_getter.get_block(block_id).await?;
@@ -75,9 +75,9 @@ where
             .get(&parent)
             .or_else(|| self.states.get(&parent))
             .ok_or(ForksTrackerError::ParentNotFound(parent))?;
-        let mut block_state = parent_state.clone();
+        let mut block_state: TxTrackerState<_, _> = parent_state.clone();
         for tx in transactions {
-            block_state.process_tx(tx);
+            block_state.tx_in_block(&tx.hash());
         }
         // Move parent from tip frontier to historical states, preserving its own
         // accumulated state (not the child block's). No-op if it was already
@@ -105,7 +105,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -305,66 +305,79 @@ mod tests {
         }
     }
 
-    /// A tx included in block B is in B's state but absent from C's state;
-    /// a tx included in C is absent from B's state. Fork states are fully
-    /// independent.
+    /// Txs confirmed in block B are removed from the mempool view on fork B
+    /// (processed_deps updated) while remaining pending on fork C; and vice
+    /// versa for txs confirmed in C. Fork states are fully independent.
     #[tokio::test]
     async fn test_fork_states_are_independent() {
         let genesis = id(0);
         let a = id(1);
-        let b = id(2); // fork 1: A → B (includes tx_b)
-        let c = id(3); // fork 2: A → C (includes tx_c)
+        let b = id(2); // fork 1: A → B (confirms tx_b)
+        let c = id(3); // fork 2: A → C (confirms tx_c)
 
         let tx_b = tx("tx_b", vec![], vec!["out_b"]);
         let tx_c = tx("tx_c", vec![], vec!["out_c"]);
 
         let mut getter = MockGetter::new();
         getter.insert(a, genesis, vec![]);
-        getter.insert(b, a, vec![tx_b]);
-        getter.insert(c, a, vec![tx_c]);
+        getter.insert(b, a, vec![tx_b.clone()]);
+        getter.insert(c, a, vec![tx_c.clone()]);
 
         let mut tracker = ForksTracker::new(getter);
         seed_genesis(&mut tracker, genesis).await;
 
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
+
+        // Both txs arrive in the mempool before either block is processed.
+        tracker.process_new_tx(&tx_b);
+        tracker.process_new_tx(&tx_c);
+
         tracker.process_new_block(&block_event(b, b)).await.unwrap();
         tracker.process_new_block(&block_event(c, c)).await.unwrap();
 
         let state_b = tracker.get_block_state(&b).unwrap();
         let state_c = tracker.get_block_state(&c).unwrap();
 
-        assert!(state_b.is_ready(&TestTxId("tx_b")));
-        assert!(!state_b.is_ready(&TestTxId("tx_c")));
-        assert!(!state_b.is_orphan(&TestTxId("tx_c")));
+        // Fork B: tx_b is confirmed (removed from ready, dep recorded).
+        //         tx_c is still pending (ready) — it was in the mempool but not included in B.
+        assert!(!state_b.is_ready(&TestTxId("tx_b")));
+        assert!(!state_b.is_orphan(&TestTxId("tx_b")));
+        assert!(state_b.has_processed_dep(&Bytes::from_static(b"out_b")));
+        assert!(state_b.is_ready(&TestTxId("tx_c")));
+        assert!(!state_b.has_processed_dep(&Bytes::from_static(b"out_c")));
 
-        assert!(state_c.is_ready(&TestTxId("tx_c")));
-        assert!(!state_c.is_ready(&TestTxId("tx_b")));
-        assert!(!state_c.is_orphan(&TestTxId("tx_b")));
+        // Fork C: tx_c is confirmed; tx_b is still pending (ready).
+        assert!(!state_c.is_ready(&TestTxId("tx_c")));
+        assert!(!state_c.is_orphan(&TestTxId("tx_c")));
+        assert!(state_c.has_processed_dep(&Bytes::from_static(b"out_c")));
+        assert!(state_c.is_ready(&TestTxId("tx_b")));
+        assert!(!state_c.has_processed_dep(&Bytes::from_static(b"out_b")));
     }
 
-    /// A mempool tx submitted before the fork is orphaned on all tips because
-    /// its dependency producer is only included in block B (not yet confirmed
-    /// via `tx_in_block`). On fork C the producer is entirely absent.
+    /// An orphan tx gets resolved on the fork that confirms its dependency
+    /// producer, but stays orphaned on the fork where the producer remains
+    /// unconfirmed. This is the key fork-isolation property.
     #[tokio::test]
-    async fn test_mempool_orphan_present_on_both_forks_producer_only_on_one() {
+    async fn test_mempool_orphan_resolved_differently_per_fork() {
         let genesis = id(0);
         let a = id(1);
-        let b = id(2); // includes tx_producer → produces dep "X"
-        let c = id(3); // does NOT include tx_producer
+        let b = id(2); // confirms tx_producer → dep "X" recorded
+        let c = id(3); // does NOT confirm tx_producer
 
         let tx_producer = tx("tx_producer", vec![], vec!["X"]);
 
         let mut getter = MockGetter::new();
         getter.insert(a, genesis, vec![]);
-        getter.insert(b, a, vec![tx_producer]);
+        getter.insert(b, a, vec![tx_producer.clone()]);
         getter.insert(c, a, vec![]);
 
         let mut tracker = ForksTracker::new(getter);
         seed_genesis(&mut tracker, genesis).await;
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
 
-        // orphan tx submitted before the fork blocks arrive
+        // Both txs arrive in the mempool; tx_consumer is orphaned until "X" is produced.
         tracker.process_new_tx(&tx("tx_consumer", vec!["X"], vec!["Y"]));
+        tracker.process_new_tx(&tx_producer);
 
         tracker.process_new_block(&block_event(b, b)).await.unwrap();
         tracker.process_new_block(&block_event(c, c)).await.unwrap();
@@ -372,14 +385,13 @@ mod tests {
         let state_b = tracker.get_block_state(&b).unwrap();
         let state_c = tracker.get_block_state(&c).unwrap();
 
-        // B: tx_producer is in the block (added as ready); tx_consumer is still
-        // orphaned because process_new_block uses process_tx, not tx_in_block.
-        assert!(state_b.is_ready(&TestTxId("tx_producer")));
-        assert!(state_b.is_orphan(&TestTxId("tx_consumer")));
+        // Fork B: tx_producer confirmed → dep "X" recorded → tx_consumer promoted to ready.
+        assert!(!state_b.is_ready(&TestTxId("tx_producer")));
+        assert!(!state_b.is_orphan(&TestTxId("tx_producer")));
+        assert!(state_b.is_ready(&TestTxId("tx_consumer")));
 
-        // C: tx_producer was never added; tx_consumer is also orphaned.
-        assert!(!state_c.is_ready(&TestTxId("tx_producer")));
-        assert!(!state_c.is_orphan(&TestTxId("tx_producer")));
+        // Fork C: tx_producer still pending (ready); tx_consumer still orphaned.
+        assert!(state_c.is_ready(&TestTxId("tx_producer")));
         assert!(state_c.is_orphan(&TestTxId("tx_consumer")));
     }
 

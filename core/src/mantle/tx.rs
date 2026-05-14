@@ -1096,4 +1096,163 @@ mod tests {
             })
         );
     }
+
+    // ── TransactionDependencies tests ────────────────────────────────────────
+    //
+    // These tests verify that MantleTx correctly filters out dependencies that
+    // are both produced and consumed within the same transaction (internal
+    // deps), exposing only the truly external consume/produce surface.
+    mod transaction_dependencies {
+        use std::collections::HashSet;
+
+        use lb_key_management_system_keys::keys::Ed25519Key;
+
+        use crate::mantle::{
+            DependencyId, MantleTx, TransactionDependencies as _,
+            ops::{
+                Op,
+                channel::{MsgId, inscribe::InscriptionOp},
+            },
+        };
+
+        // ── helpers ──────────────────────────────────────────────────────────
+
+        fn inscribe_op(channel: [u8; 32], parent: MsgId, content: &[u8]) -> InscriptionOp {
+            InscriptionOp {
+                channel_id: channel.into(),
+                inscription: content.to_vec(),
+                parent,
+                signer: Ed25519Key::from_bytes(&[1; 32]).public_key(),
+            }
+        }
+
+        fn dep(msg_id: MsgId) -> DependencyId {
+            DependencyId::copy_from_slice(msg_id.as_ref())
+        }
+
+        fn op_dep(op: &InscriptionOp) -> DependencyId {
+            DependencyId::copy_from_slice(op.id().as_ref())
+        }
+
+        fn tx_consumes(tx: &MantleTx) -> HashSet<DependencyId> {
+            tx.consumes().collect()
+        }
+
+        fn tx_produces(tx: &MantleTx) -> HashSet<DependencyId> {
+            tx.produces().collect()
+        }
+
+        // ── tests ─────────────────────────────────────────────────────────────
+
+        #[test]
+        fn empty_tx_has_no_deps() {
+            let tx = MantleTx(vec![]);
+            assert!(tx_consumes(&tx).is_empty());
+            assert!(tx_produces(&tx).is_empty());
+        }
+
+        /// A single op with no internal counterpart: parent is an external
+        /// consume, the op's own id is an external produce.
+        #[test]
+        fn single_inscribe_all_deps_are_external() {
+            let op = inscribe_op([1; 32], MsgId::root(), b"hello");
+            let parent_dep = dep(MsgId::root());
+            let self_dep = op_dep(&op);
+
+            let tx = MantleTx(vec![Op::ChannelInscribe(op)]);
+
+            assert_eq!(tx_consumes(&tx), HashSet::from([parent_dep]));
+            assert_eq!(tx_produces(&tx), HashSet::from([self_dep]));
+        }
+
+        /// op1 produces X (its id); op2 consumes X (op1.id() as its parent).
+        /// X is internal and must NOT appear in external consumes.
+        #[test]
+        fn internal_dep_excluded_from_external_consumes() {
+            let op1 = inscribe_op([1; 32], MsgId::root(), b"first");
+            let op1_id = op1.id();
+            let op2 = inscribe_op([1; 32], op1_id, b"second");
+
+            let internal_dep = dep(op1_id);
+            let tx = MantleTx(vec![Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)]);
+
+            assert!(!tx_consumes(&tx).contains(&internal_dep));
+        }
+
+        /// Same scenario: the internally-linked dep must NOT appear in external
+        /// produces either.
+        #[test]
+        fn internal_dep_excluded_from_external_produces() {
+            let op1 = inscribe_op([1; 32], MsgId::root(), b"first");
+            let op1_id = op1.id();
+            let op2 = inscribe_op([1; 32], op1_id, b"second");
+
+            let internal_dep = dep(op1_id);
+            let tx = MantleTx(vec![Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)]);
+
+            assert!(!tx_produces(&tx).contains(&internal_dep));
+        }
+
+        /// For a chain root → op1_id → op2_id, only the chain endpoints
+        /// (root and op2_id) are visible externally.
+        #[test]
+        fn chained_inscribes_expose_only_external_endpoints() {
+            let op1 = inscribe_op([1; 32], MsgId::root(), b"first");
+            let op1_id = op1.id();
+            let op2 = inscribe_op([1; 32], op1_id, b"second");
+            let op2_dep = op_dep(&op2);
+
+            let tx = MantleTx(vec![Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)]);
+
+            assert_eq!(tx_consumes(&tx), HashSet::from([dep(MsgId::root())]));
+            assert_eq!(tx_produces(&tx), HashSet::from([op2_dep]));
+        }
+
+        /// Two inscribes with distinct, unrelated parents produce no internal
+        /// deps — every consume and produce is external.
+        #[test]
+        fn independent_ops_all_deps_external() {
+            let root_a = MsgId::from([1; 32]);
+            let root_b = MsgId::from([2; 32]);
+            let op1 = inscribe_op([10; 32], root_a, b"chain_a");
+            let op2 = inscribe_op([20; 32], root_b, b"chain_b");
+            let op1_dep = op_dep(&op1);
+            let op2_dep = op_dep(&op2);
+
+            let tx = MantleTx(vec![Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)]);
+
+            assert_eq!(tx_consumes(&tx), HashSet::from([dep(root_a), dep(root_b)]));
+            assert_eq!(tx_produces(&tx), HashSet::from([op1_dep, op2_dep]));
+        }
+
+        /// One internal chain (root_a → op1_id → op2_id) combined with one
+        /// standalone op (root_b → op3_id). Only the external endpoints of
+        /// each sub-graph are visible.
+        #[test]
+        fn mixed_internal_and_external_deps() {
+            let root_a = MsgId::root();
+            let root_b = MsgId::from([9; 32]);
+
+            let op1 = inscribe_op([1; 32], root_a, b"a1");
+            let op1_id = op1.id();
+            let op2 = inscribe_op([1; 32], op1_id, b"a2");
+            let op2_id = op2.id();
+            let op3 = inscribe_op([3; 32], root_b, b"b1");
+            let op3_id = op3.id();
+
+            let tx = MantleTx(vec![
+                Op::ChannelInscribe(op1),
+                Op::ChannelInscribe(op2),
+                Op::ChannelInscribe(op3),
+            ]);
+
+            let consumes = tx_consumes(&tx);
+            let produces = tx_produces(&tx);
+
+            assert_eq!(consumes, HashSet::from([dep(root_a), dep(root_b)]));
+            assert_eq!(produces, HashSet::from([dep(op2_id), dep(op3_id)]));
+            assert!(!consumes.contains(&dep(op1_id)));
+            assert!(!produces.contains(&dep(op1_id)));
+        }
+    }
 }

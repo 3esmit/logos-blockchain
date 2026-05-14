@@ -15,9 +15,18 @@ where
     frontier_deps: HashTrieSet<DependencyId>,
 }
 
-impl<Tx> TxTrackerState<Tx, Tx::Hash>
+impl<Tx, TxId> Default for TxTrackerState<Tx, TxId>
 where
-    Tx: TransactionDependencies + Clone,
+    TxId: Eq + Hash,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<Tx, TxId> TxTrackerState<Tx, TxId>
+where
+    TxId: Eq + Hash,
 {
     pub fn new() -> Self {
         Self {
@@ -29,6 +38,19 @@ where
         }
     }
 
+    pub fn with_frontier_deps(frontier_deps: impl IntoIterator<Item = DependencyId>) -> Self {
+        let default = Self::default();
+        Self {
+            frontier_deps: HashTrieSet::from_iter(frontier_deps),
+            ..default
+        }
+    }
+}
+
+impl<Tx> TxTrackerState<Tx, Tx::Hash>
+where
+    Tx: TransactionDependencies + Clone,
+{
     pub fn process_tx(&mut self, tx: Tx) {
         let consumes: HashSet<DependencyId> = tx.consumes().collect();
         let missing_deps: HashSet<DependencyId> = consumes

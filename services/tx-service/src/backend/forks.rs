@@ -306,7 +306,7 @@ mod tests {
     }
 
     /// Txs confirmed in block B are removed from the mempool view on fork B
-    /// (processed_deps updated) while remaining pending on fork C; and vice
+    /// (`processed_deps` updated) while remaining pending on fork C; and vice
     /// versa for txs confirmed in C. Fork states are fully independent.
     #[tokio::test]
     async fn test_fork_states_are_independent() {
@@ -339,7 +339,8 @@ mod tests {
         let state_c = tracker.get_block_state(&c).unwrap();
 
         // Fork B: tx_b is confirmed (removed from ready, dep recorded).
-        //         tx_c is still pending (ready) — it was in the mempool but not included in B.
+        //         tx_c is still pending (ready) — it was in the mempool but not
+        // included in B.
         assert!(!state_b.is_ready(&TestTxId("tx_b")));
         assert!(!state_b.is_orphan(&TestTxId("tx_b")));
         assert!(state_b.has_processed_dep(&Bytes::from_static(b"out_b")));
@@ -375,7 +376,8 @@ mod tests {
         seed_genesis(&mut tracker, genesis).await;
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
 
-        // Both txs arrive in the mempool; tx_consumer is orphaned until "X" is produced.
+        // Both txs arrive in the mempool; tx_consumer is orphaned until "X" is
+        // produced.
         tracker.process_new_tx(&tx("tx_consumer", vec!["X"], vec!["Y"]));
         tracker.process_new_tx(&tx_producer);
 
@@ -385,7 +387,8 @@ mod tests {
         let state_b = tracker.get_block_state(&b).unwrap();
         let state_c = tracker.get_block_state(&c).unwrap();
 
-        // Fork B: tx_producer confirmed → dep "X" recorded → tx_consumer promoted to ready.
+        // Fork B: tx_producer confirmed → dep "X" recorded → tx_consumer promoted to
+        // ready.
         assert!(!state_b.is_ready(&TestTxId("tx_producer")));
         assert!(!state_b.is_orphan(&TestTxId("tx_producer")));
         assert!(state_b.is_ready(&TestTxId("tx_consumer")));

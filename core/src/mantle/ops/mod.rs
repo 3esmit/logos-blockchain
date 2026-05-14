@@ -191,7 +191,7 @@ impl Op {
     pub fn produces(&self) -> impl Iterator<Item = DependencyId> {
         match self {
             Self::ChannelInscribe(op) => Box::new(std::iter::once(DependencyId::copy_from_slice(
-                Hasher::digest(&op.inscription).as_slice(),
+                op.id().as_ref(),
             ))) as Box<dyn Iterator<Item = DependencyId>>,
             Self::Transfer(op) => Box::new(
                 op.outputs

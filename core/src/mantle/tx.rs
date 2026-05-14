@@ -1165,7 +1165,7 @@ mod tests {
             assert_eq!(tx_produces(&tx), HashSet::from([self_dep]));
         }
 
-        /// op1 produces X (its id); op2 consumes X (op1.id() as its parent).
+        /// op1 produces X (its id); op2 consumes X (`op1.id()` as its parent).
         /// X is internal and must NOT appear in external consumes.
         #[test]
         fn internal_dep_excluded_from_external_consumes() {
@@ -1193,8 +1193,8 @@ mod tests {
             assert!(!tx_produces(&tx).contains(&internal_dep));
         }
 
-        /// For a chain root → op1_id → op2_id, only the chain endpoints
-        /// (root and op2_id) are visible externally.
+        /// For a chain root → `op1_id` → `op2_id`, only the chain endpoints
+        /// (root and `op2_id`) are visible externally.
         #[test]
         fn chained_inscribes_expose_only_external_endpoints() {
             let op1 = inscribe_op([1; 32], MsgId::root(), b"first");
@@ -1225,9 +1225,9 @@ mod tests {
             assert_eq!(tx_produces(&tx), HashSet::from([op1_dep, op2_dep]));
         }
 
-        /// One internal chain (root_a → op1_id → op2_id) combined with one
-        /// standalone op (root_b → op3_id). Only the external endpoints of
-        /// each sub-graph are visible.
+        /// One internal chain (`root_a` → `op1_id` → `op2_id`) combined with
+        /// one standalone op (`root_b` → `op3_id`). Only the external
+        /// endpoints of each sub-graph are visible.
         #[test]
         fn mixed_internal_and_external_deps() {
             let root_a = MsgId::root();

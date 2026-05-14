@@ -12,8 +12,7 @@ where
     orphan_txs: HashTrieMap<TxId, Tx>,
     dep_to_tx: HashTrieMap<DependencyId, HashTrieSet<TxId>>,
     tx_pending_count: HashTrieMap<TxId, usize>,
-    // TODO: Replace later for the current ledger state
-    processed_deps: HashSet<DependencyId>,
+    frontier_deps: HashTrieSet<DependencyId>,
 }
 
 impl<Tx> TxTrackerState<Tx, Tx::Hash>
@@ -26,14 +25,16 @@ where
             orphan_txs: HashTrieMap::new(),
             dep_to_tx: HashTrieMap::new(),
             tx_pending_count: HashTrieMap::new(),
-            processed_deps: HashSet::new(),
+            frontier_deps: HashTrieSet::new(),
         }
     }
 
     pub fn process_tx(&mut self, tx: Tx) {
         let consumes: HashSet<DependencyId> = tx.consumes().collect();
-        let missing_deps: HashSet<DependencyId> =
-            consumes.difference(&self.processed_deps).cloned().collect();
+        let missing_deps: HashSet<DependencyId> = consumes
+            .difference(&HashSet::from_iter(self.frontier_deps.iter().cloned()))
+            .cloned()
+            .collect();
         let pending_deps_count = missing_deps.len();
         if missing_deps.is_empty() {
             self.ready_txs.insert_mut(tx.hash(), tx);
@@ -54,7 +55,7 @@ where
 
     pub fn tx_in_block(&mut self, tx_id: &Tx::Hash) {
         if let Some(tx) = pop(&mut self.ready_txs, tx_id) {
-            self.processed_deps.extend(tx.produces());
+            self.update_frontier_deps(&tx);
             for dep in tx.produces() {
                 let Some(waiting_ids) = self.dep_to_tx.get(&dep) else {
                     continue;
@@ -70,6 +71,15 @@ where
                     }
                 }
             }
+        }
+    }
+
+    fn update_frontier_deps(&mut self, tx: &Tx) {
+        for dep_id in tx.produces() {
+            self.frontier_deps.insert_mut(dep_id);
+        }
+        for dep_id in tx.consumes() {
+            self.frontier_deps.remove_mut(&dep_id);
         }
     }
 }
@@ -88,7 +98,7 @@ where
     }
 
     pub fn has_processed_dep(&self, dep: &DependencyId) -> bool {
-        self.processed_deps.contains(dep)
+        self.frontier_deps.contains(dep)
     }
 
     pub fn ready_count(&self) -> usize {
@@ -194,7 +204,7 @@ mod tests {
     #[test]
     fn test_diamond_dependency_graph() {
         let mut tracker: TxTrackerState<TestTx, TestTxId> = TxTrackerState::new();
-        tracker.processed_deps.insert(dep("root"));
+        tracker.frontier_deps.insert_mut(dep("root"));
 
         let tx_genesis = tx("tx_genesis", vec!["root"], vec!["genesis"]);
         let tx_mint_a = tx("tx_mint_a", vec!["genesis"], vec!["token_a"]);

@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
-    pin,
     pin::pin,
 };
 
@@ -11,7 +10,6 @@ use lb_core::{
     header::HeaderId,
     mantle::{DependencyId, TransactionDependencies},
 };
-use lb_ledger::LedgerState;
 use tracing::error;
 
 use super::tracker::TxTrackerState;
@@ -29,10 +27,10 @@ pub trait BlockInfoGetter<Tx> {
 
 #[async_trait::async_trait]
 pub trait LedgerStateGetter {
-    async fn get_ledger_state(
+    async fn get_ledger_deps(
         &self,
         header_id: &HeaderId,
-    ) -> Result<Option<LedgerState>, ForksTrackerError>;
+    ) -> Result<HashSet<DependencyId>, ForksTrackerError>;
 }
 
 #[derive(Debug)]
@@ -113,33 +111,28 @@ where
     }
 
     pub async fn process_new_tx(&mut self, tx: &Tx) {
-        let tips_len = self.current_tips.len();
+        let Self { current_tips, .. } = self;
+        let tips_len = current_tips.len();
         let ledger_getter: LedgerGetter = self.ledger_getter.clone();
+        let header_ids: Vec<_> = current_tips.keys().cloned().collect();
         let mut ledger_states = pin!(
             tokio_stream::iter(
-                self.current_tips
-                    .keys()
+                header_ids
+                    .into_iter()
                     .zip(std::iter::repeat_with(|| ledger_getter.clone()))
             )
-            .then(|(header_id, ledger_getter)| async move {
-                let ledger_state = ledger_getter.get_ledger_state(&header_id).await;
+            .then(async |(header_id, ledger_getter)| {
+                let ledger_state = ledger_getter.get_ledger_deps(&header_id).await;
                 (header_id, ledger_state)
             })
         );
         while let Some((header_id, ledger_state)) = ledger_states.next().await {
-            let state = self
-                .states
+            let state = current_tips
                 .get_mut(&header_id)
                 .expect("This header at this point is always present");
             match ledger_state {
-                Ok(Some(ledger_state)) => {
-                    state.process_tx(
-                        tx.clone(),
-                        &LedgerStateInspector::new(ledger_state).dependencies(),
-                    );
-                }
-                Ok(None) => {
-                    error!("Ledger state not found for block{header_id}");
+                Ok(ledger_state_deps) => {
+                    state.process_tx(tx.clone(), &ledger_state_deps);
                 }
                 Err(e) => {
                     error!("Error getting ledger state for block {header_id}: {e:?}");
@@ -158,7 +151,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::{BTreeMap, HashMap, HashSet};
 
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -168,7 +161,7 @@ mod tests {
         mantle::{DependencyId, Transaction, TransactionDependencies, TransactionHasher},
     };
 
-    use super::{BlockInfo, BlockInfoGetter, ForksTracker, ForksTrackerError};
+    use super::{BlockInfo, BlockInfoGetter, ForksTracker, ForksTrackerError, LedgerStateGetter};
     use crate::backend::tracker::TxTrackerState;
 
     // ── mock transaction ─────────────────────────────────────────────────────
@@ -236,6 +229,37 @@ mod tests {
         }
     }
 
+    // ── mock ledger getter ───────────────────────────────────────────────────
+
+    /// Returns a configurable per-tip frontier. Unknown tips get an empty set.
+    #[derive(Clone, Default)]
+    struct MockLedgerGetter(HashMap<HeaderId, HashSet<DependencyId>>);
+
+    impl MockLedgerGetter {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn with_deps(
+            mut self,
+            header_id: HeaderId,
+            deps: impl IntoIterator<Item = DependencyId>,
+        ) -> Self {
+            self.0.insert(header_id, deps.into_iter().collect());
+            self
+        }
+    }
+
+    #[async_trait]
+    impl LedgerStateGetter for MockLedgerGetter {
+        async fn get_ledger_deps(
+            &self,
+            header_id: &HeaderId,
+        ) -> Result<HashSet<DependencyId>, ForksTrackerError> {
+            Ok(self.0.get(header_id).cloned().unwrap_or_default())
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     fn id(n: u8) -> HeaderId {
@@ -275,7 +299,7 @@ mod tests {
     /// Seed the tracker with an initial genesis tip so all tests start with a
     /// known frontier entry.
     async fn seed_genesis(
-        tracker: &mut ForksTracker<TestTx, TestTxId, MockGetter>,
+        tracker: &mut ForksTracker<TestTx, TestTxId, MockGetter, MockLedgerGetter>,
         genesis: HeaderId,
     ) {
         let root = id(255);
@@ -303,7 +327,7 @@ mod tests {
         getter.insert(b, a, vec![]);
         getter.insert(c, b, vec![]);
 
-        let mut tracker = ForksTracker::new(getter);
+        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
         seed_genesis(&mut tracker, genesis).await;
 
         assert_eq!(tracker.current_tips.len(), 1);
@@ -342,7 +366,7 @@ mod tests {
         getter.insert(b, a, vec![]);
         getter.insert(c, a, vec![]);
 
-        let mut tracker = ForksTracker::new(getter);
+        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
         seed_genesis(&mut tracker, genesis).await;
 
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
@@ -351,8 +375,9 @@ mod tests {
 
         assert_eq!(tracker.current_tips.len(), 2);
 
-        let empty_frontier = std::collections::HashSet::new();
-        tracker.process_new_tx(&tx("mempool_tx", vec![], vec!["dep_x"]), &empty_frontier);
+        tracker
+            .process_new_tx(&tx("mempool_tx", vec![], vec!["dep_x"]))
+            .await;
 
         for state in tracker.current_tips.values() {
             assert!(state.is_ready(&TestTxId("mempool_tx")));
@@ -377,15 +402,14 @@ mod tests {
         getter.insert(b, a, vec![tx_b.clone()]);
         getter.insert(c, a, vec![tx_c.clone()]);
 
-        let mut tracker = ForksTracker::new(getter);
+        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
         seed_genesis(&mut tracker, genesis).await;
 
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
 
         // Both txs arrive in the mempool before either block is processed.
-        let empty_frontier = std::collections::HashSet::new();
-        tracker.process_new_tx(&tx_b, &empty_frontier);
-        tracker.process_new_tx(&tx_c, &empty_frontier);
+        tracker.process_new_tx(&tx_b).await;
+        tracker.process_new_tx(&tx_c).await;
 
         tracker.process_new_block(&block_event(b, b)).await.unwrap();
         tracker.process_new_block(&block_event(c, c)).await.unwrap();
@@ -422,15 +446,16 @@ mod tests {
         getter.insert(b, a, vec![tx_producer.clone()]);
         getter.insert(c, a, vec![]);
 
-        let mut tracker = ForksTracker::new(getter);
+        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
         seed_genesis(&mut tracker, genesis).await;
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
 
         // Both txs arrive in the mempool; tx_consumer is orphaned until "X" is
         // produced.
-        let empty_frontier = std::collections::HashSet::new();
-        tracker.process_new_tx(&tx("tx_consumer", vec!["X"], vec!["Y"]), &empty_frontier);
-        tracker.process_new_tx(&tx_producer, &empty_frontier);
+        tracker
+            .process_new_tx(&tx("tx_consumer", vec!["X"], vec!["Y"]))
+            .await;
+        tracker.process_new_tx(&tx_producer).await;
 
         tracker.process_new_block(&block_event(b, b)).await.unwrap();
         tracker.process_new_block(&block_event(c, c)).await.unwrap();
@@ -463,7 +488,7 @@ mod tests {
         getter.insert(b, a, vec![]);
         getter.insert(c, b, vec![]);
 
-        let mut tracker = ForksTracker::new(getter);
+        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
         seed_genesis(&mut tracker, genesis).await;
 
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
@@ -496,7 +521,7 @@ mod tests {
         getter.insert(b, a, vec![]);
         getter.insert(d, a, vec![]);
 
-        let mut tracker = ForksTracker::new(getter);
+        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
         seed_genesis(&mut tracker, genesis).await;
 
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
@@ -519,7 +544,7 @@ mod tests {
         let mut getter = MockGetter::new();
         getter.insert(orphan, id(50), vec![]);
 
-        let mut tracker = ForksTracker::new(getter);
+        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
 
         let result = tracker
             .process_new_block(&block_event(orphan, orphan))
@@ -533,7 +558,7 @@ mod tests {
         let unknown = id(99);
         let getter = MockGetter::new(); // empty — will return BlockNotFound
 
-        let mut tracker = ForksTracker::new(getter);
+        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
 
         let result = tracker
             .process_new_block(&block_event(unknown, unknown))

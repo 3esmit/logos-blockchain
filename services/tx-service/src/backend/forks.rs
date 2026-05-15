@@ -121,10 +121,11 @@ where
                     .into_iter()
                     .zip(std::iter::repeat_with(|| ledger_getter.clone()))
             )
-            .then(async |(header_id, ledger_getter)| {
+            .map(async |(header_id, ledger_getter)| {
                 let ledger_state = ledger_getter.get_ledger_deps(&header_id).await;
                 (header_id, ledger_state)
             })
+            .buffer_unordered(tips_len)
         );
         while let Some((header_id, ledger_state)) = ledger_states.next().await {
             let state = current_tips

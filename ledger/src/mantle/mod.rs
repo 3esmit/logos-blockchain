@@ -9,9 +9,11 @@ use lb_core::{
     crypto::ZkHasher,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
+        channel::ChannelState,
         ledger::Operation as _,
         ops::{
             channel::{
+                MsgId,
                 inscribe::{InscriptionOp, InscriptionValidationContext},
                 set_keys::{SetKeysOp, SetKeysValidationContext},
             },
@@ -112,6 +114,14 @@ impl LedgerState {
     #[must_use]
     pub fn update_channels(self, channels: channel::Channels) -> Self {
         Self { channels, ..self }
+    }
+
+    #[must_use]
+    pub fn inscriptions_tips(&self) -> impl Iterator<Item = MsgId> {
+        self.channels
+            .channels
+            .values()
+            .map(|state: &ChannelState| state.tip)
     }
 
     #[must_use]

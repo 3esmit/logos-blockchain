@@ -3,6 +3,10 @@ use std::{collections::HashSet, hash::Hash};
 use lb_core::mantle::{DependencyId, TransactionDependencies};
 use rpds::{HashTrieMap, HashTrieSet};
 
+pub trait LedgerStateReadyDeps {
+    fn frontier_deps(&self) -> &HashSet<DependencyId>;
+}
+
 #[derive(Clone, Debug)]
 pub struct TxTrackerState<Tx, TxId>
 where
@@ -12,7 +16,6 @@ where
     orphan_txs: HashTrieMap<TxId, Tx>,
     dep_to_tx: HashTrieMap<DependencyId, HashTrieSet<TxId>>,
     tx_pending_count: HashTrieMap<TxId, usize>,
-    frontier_deps: HashTrieSet<DependencyId>,
 }
 
 impl<Tx, TxId> Default for TxTrackerState<Tx, TxId>
@@ -34,15 +37,6 @@ where
             orphan_txs: HashTrieMap::new(),
             dep_to_tx: HashTrieMap::new(),
             tx_pending_count: HashTrieMap::new(),
-            frontier_deps: HashTrieSet::new(),
-        }
-    }
-
-    pub fn with_frontier_deps(frontier_deps: impl IntoIterator<Item = DependencyId>) -> Self {
-        let default = Self::default();
-        Self {
-            frontier_deps: HashTrieSet::from_iter(frontier_deps),
-            ..default
         }
     }
 }
@@ -51,10 +45,10 @@ impl<Tx> TxTrackerState<Tx, Tx::Hash>
 where
     Tx: TransactionDependencies + Clone,
 {
-    pub fn process_tx(&mut self, tx: Tx) {
+    pub fn process_tx(&mut self, tx: Tx, frontier_deps: &HashSet<DependencyId>) {
         let consumes: HashSet<DependencyId> = tx.consumes().collect();
         let missing_deps: HashSet<DependencyId> = consumes
-            .difference(&HashSet::from_iter(self.frontier_deps.iter().cloned()))
+            .difference(frontier_deps)
             .cloned()
             .collect();
         let pending_deps_count = missing_deps.len();
@@ -77,7 +71,6 @@ where
 
     pub fn tx_in_block(&mut self, tx_id: &Tx::Hash) {
         if let Some(tx) = pop(&mut self.ready_txs, tx_id) {
-            self.update_frontier_deps(&tx);
             for dep in tx.produces() {
                 let Some(waiting_ids) = self.dep_to_tx.get(&dep) else {
                     continue;
@@ -95,15 +88,6 @@ where
             }
         }
     }
-
-    fn update_frontier_deps(&mut self, tx: &Tx) {
-        for dep_id in tx.produces() {
-            self.frontier_deps.insert_mut(dep_id);
-        }
-        for dep_id in tx.consumes() {
-            self.frontier_deps.remove_mut(&dep_id);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -117,10 +101,6 @@ where
 
     pub fn is_orphan(&self, id: &TxId) -> bool {
         self.orphan_txs.contains_key(id)
-    }
-
-    pub fn has_processed_dep(&self, dep: &DependencyId) -> bool {
-        self.frontier_deps.contains(dep)
     }
 
     pub fn ready_count(&self) -> usize {
@@ -226,7 +206,8 @@ mod tests {
     #[test]
     fn test_diamond_dependency_graph() {
         let mut tracker: TxTrackerState<TestTx, TestTxId> = TxTrackerState::new();
-        tracker.frontier_deps.insert_mut(dep("root"));
+        let mut frontier: HashSet<DependencyId> = HashSet::new();
+        frontier.insert(dep("root"));
 
         let tx_genesis = tx("tx_genesis", vec!["root"], vec!["genesis"]);
         let tx_mint_a = tx("tx_mint_a", vec!["genesis"], vec!["token_a"]);
@@ -243,9 +224,15 @@ mod tests {
 
         // Submit in reverse topological order
         for t in [
-            tx_settle, tx_combine, tx_chain, tx_mint_b, tx_mint_a, tx_fund, tx_genesis,
+            tx_settle.clone(),
+            tx_combine.clone(),
+            tx_chain.clone(),
+            tx_mint_b.clone(),
+            tx_mint_a.clone(),
+            tx_fund.clone(),
+            tx_genesis.clone(),
         ] {
-            tracker.process_tx(t);
+            tracker.process_tx(t, &frontier);
         }
 
         assert_eq!(ready_names(&tracker), vec!["tx_genesis"]);
@@ -264,7 +251,11 @@ mod tests {
         );
 
         // tx_genesis confirmed → unlocks tx_mint_a, tx_mint_b, tx_fund
+        // frontier gains "genesis" (produced by tx_genesis)
         tracker.tx_in_block(&TestTxId("tx_genesis"));
+        for dep_id in tx_genesis.produces() {
+            frontier.insert(dep_id);
+        }
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_fund", "tx_mint_a", "tx_mint_b"].into_iter().collect()
@@ -277,8 +268,11 @@ mod tests {
         );
 
         // tx_fund confirmed → unlocks tx_chain (coin_x); tx_combine drops 2→1 (coin_y
-        // still missing)
+        // still missing); frontier gains "coin_x", "coin_y"
         tracker.tx_in_block(&TestTxId("tx_fund"));
+        for dep_id in tx_fund.produces() {
+            frontier.insert(dep_id);
+        }
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_chain", "tx_mint_a", "tx_mint_b"].into_iter().collect()
@@ -289,7 +283,11 @@ mod tests {
         );
 
         // tx_mint_a confirmed → tx_combine drops 1→0, promoted to ready
+        // frontier gains "token_a"
         tracker.tx_in_block(&TestTxId("tx_mint_a"));
+        for dep_id in tx_mint_a.produces() {
+            frontier.insert(dep_id);
+        }
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_chain", "tx_combine", "tx_mint_b"]
@@ -302,8 +300,11 @@ mod tests {
         );
 
         // tx_chain confirmed → coin_z satisfied; tx_settle drops 2→1 (coin_w still
-        // missing)
+        // missing); frontier gains "coin_z"
         tracker.tx_in_block(&TestTxId("tx_chain"));
+        for dep_id in tx_chain.produces() {
+            frontier.insert(dep_id);
+        }
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_combine", "tx_mint_b"].into_iter().collect()
@@ -314,8 +315,11 @@ mod tests {
         );
 
         // tx_combine confirmed → coin_w satisfied; tx_settle drops 1→0, diamond
-        // resolved
+        // resolved; frontier gains "nft_1", "coin_w"
         tracker.tx_in_block(&TestTxId("tx_combine"));
+        for dep_id in tx_combine.produces() {
+            frontier.insert(dep_id);
+        }
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_settle", "tx_mint_b"].into_iter().collect()

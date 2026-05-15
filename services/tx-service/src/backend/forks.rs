@@ -1,9 +1,21 @@
-use std::{collections::HashMap, hash::Hash};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    pin,
+    pin::pin,
+};
 
+use futures::StreamExt;
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo};
-use lb_core::{header::HeaderId, mantle::TransactionDependencies};
+use lb_core::{
+    header::HeaderId,
+    mantle::{DependencyId, TransactionDependencies},
+};
+use lb_ledger::LedgerState;
+use tracing::error;
 
 use super::tracker::TxTrackerState;
+use crate::backend::LegerStateInspector::LedgerStateInspector;
 
 pub struct BlockInfo<Tx> {
     pub parent: HeaderId,
@@ -15,30 +27,41 @@ pub trait BlockInfoGetter<Tx> {
     async fn get_block(&self, header_id: &HeaderId) -> Result<BlockInfo<Tx>, ForksTrackerError>;
 }
 
+#[async_trait::async_trait]
+pub trait LedgerStateGetter {
+    async fn get_ledger_state(
+        &self,
+        header_id: &HeaderId,
+    ) -> Result<Option<LedgerState>, ForksTrackerError>;
+}
+
 #[derive(Debug)]
 pub enum ForksTrackerError {
     BlockNotFound,
     ParentNotFound(HeaderId),
 }
-pub struct ForksTracker<Tx, TxId, BlockGetter>
+pub struct ForksTracker<Tx, TxId, BlockGetter, LedgerGetter>
 where
     TxId: Eq + Hash,
 {
     states: HashMap<HeaderId, TxTrackerState<Tx, TxId>>,
     current_tips: HashMap<HeaderId, TxTrackerState<Tx, TxId>>,
     block_getter: BlockGetter,
+    ledger_getter: LedgerGetter,
 }
 
-impl<Tx, Getter> ForksTracker<Tx, Tx::Hash, Getter>
+impl<Tx, BlockGetter, LedgerGetter> ForksTracker<Tx, Tx::Hash, BlockGetter, LedgerGetter>
 where
     Tx: TransactionDependencies + Clone,
-    Getter: BlockInfoGetter<Tx> + Send,
+    BlockGetter: BlockInfoGetter<Tx> + Send,
+    LedgerGetter: LedgerStateGetter + Clone + Send,
 {
-    pub fn new(block_getter: Getter) -> Self {
+    pub fn new(block_getter: BlockGetter, ledger_getter: LedgerGetter) -> Self {
         Self {
             states: HashMap::new(),
             current_tips: HashMap::new(),
             block_getter,
+            ledger_getter,
         }
     }
 
@@ -89,9 +112,39 @@ where
         Ok(())
     }
 
-    pub fn process_new_tx(&mut self, tx: &Tx) {
-        for state in self.current_tips.values_mut() {
-            state.process_tx(tx.clone());
+    pub async fn process_new_tx(&mut self, tx: &Tx) {
+        let tips_len = self.current_tips.len();
+        let ledger_getter: LedgerGetter = self.ledger_getter.clone();
+        let mut ledger_states = pin!(
+            tokio_stream::iter(
+                self.current_tips
+                    .keys()
+                    .zip(std::iter::repeat_with(|| ledger_getter.clone()))
+            )
+            .then(|(header_id, ledger_getter)| async move {
+                let ledger_state = ledger_getter.get_ledger_state(&header_id).await;
+                (header_id, ledger_state)
+            })
+        );
+        while let Some((header_id, ledger_state)) = ledger_states.next().await {
+            let state = self
+                .states
+                .get_mut(&header_id)
+                .expect("This header at this point is always present");
+            match ledger_state {
+                Ok(Some(ledger_state)) => {
+                    state.process_tx(
+                        tx.clone(),
+                        &LedgerStateInspector::new(ledger_state).dependencies(),
+                    );
+                }
+                Ok(None) => {
+                    error!("Ledger state not found for block{header_id}");
+                }
+                Err(e) => {
+                    error!("Error getting ledger state for block {header_id}: {e:?}");
+                }
+            }
         }
     }
 
@@ -298,7 +351,8 @@ mod tests {
 
         assert_eq!(tracker.current_tips.len(), 2);
 
-        tracker.process_new_tx(&tx("mempool_tx", vec![], vec!["dep_x"]));
+        let empty_frontier = std::collections::HashSet::new();
+        tracker.process_new_tx(&tx("mempool_tx", vec![], vec!["dep_x"]), &empty_frontier);
 
         for state in tracker.current_tips.values() {
             assert!(state.is_ready(&TestTxId("mempool_tx")));
@@ -329,8 +383,9 @@ mod tests {
         tracker.process_new_block(&block_event(a, a)).await.unwrap();
 
         // Both txs arrive in the mempool before either block is processed.
-        tracker.process_new_tx(&tx_b);
-        tracker.process_new_tx(&tx_c);
+        let empty_frontier = std::collections::HashSet::new();
+        tracker.process_new_tx(&tx_b, &empty_frontier);
+        tracker.process_new_tx(&tx_c, &empty_frontier);
 
         tracker.process_new_block(&block_event(b, b)).await.unwrap();
         tracker.process_new_block(&block_event(c, c)).await.unwrap();
@@ -338,21 +393,16 @@ mod tests {
         let state_b = tracker.get_block_state(&b).unwrap();
         let state_c = tracker.get_block_state(&c).unwrap();
 
-        // Fork B: tx_b is confirmed (removed from ready, dep recorded).
-        //         tx_c is still pending (ready) — it was in the mempool but not
-        // included in B.
+        // Fork B: tx_b is confirmed (removed from ready, not orphan).
+        //         tx_c is still pending (ready) — in the mempool but not included in B.
         assert!(!state_b.is_ready(&TestTxId("tx_b")));
         assert!(!state_b.is_orphan(&TestTxId("tx_b")));
-        assert!(state_b.has_processed_dep(&Bytes::from_static(b"out_b")));
         assert!(state_b.is_ready(&TestTxId("tx_c")));
-        assert!(!state_b.has_processed_dep(&Bytes::from_static(b"out_c")));
 
         // Fork C: tx_c is confirmed; tx_b is still pending (ready).
         assert!(!state_c.is_ready(&TestTxId("tx_c")));
         assert!(!state_c.is_orphan(&TestTxId("tx_c")));
-        assert!(state_c.has_processed_dep(&Bytes::from_static(b"out_c")));
         assert!(state_c.is_ready(&TestTxId("tx_b")));
-        assert!(!state_c.has_processed_dep(&Bytes::from_static(b"out_b")));
     }
 
     /// An orphan tx gets resolved on the fork that confirms its dependency
@@ -378,8 +428,9 @@ mod tests {
 
         // Both txs arrive in the mempool; tx_consumer is orphaned until "X" is
         // produced.
-        tracker.process_new_tx(&tx("tx_consumer", vec!["X"], vec!["Y"]));
-        tracker.process_new_tx(&tx_producer);
+        let empty_frontier = std::collections::HashSet::new();
+        tracker.process_new_tx(&tx("tx_consumer", vec!["X"], vec!["Y"]), &empty_frontier);
+        tracker.process_new_tx(&tx_producer, &empty_frontier);
 
         tracker.process_new_block(&block_event(b, b)).await.unwrap();
         tracker.process_new_block(&block_event(c, c)).await.unwrap();

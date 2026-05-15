@@ -5124,6 +5124,7 @@ dependencies = [
  "futures",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-ledger",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",

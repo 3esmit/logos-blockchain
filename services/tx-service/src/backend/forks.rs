@@ -161,11 +161,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{BTreeMap, HashSet};
 
     use async_trait::async_trait;
     use bytes::Bytes;
-    use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo};
+    use lb_chain_service::{LibUpdate, PrunedBlocksInfo};
     use lb_core::{
         header::HeaderId,
         mantle::{DependencyId, Transaction, TransactionDependencies, TransactionHasher},
@@ -209,64 +209,27 @@ mod tests {
         }
     }
 
-    // ── mock block getter ────────────────────────────────────────────────────
+    // ── mock adapter ─────────────────────────────────────────────────────────
 
-    struct MockGetter(HashMap<HeaderId, (HeaderId, Vec<TestTx>)>);
+    /// Stub adapter — satisfies trait bounds; neither method is called by the
+    /// sync `process_new_block` / `process_new_tx` code paths exercised here.
+    #[derive(Clone)]
+    struct MockAdapter;
 
-    impl MockGetter {
-        fn new() -> Self {
-            Self(HashMap::new())
-        }
-
-        fn insert(&mut self, id: HeaderId, parent: HeaderId, txs: Vec<TestTx>) {
-            self.0.insert(id, (parent, txs));
+    #[async_trait]
+    impl BlockInfoGetter<TestTx> for MockAdapter {
+        async fn get_block(&self, _: &HeaderId) -> Result<BlockInfo<TestTx>, ForksTrackerError> {
+            unimplemented!("not used in sync tests")
         }
     }
 
     #[async_trait]
-    impl BlockInfoGetter<TestTx> for MockGetter {
-        async fn get_block(
-            &self,
-            header_id: &HeaderId,
-        ) -> Result<BlockInfo<TestTx>, ForksTrackerError> {
-            self.0
-                .get(header_id)
-                .map(|(parent, txs)| BlockInfo {
-                    parent: *parent,
-                    transactions: txs.clone(),
-                })
-                .ok_or(ForksTrackerError::BlockNotFound)
-        }
-    }
-
-    // ── mock ledger getter ───────────────────────────────────────────────────
-
-    /// Returns a configurable per-tip frontier. Unknown tips get an empty set.
-    #[derive(Clone, Default)]
-    struct MockLedgerGetter(HashMap<HeaderId, HashSet<DependencyId>>);
-
-    impl MockLedgerGetter {
-        fn new() -> Self {
-            Self::default()
-        }
-
-        fn with_deps(
-            mut self,
-            header_id: HeaderId,
-            deps: impl IntoIterator<Item = DependencyId>,
-        ) -> Self {
-            self.0.insert(header_id, deps.into_iter().collect());
-            self
-        }
-    }
-
-    #[async_trait]
-    impl LedgerStateGetter for MockLedgerGetter {
+    impl LedgerStateGetter for MockAdapter {
         async fn get_ledger_deps(
             &self,
-            header_id: &HeaderId,
+            _: &HeaderId,
         ) -> Result<HashSet<DependencyId>, ForksTrackerError> {
-            Ok(self.0.get(header_id).cloned().unwrap_or_default())
+            unimplemented!("not used in sync tests")
         }
     }
 
@@ -284,14 +247,10 @@ mod tests {
         }
     }
 
-    // Slot is not a direct dep; use Into<Slot> inference from struct field types.
-    fn block_event(block_id: HeaderId, tip: HeaderId) -> ProcessedBlockEvent {
-        ProcessedBlockEvent {
-            block_id,
-            tip,
-            tip_slot: 0u64.into(),
-            lib: id(0),
-            lib_slot: 0u64.into(),
+    fn block_info(parent: HeaderId, txs: Vec<TestTx>) -> BlockInfo<TestTx> {
+        BlockInfo {
+            parent,
+            transactions: txs,
         }
     }
 
@@ -306,53 +265,65 @@ mod tests {
         }
     }
 
-    /// Seed the tracker with an initial genesis tip so all tests start with a
+    /// Seed the tracker with an initial genesis tip so all tests start from a
     /// known frontier entry.
-    async fn seed_genesis(
-        tracker: &mut ForksTracker<TestTx, TestTxId, MockGetter, MockLedgerGetter>,
+    fn seed_genesis(
+        tracker: &mut ForksTracker<TestTx, TestTxId, MockAdapter>,
         genesis: HeaderId,
     ) {
         let root = id(255);
-        tracker.block_getter.insert(genesis, root, vec![]);
         tracker.current_tips.insert(root, TxTrackerState::new());
         tracker
-            .process_new_block(&block_event(genesis, genesis))
-            .await
+            .process_new_block(&genesis, block_info(root, vec![]))
             .unwrap();
+    }
+
+    /// Apply `tx` to every current tip with an empty frontier (txs with no deps
+    /// go ready; txs with unmet deps go orphan).
+    fn broadcast_tx(
+        tracker: &mut ForksTracker<TestTx, TestTxId, MockAdapter>,
+        t: &TestTx,
+        frontier: &HashSet<DependencyId>,
+    ) {
+        let tips: Vec<HeaderId> = tracker.current_tips.keys().cloned().collect();
+        for hid in tips {
+            tracker.process_new_tx(t, &hid, frontier);
+        }
     }
 
     // ── tests ────────────────────────────────────────────────────────────────
 
     /// A single chain genesis → A → B → C: the frontier always holds exactly
     /// one tip and historical states accumulate in `states`.
-    #[tokio::test]
-    async fn test_linear_chain_tip_tracking() {
+    #[test]
+    fn test_linear_chain_tip_tracking() {
         let genesis = id(0);
         let a = id(1);
         let b = id(2);
         let c = id(3);
 
-        let mut getter = MockGetter::new();
-        getter.insert(a, genesis, vec![]);
-        getter.insert(b, a, vec![]);
-        getter.insert(c, b, vec![]);
-
-        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
-        seed_genesis(&mut tracker, genesis).await;
+        let mut tracker = ForksTracker::new(MockAdapter);
+        seed_genesis(&mut tracker, genesis);
 
         assert_eq!(tracker.current_tips.len(), 1);
         assert!(tracker.current_tips.contains_key(&genesis));
 
-        tracker.process_new_block(&block_event(a, a)).await.unwrap();
+        tracker
+            .process_new_block(&a, block_info(genesis, vec![]))
+            .unwrap();
         assert_eq!(tracker.current_tips.len(), 1);
         assert!(tracker.current_tips.contains_key(&a));
         assert!(tracker.states.contains_key(&genesis));
 
-        tracker.process_new_block(&block_event(b, b)).await.unwrap();
+        tracker
+            .process_new_block(&b, block_info(a, vec![]))
+            .unwrap();
         assert!(tracker.current_tips.contains_key(&b));
         assert!(tracker.states.contains_key(&a));
 
-        tracker.process_new_block(&block_event(c, c)).await.unwrap();
+        tracker
+            .process_new_block(&c, block_info(b, vec![]))
+            .unwrap();
         assert!(tracker.current_tips.contains_key(&c));
         assert!(tracker.states.contains_key(&b));
 
@@ -364,30 +335,30 @@ mod tests {
     }
 
     /// Mempool txs submitted while two fork tips exist must appear in both.
-    #[tokio::test]
-    async fn test_mempool_tx_propagates_to_all_tips() {
+    #[test]
+    fn test_mempool_tx_propagates_to_all_tips() {
         let genesis = id(0);
         let a = id(1);
         let b = id(2);
         let c = id(3);
 
-        let mut getter = MockGetter::new();
-        getter.insert(a, genesis, vec![]);
-        getter.insert(b, a, vec![]);
-        getter.insert(c, a, vec![]);
+        let mut tracker = ForksTracker::new(MockAdapter);
+        seed_genesis(&mut tracker, genesis);
 
-        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
-        seed_genesis(&mut tracker, genesis).await;
-
-        tracker.process_new_block(&block_event(a, a)).await.unwrap();
-        tracker.process_new_block(&block_event(b, b)).await.unwrap();
-        tracker.process_new_block(&block_event(c, c)).await.unwrap();
+        tracker
+            .process_new_block(&a, block_info(genesis, vec![]))
+            .unwrap();
+        tracker
+            .process_new_block(&b, block_info(a, vec![]))
+            .unwrap();
+        tracker
+            .process_new_block(&c, block_info(a, vec![]))
+            .unwrap();
 
         assert_eq!(tracker.current_tips.len(), 2);
 
-        tracker
-            .process_new_tx(&tx("mempool_tx", vec![], vec!["dep_x"]))
-            .await;
+        let empty = HashSet::new();
+        broadcast_tx(&mut tracker, &tx("mempool_tx", vec![], vec!["dep_x"]), &empty);
 
         for state in tracker.current_tips.values() {
             assert!(state.is_ready(&TestTxId("mempool_tx")));
@@ -395,10 +366,10 @@ mod tests {
     }
 
     /// Txs confirmed in block B are removed from the mempool view on fork B
-    /// (`processed_deps` updated) while remaining pending on fork C; and vice
-    /// versa for txs confirmed in C. Fork states are fully independent.
-    #[tokio::test]
-    async fn test_fork_states_are_independent() {
+    /// while remaining pending on fork C, and vice versa. Fork states are fully
+    /// independent.
+    #[test]
+    fn test_fork_states_are_independent() {
         let genesis = id(0);
         let a = id(1);
         let b = id(2); // fork 1: A → B (confirms tx_b)
@@ -407,28 +378,29 @@ mod tests {
         let tx_b = tx("tx_b", vec![], vec!["out_b"]);
         let tx_c = tx("tx_c", vec![], vec!["out_c"]);
 
-        let mut getter = MockGetter::new();
-        getter.insert(a, genesis, vec![]);
-        getter.insert(b, a, vec![tx_b.clone()]);
-        getter.insert(c, a, vec![tx_c.clone()]);
-
-        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
-        seed_genesis(&mut tracker, genesis).await;
-
-        tracker.process_new_block(&block_event(a, a)).await.unwrap();
+        let mut tracker = ForksTracker::new(MockAdapter);
+        seed_genesis(&mut tracker, genesis);
+        tracker
+            .process_new_block(&a, block_info(genesis, vec![]))
+            .unwrap();
 
         // Both txs arrive in the mempool before either block is processed.
-        tracker.process_new_tx(&tx_b).await;
-        tracker.process_new_tx(&tx_c).await;
+        let empty = HashSet::new();
+        broadcast_tx(&mut tracker, &tx_b, &empty);
+        broadcast_tx(&mut tracker, &tx_c, &empty);
 
-        tracker.process_new_block(&block_event(b, b)).await.unwrap();
-        tracker.process_new_block(&block_event(c, c)).await.unwrap();
+        tracker
+            .process_new_block(&b, block_info(a, vec![tx_b.clone()]))
+            .unwrap();
+        tracker
+            .process_new_block(&c, block_info(a, vec![tx_c.clone()]))
+            .unwrap();
 
         let state_b = tracker.get_block_state(&b).unwrap();
         let state_c = tracker.get_block_state(&c).unwrap();
 
         // Fork B: tx_b is confirmed (removed from ready, not orphan).
-        //         tx_c is still pending (ready) — in the mempool but not included in B.
+        //         tx_c is still pending (ready) — in the mempool but not in B.
         assert!(!state_b.is_ready(&TestTxId("tx_b")));
         assert!(!state_b.is_orphan(&TestTxId("tx_b")));
         assert!(state_b.is_ready(&TestTxId("tx_c")));
@@ -442,39 +414,42 @@ mod tests {
     /// An orphan tx gets resolved on the fork that confirms its dependency
     /// producer, but stays orphaned on the fork where the producer remains
     /// unconfirmed. This is the key fork-isolation property.
-    #[tokio::test]
-    async fn test_mempool_orphan_resolved_differently_per_fork() {
+    #[test]
+    fn test_mempool_orphan_resolved_differently_per_fork() {
         let genesis = id(0);
         let a = id(1);
-        let b = id(2); // confirms tx_producer → dep "X" recorded
+        let b = id(2); // confirms tx_producer → promotes tx_consumer
         let c = id(3); // does NOT confirm tx_producer
 
         let tx_producer = tx("tx_producer", vec![], vec!["X"]);
 
-        let mut getter = MockGetter::new();
-        getter.insert(a, genesis, vec![]);
-        getter.insert(b, a, vec![tx_producer.clone()]);
-        getter.insert(c, a, vec![]);
-
-        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
-        seed_genesis(&mut tracker, genesis).await;
-        tracker.process_new_block(&block_event(a, a)).await.unwrap();
+        let mut tracker = ForksTracker::new(MockAdapter);
+        seed_genesis(&mut tracker, genesis);
+        tracker
+            .process_new_block(&a, block_info(genesis, vec![]))
+            .unwrap();
 
         // Both txs arrive in the mempool; tx_consumer is orphaned until "X" is
         // produced.
-        tracker
-            .process_new_tx(&tx("tx_consumer", vec!["X"], vec!["Y"]))
-            .await;
-        tracker.process_new_tx(&tx_producer).await;
+        let empty = HashSet::new();
+        broadcast_tx(
+            &mut tracker,
+            &tx("tx_consumer", vec!["X"], vec!["Y"]),
+            &empty,
+        );
+        broadcast_tx(&mut tracker, &tx_producer, &empty);
 
-        tracker.process_new_block(&block_event(b, b)).await.unwrap();
-        tracker.process_new_block(&block_event(c, c)).await.unwrap();
+        tracker
+            .process_new_block(&b, block_info(a, vec![tx_producer.clone()]))
+            .unwrap();
+        tracker
+            .process_new_block(&c, block_info(a, vec![]))
+            .unwrap();
 
         let state_b = tracker.get_block_state(&b).unwrap();
         let state_c = tracker.get_block_state(&c).unwrap();
 
-        // Fork B: tx_producer confirmed → dep "X" recorded → tx_consumer promoted to
-        // ready.
+        // Fork B: tx_producer confirmed → dep "X" produced → tx_consumer promoted.
         assert!(!state_b.is_ready(&TestTxId("tx_producer")));
         assert!(!state_b.is_orphan(&TestTxId("tx_producer")));
         assert!(state_b.is_ready(&TestTxId("tx_consumer")));
@@ -486,24 +461,24 @@ mod tests {
 
     /// LIB update removes pruned block ids from both `states` and
     /// `current_tips`.
-    #[tokio::test]
-    async fn test_lib_prunes_stale_and_immutable_blocks() {
+    #[test]
+    fn test_lib_prunes_stale_and_immutable_blocks() {
         let genesis = id(0);
         let a = id(1);
         let b = id(2);
         let c = id(3);
 
-        let mut getter = MockGetter::new();
-        getter.insert(a, genesis, vec![]);
-        getter.insert(b, a, vec![]);
-        getter.insert(c, b, vec![]);
-
-        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
-        seed_genesis(&mut tracker, genesis).await;
-
-        tracker.process_new_block(&block_event(a, a)).await.unwrap();
-        tracker.process_new_block(&block_event(b, b)).await.unwrap();
-        tracker.process_new_block(&block_event(c, c)).await.unwrap();
+        let mut tracker = ForksTracker::new(MockAdapter);
+        seed_genesis(&mut tracker, genesis);
+        tracker
+            .process_new_block(&a, block_info(genesis, vec![]))
+            .unwrap();
+        tracker
+            .process_new_block(&b, block_info(a, vec![]))
+            .unwrap();
+        tracker
+            .process_new_block(&c, block_info(b, vec![]))
+            .unwrap();
 
         // genesis and A are now pruned
         tracker.process_lib(&lib_event(vec![genesis, a]));
@@ -519,24 +494,24 @@ mod tests {
 
     /// LIB update with a stale fork tip removes that tip from `current_tips`
     /// while the canonical tip is unaffected.
-    #[tokio::test]
-    async fn test_lib_prunes_stale_fork_tip() {
+    #[test]
+    fn test_lib_prunes_stale_fork_tip() {
         let genesis = id(0);
         let a = id(1);
         let b = id(2); // canonical tip
         let d = id(4); // stale fork tip
 
-        let mut getter = MockGetter::new();
-        getter.insert(a, genesis, vec![]);
-        getter.insert(b, a, vec![]);
-        getter.insert(d, a, vec![]);
-
-        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
-        seed_genesis(&mut tracker, genesis).await;
-
-        tracker.process_new_block(&block_event(a, a)).await.unwrap();
-        tracker.process_new_block(&block_event(b, b)).await.unwrap();
-        tracker.process_new_block(&block_event(d, d)).await.unwrap();
+        let mut tracker = ForksTracker::new(MockAdapter);
+        seed_genesis(&mut tracker, genesis);
+        tracker
+            .process_new_block(&a, block_info(genesis, vec![]))
+            .unwrap();
+        tracker
+            .process_new_block(&b, block_info(a, vec![]))
+            .unwrap();
+        tracker
+            .process_new_block(&d, block_info(a, vec![]))
+            .unwrap();
 
         assert_eq!(tracker.current_tips.len(), 2);
 
@@ -546,33 +521,14 @@ mod tests {
         assert!(tracker.current_tips.contains_key(&b));
     }
 
-    /// Processing a block whose parent is not in `current_tips` returns
-    /// `ParentNotFound`.
-    #[tokio::test]
-    async fn test_process_block_unknown_parent_returns_error() {
-        let orphan = id(77);
-        let mut getter = MockGetter::new();
-        getter.insert(orphan, id(50), vec![]);
-
-        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
-
-        let result = tracker
-            .process_new_block(&block_event(orphan, orphan))
-            .await;
+    /// Processing a block whose parent is not known returns `ParentNotFound`.
+    #[test]
+    fn test_process_block_unknown_parent_returns_error() {
+        let mut tracker = ForksTracker::new(MockAdapter);
+        let result = tracker.process_new_block(
+            &id(77),
+            block_info(id(50), vec![]),
+        );
         assert!(matches!(result, Err(ForksTrackerError::ParentNotFound(_))));
-    }
-
-    /// When `BlockGetter` cannot find the block the error propagates unchanged.
-    #[tokio::test]
-    async fn test_block_getter_failure_propagates() {
-        let unknown = id(99);
-        let getter = MockGetter::new(); // empty — will return BlockNotFound
-
-        let mut tracker = ForksTracker::new(getter, MockLedgerGetter::new());
-
-        let result = tracker
-            .process_new_block(&block_event(unknown, unknown))
-            .await;
-        assert!(matches!(result, Err(ForksTrackerError::BlockNotFound)));
     }
 }

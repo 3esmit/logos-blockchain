@@ -1,3 +1,4 @@
+use lb_blend_message::crypto::proofs::RealProofsVerifier;
 pub use lb_core::mantle::channel;
 pub mod helpers;
 pub mod leader;
@@ -64,7 +65,7 @@ pub enum Error {
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LedgerState {
     channels: channel::Channels,
-    pub sdp: sdp::SdpLedger,
+    pub sdp: sdp::SdpLedger<RealProofsVerifier>,
     pub leaders: leader::LeaderState,
 }
 
@@ -114,7 +115,7 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub const fn sdp_ledger(&self) -> &sdp::SdpLedger {
+    pub const fn sdp_ledger(&self) -> &sdp::SdpLedger<RealProofsVerifier> {
         &self.sdp
     }
 

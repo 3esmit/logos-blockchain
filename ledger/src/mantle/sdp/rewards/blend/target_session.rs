@@ -112,12 +112,23 @@ where
                 )
                 .ok()
             })
-            .ok_or(Error::InvalidProof)?;
+            .ok_or_else(||
+                {
+                    println!(
+                        "Failed to verify activity proof for provider {:?} with zk_id {:?} in session {:?}",
+                        provider_id, zk_id, proof.session
+                    );
+                    Error::InvalidProof
+                })?;
 
         let Some(hamming_distance) = self.token_evaluation.evaluate(
             verified_proof.token(),
             current_session_state.session_randomness(),
         ) else {
+            println!(
+                "Failed to evaluate blending token for provider {:?} with zk_id {:?} in session {:?}",
+                provider_id, zk_id, proof.session
+            );
             return Err(Error::InvalidProof);
         };
 

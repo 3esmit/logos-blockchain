@@ -1,8 +1,8 @@
 pub mod rewards;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug};
 
-use lb_blend_message::crypto::proofs::RealProofsVerifier;
+use lb_blend_message::encap::ProofsVerifier as ProofsVerifierTrait;
 use lb_core::{
     block::BlockNumber,
     events::Events,
@@ -31,11 +31,17 @@ use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
 type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-enum Service {
-    BlendNetwork(ServiceState<blend::Rewards<RealProofsVerifier>>),
+enum Service<BlendProofsVerifier>
+where
+    BlendProofsVerifier: ProofsVerifierTrait + Clone + Debug + PartialEq + Send + Sync,
+{
+    BlendNetwork(ServiceState<blend::Rewards<BlendProofsVerifier>>),
 }
 
-impl Service {
+impl<BlendProofsVerifier> Service<BlendProofsVerifier>
+where
+    BlendProofsVerifier: ProofsVerifierTrait + Clone + Debug + PartialEq + Send + Sync,
+{
     fn try_apply_header(
         self,
         block_number: BlockNumber,
@@ -280,13 +286,19 @@ impl<R: Rewards> ServiceState<R> {
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-pub struct SdpLedger {
-    services: rpds::HashTrieMapSync<ServiceType, Service>,
+pub struct SdpLedger<BlendProofsVerifier>
+where
+    BlendProofsVerifier: ProofsVerifierTrait + Clone + Debug + PartialEq + Send + Sync,
+{
+    services: rpds::HashTrieMapSync<ServiceType, Service<BlendProofsVerifier>>,
     locked_notes: LockedNotes,
     block_number: u64,
 }
 
-impl SdpLedger {
+impl<BlendProofsVerifier> SdpLedger<BlendProofsVerifier>
+where
+    BlendProofsVerifier: ProofsVerifierTrait + Clone + Debug + PartialEq + Send + Sync,
+{
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -654,9 +666,18 @@ impl SdpLedger {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::{convert::Infallible, num::NonZeroU64, sync::Arc};
 
-    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
+    use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
+    use lb_blend_proofs::{
+        quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
+        selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
+    };
+    use lb_core::{
+        crypto::ZkHash,
+        mantle::{ledger::Utxos, ops::channel::Ed25519PublicKey},
+        sdp::{Locator, blend::ActivityProof},
+    };
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
@@ -665,18 +686,21 @@ mod tests {
     use super::*;
     use crate::cryptarchia::tests::{utxo, utxo_with_sk};
 
+    type Ledger = SdpLedger<AlwaysSuccessProofsVerifier>;
+
     fn setup() -> Config {
+        setup_with(ServiceParameters {
+            inactivity_period: 1,
+            lock_period: 10,
+            retention_period: 1,
+            timestamp: 0,
+            session_duration: 10,
+        })
+    }
+
+    fn setup_with(service_params: ServiceParameters) -> Config {
         let mut params = HashMap::new();
-        params.insert(
-            ServiceType::BlendNetwork,
-            ServiceParameters {
-                inactivity_period: 1,
-                lock_period: 10,
-                retention_period: 1,
-                timestamp: 0,
-                session_duration: 10,
-            },
-        );
+        params.insert(ServiceType::BlendNetwork, service_params);
         Config {
             service_params: Arc::new(params),
             service_rewards_params: ServiceRewardsParameters {
@@ -714,11 +738,11 @@ mod tests {
 
     fn apply_declare_with_dummies(
         utxos: &Utxos,
-        sdp_ledger: SdpLedger,
+        sdp_ledger: Ledger,
         op: &SDPDeclareOp,
         zk_sk: &ZkKey,
         config: &Config,
-    ) -> Result<SdpLedger, Error> {
+    ) -> Result<Ledger, Error> {
         let (note_sk, _) = utxo_with_sk();
         let tx_hash = TxHash([0u8; 32]);
         let zk_sig = ZkKey::multi_sign(&[note_sk, zk_sk.clone()], &tx_hash.to_fr()).unwrap();
@@ -731,13 +755,27 @@ mod tests {
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
+    fn apply_active_with_dummies(
+        sdp_ledger: Ledger,
+        op: &SDPActiveOp,
+        zk_key: ZkKey,
+        config: &Config,
+    ) -> Result<Ledger, Error> {
+        let tx_hash = TxHash([2u8; 32]);
+        let zk_sig = ZkKey::multi_sign(&[zk_key], &tx_hash.to_fr()).unwrap();
+
+        sdp_ledger
+            .apply_active_msg(op, &zk_sig, tx_hash, config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+    }
+
     fn apply_withdraw_with_dummies(
-        sdp_ledger: SdpLedger,
+        sdp_ledger: Ledger,
         op: &SDPWithdrawOp,
         note_sk: ZkKey,
         zk_key: ZkKey,
         config: &Config,
-    ) -> Result<SdpLedger, Error> {
+    ) -> Result<Ledger, Error> {
         let tx_hash = TxHash([1u8; 32]);
         let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.to_fr()).unwrap();
 
@@ -778,7 +816,7 @@ mod tests {
         // Initialize ledger with service config
         let epoch_state = dummy_epoch_state();
         let sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Apply declare at block 0
         let utxo_tree = utxo_tree(vec![utxo]);
@@ -823,7 +861,7 @@ mod tests {
         // Initialize ledger with service config and declare
         let epoch_state = dummy_epoch_state();
         let sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         let utxo_tree = utxo_tree(vec![utxo]);
         let sdp_ledger =
@@ -876,7 +914,7 @@ mod tests {
         // Initialize ledger with service config
         let epoch_state = dummy_epoch_state();
         let sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Declare at block 0
         let utxo_tree = utxo_tree(vec![utxo]);
@@ -919,7 +957,7 @@ mod tests {
         // Initialize ledger with service config
         let epoch_state = dummy_epoch_state();
         let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Apply headers to reach block 9 (still in session 0, promotion happens at
         // block 10)
@@ -945,7 +983,7 @@ mod tests {
         // Initialize ledger with Blend service
         let epoch_state = dummy_epoch_state();
         let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Apply headers to reach block 10 (session boundary for BlendNetwork)
         for _ in 0..10 {
@@ -969,7 +1007,7 @@ mod tests {
         // Initialize ledger
         let epoch_state = dummy_epoch_state();
         let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // SESSION 0: Add a declaration at block 5
         for _ in 0..5 {
@@ -1042,7 +1080,7 @@ mod tests {
 
         let epoch_state = dummy_epoch_state();
         let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Add declaration at block 0
         let utxo_1 = utxo();
@@ -1134,7 +1172,7 @@ mod tests {
 
         let epoch_state = dummy_epoch_state();
         let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Add declaration at block 3
         for _ in 0..3 {
@@ -1188,7 +1226,7 @@ mod tests {
 
         let epoch_state = dummy_epoch_state();
         let mut sdp_ledger =
-            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Move to block 9 (last block of session 0)
         for _ in 0..9 {
@@ -1289,5 +1327,123 @@ mod tests {
         assert_eq!(active_session.session_n, 3);
         assert!(active_session.declarations.contains_key(&declaration_id_1));
         assert!(active_session.declarations.contains_key(&declaration_id_2));
+    }
+
+    #[test]
+    fn test_inactive_declaration_removal_at_session_boundary() {
+        let config = setup_with(ServiceParameters {
+            lock_period: 10,
+            inactivity_period: 3, // for simple testing
+            retention_period: 0,  // for simple testing
+            timestamp: 0,
+            session_duration: 10,
+        });
+
+        // Initialize ledger
+        let epoch_state = dummy_epoch_state();
+        let mut ledger =
+            Ledger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
+
+        // Declare at block 0
+        let utxo = utxo();
+        let utxo_tree = utxo_tree(vec![utxo]);
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(0);
+        let service = ServiceType::BlendNetwork;
+        let op = SDPDeclareOp {
+            service_type: service,
+            locked_note_id: utxo.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id = op.id();
+        ledger = apply_declare_with_dummies(&utxo_tree, ledger, &op, &zk_key, &config).unwrap();
+
+        // Apply headers to reach block 20 (session 2),
+        // where the declaration becomes active.
+        for _ in 1..=20 {
+            (ledger, _) = ledger.try_apply_header(&config, &epoch_state).unwrap();
+        }
+        // Declaration should be active
+        let active_session = ledger.get_active_session(service).unwrap();
+        assert_eq!(active_session.session_n, 2);
+        assert!(active_session.declarations.contains_key(&declaration_id));
+
+        // Apply headers to reach block 30 (session 3),
+        // where we can submit an active message.
+        for _ in 21..=30 {
+            (ledger, _) = ledger.try_apply_header(&config, &epoch_state).unwrap();
+        }
+        // Declaration should be active
+        let active_session = ledger.get_active_session(service).unwrap();
+        assert_eq!(active_session.session_n, 3);
+        assert!(active_session.declarations.contains_key(&declaration_id));
+
+        // Submit an active message for the declaration at block 30
+        assert_eq!(ledger.get_declaration(&declaration_id).unwrap().active, 0);
+        let active_op = SDPActiveOp {
+            declaration_id,
+            nonce: 1,
+            metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
+                session: 2,
+                signing_key: signing_key.public_key(),
+                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([1; _]).into(),
+                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([1; _]).into(),
+            })),
+        };
+        ledger = apply_active_with_dummies(ledger, &active_op, zk_key.clone(), &config).unwrap();
+        assert_eq!(ledger.get_declaration(&declaration_id).unwrap().active, 30);
+
+        // Apply headers to reach block 60 (session 6),
+        for _ in 31..=60 {
+            (ledger, _) = ledger.try_apply_header(&config, &epoch_state).unwrap();
+        }
+        // Declaration should be active
+        let active_session = ledger.get_active_session(service).unwrap();
+        assert_eq!(active_session.session_n, 6);
+        assert!(active_session.declarations.contains_key(&declaration_id));
+
+        // Apply headers to reach block 70 (session 7),
+        for _ in 61..=70 {
+            (ledger, _) = ledger.try_apply_header(&config, &epoch_state).unwrap();
+        }
+        // Declaration should have been removed
+        let active_session = ledger.get_active_session(service).unwrap();
+        assert_eq!(active_session.session_n, 7);
+        assert!(!active_session.declarations.contains_key(&declaration_id));
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct AlwaysSuccessProofsVerifier;
+
+    impl ProofsVerifierTrait for AlwaysSuccessProofsVerifier {
+        type Error = Infallible;
+
+        fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
+            Self
+        }
+
+        fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
+
+        fn complete_epoch_transition(&mut self) {}
+
+        fn verify_proof_of_quota(
+            &self,
+            proof: ProofOfQuota,
+            _signing_key: &Ed25519PublicKey,
+        ) -> Result<VerifiedProofOfQuota, Self::Error> {
+            Ok(VerifiedProofOfQuota::from_bytes_unchecked((&proof).into()))
+        }
+
+        fn verify_proof_of_selection(
+            &self,
+            proof: ProofOfSelection,
+            _inputs: &VerifyInputs,
+        ) -> Result<VerifiedProofOfSelection, Self::Error> {
+            Ok(VerifiedProofOfSelection::from_bytes_unchecked(
+                (&proof).into(),
+            ))
+        }
     }
 }

@@ -42,8 +42,8 @@ where
 {
     last_item_timestamp: u64,
     adapter: Adapter,
-    forks_tracker: ForksTracker<Tx, TxHash, Adapter>,
-    _phantom: std::marker::PhantomData<(BlockId, RuntimeServiceId)>,
+    // forks_tracker: ForksTracker<Tx, TxHash, Adapter>,
+    _phantom: std::marker::PhantomData<(Tx, TxHash, BlockId, RuntimeServiceId)>,
 }
 
 impl<BlockId, Tx, TxHash, Adapter, RuntimeServiceId> Debug
@@ -90,7 +90,7 @@ where
         Self {
             last_item_timestamp: 0,
             adapter: adapter.clone(),
-            forks_tracker: ForksTracker::new(adapter),
+            // forks_tracker: ForksTracker::new(adapter),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -177,7 +177,7 @@ where
             last_item_timestamp: state.last_item_timestamp,
             adapter: adapter.clone(),
             // TODO: plug-in and recover tracker state
-            forks_tracker: ForksTracker::new(adapter),
+            // forks_tracker: ForksTracker::new(adapter),
             _phantom: std::marker::PhantomData,
         }
     }

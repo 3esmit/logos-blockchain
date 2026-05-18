@@ -210,6 +210,7 @@ const fn is_active(
 ) -> bool {
     declaration.active
         + (config.inactivity_period + config.retention_period) * config.session_duration
+        // TODO: shouldn't be >, not >=?
         >= current_block
 }
 
@@ -229,6 +230,7 @@ impl<R: Rewards> ServiceState<R> {
             // Remove expired declarations based on retention_period
             // This essentially duplicates the declaration set so it's only triggered at
             // session boundaries
+            // TODO: shouldn't be moved below to after updating `self.next`?
             self.declarations = self
                 .declarations
                 .iter()

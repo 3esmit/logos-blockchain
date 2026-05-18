@@ -1,5 +1,5 @@
-mod LegerStateInspector;
 mod forks;
+mod inspector;
 pub mod pool;
 mod tracker;
 

@@ -13,7 +13,7 @@ use lb_core::{
 use tracing::error;
 
 use super::tracker::TxTrackerState;
-use crate::backend::LegerStateInspector::LedgerStateInspector;
+use crate::backend::inspector::LedgerStateInspector;
 
 pub struct BlockInfo<Tx> {
     pub parent: HeaderId,

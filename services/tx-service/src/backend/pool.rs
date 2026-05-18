@@ -1,18 +1,24 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fmt::Debug,
     hash::Hash,
+    marker::PhantomData,
     pin::Pin,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
 use futures::Stream;
+use lb_chain_service::storage::StorageAdapter;
+use lb_core::mantle::{Transaction, TransactionDependencies};
 use serde::{Deserialize, Serialize};
 
 use super::Status;
 use crate::{
-    backend::{MemPool, MempoolError, RecoverableMempool},
+    backend::{
+        MemPool, MempoolError, RecoverableMempool,
+        forks::{BlockInfoGetter, ForksTracker, LedgerStateGetter},
+    },
     metrics,
     storage::MempoolStorageAdapter,
 };
@@ -24,30 +30,32 @@ pub struct PoolRecoveryState<Key>
 where
     Key: Hash + Eq + Ord,
 {
-    pub pending_items: BTreeSet<Key>,
-    pub removed_items: BTreeMap<Key, u64>,
+    // pub pending_items: BTreeSet<Key>,
+    // pub removed_items: BTreeMap<Key, u64>,
     pub last_item_timestamp: u64,
+    _phantom: std::marker::PhantomData<Key>,
 }
 
-pub struct Mempool<BlockId, Item, Key, Storage, RuntimeServiceId> {
-    pending_items: BTreeSet<Key>,
-    removed_items: BTreeMap<Key, u64>,
-    last_item_timestamp: u64,
-    storage_adapter: Storage,
-    _phantom: std::marker::PhantomData<(BlockId, Item, RuntimeServiceId)>,
-}
-
-impl<BlockId, Item, Key, Storage, RuntimeServiceId> Debug
-    for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+pub struct Mempool<BlockId, Tx, TxHash, Adapter, RuntimeServiceId>
 where
+    TxHash: Eq + Hash,
+{
+    last_item_timestamp: u64,
+    adapter: Adapter,
+    forks_tracker: ForksTracker<Tx, TxHash, Adapter>,
+    _phantom: std::marker::PhantomData<(BlockId, RuntimeServiceId)>,
+}
+
+impl<BlockId, Tx, TxHash, Adapter, RuntimeServiceId> Debug
+    for Mempool<BlockId, Tx, TxHash, Adapter, RuntimeServiceId>
+where
+    TxHash: Eq + Hash,
     BlockId: Debug,
-    Item: Debug,
-    Key: Debug,
+    Tx: Debug,
+    TxHash: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mempool")
-            .field("pending_items", &self.pending_items)
-            .field("removed_items", &self.removed_items)
             .field("last_item_timestamp", &self.last_item_timestamp)
             .field("storage_adapter", &"<StorageAdapter>")
             .finish()
@@ -55,201 +63,122 @@ where
 }
 
 #[async_trait]
-impl<BlockId, Item, Key, Storage, RuntimeServiceId> MemPool
-    for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+impl<BlockId, Tx, Adapter, RuntimeServiceId> MemPool
+    for Mempool<BlockId, Tx, Tx::Hash, Adapter, RuntimeServiceId>
 where
-    Key: Hash + Eq + Ord + Clone + Send + Sync + 'static,
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Tx: TransactionDependencies
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>,
+    <Tx as Transaction>::Hash: Hash + Eq + Ord + Clone + Send + Sync + 'static,
     BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Storage:
-        MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item> + Send + Sync + 'static,
-    Storage::Error: Debug,
+    Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Send + Sync + 'static,
+    Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone,
+    <Adapter as MempoolStorageAdapter<RuntimeServiceId>>::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
     type Settings = ();
-    type Item = Item;
-    type Key = Key;
+    type Tx = Tx;
+    type TxHash = Tx::Hash;
     type BlockId = BlockId;
-    type Storage = Storage;
+    type Adapter = Adapter;
 
-    fn new(_settings: Self::Settings, storage: Self::Storage) -> Self {
+    fn new(_settings: Self::Settings, adapter: Self::Adapter) -> Self {
         Self {
-            pending_items: BTreeSet::new(),
-            removed_items: BTreeMap::new(),
             last_item_timestamp: 0,
-            storage_adapter: storage,
+            adapter: adapter.clone(),
+            forks_tracker: ForksTracker::new(adapter),
             _phantom: std::marker::PhantomData,
         }
     }
 
-    async fn add_item<I: Into<Self::Item> + Send>(
-        &mut self,
-        key: Self::Key,
-        item: I,
-    ) -> Result<(), MempoolError> {
-        self.prune_removed_items().await;
-
-        if self.pending_items.contains(&key) {
-            return Err(MempoolError::ExistingItem);
-        }
-
-        let timestamp = current_timestamp_millis();
-
-        if let Err(e) = self
-            .storage_adapter
-            .store_item(key.clone(), item.into())
-            .await
-        {
-            tracing::warn!("Failed to store item in storage: {:?}", e);
-        }
-
-        self.removed_items.remove(&key);
-        self.pending_items.insert(key);
-        self.last_item_timestamp = timestamp;
-        tracing::debug!(
-            "Added item to mempool; pending_items={}, last_item_timestamp={}",
-            self.pending_items.len(),
-            self.last_item_timestamp
-        );
-
-        metrics::mempool_transactions_added();
-        metrics::mempool_transactions_pending(self.pending_items.len());
+    async fn add_item<I: Into<Self::Tx> + Send>(&mut self, item: I) -> Result<(), MempoolError> {
+        // metrics::mempool_transactions_added();
+        // metrics::mempool_transactions_pending(self.pending_items.len());
 
         Ok(())
     }
 
     async fn view(
         &self,
-        _ancestor_hint: BlockId,
-    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
-        let keys: BTreeSet<Key> = self.pending_items.iter().cloned().collect();
-        self.get_items_by_keys(keys).await
+        ancestor_hint: BlockId,
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, MempoolError> {
+        unimplemented!()
     }
 
     async fn get_items_by_keys<I>(
         &self,
         keys: I,
-    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError>
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, MempoolError>
     where
-        I: IntoIterator<Item = Self::Key> + Send,
+        I: IntoIterator<Item = Self::TxHash> + Send,
     {
-        let keys_set: BTreeSet<Self::Key> = keys.into_iter().collect();
-        self.storage_adapter
-            .get_items(&keys_set)
-            .await
-            .map_err(|e| MempoolError::StorageError(format!("{e:?}")))
+        unimplemented!()
     }
 
-    async fn remove(&mut self, keys: &[Self::Key]) {
-        self.prune_removed_items().await;
+    async fn remove(&mut self, keys: &[Self::TxHash]) {
+        unimplemented!();
 
-        let removed_count = keys.len();
-        let removed_at = current_timestamp_millis();
-
-        for key in keys {
-            self.pending_items.remove(key);
-            self.removed_items.insert(key.clone(), removed_at);
-        }
-        tracing::debug!(
-            "Removed {removed_count} items from mempool; pending_items={}",
-            self.pending_items.len()
-        );
-
-        metrics::mempool_transactions_removed(removed_count);
-        metrics::mempool_transactions_pending(self.pending_items.len());
+        // metrics::mempool_transactions_removed(removed_count);
+        // metrics::mempool_transactions_pending(self.pending_items.len());
     }
 
     fn pending_item_count(&self) -> usize {
-        self.pending_items.len()
+        unimplemented!()
     }
 
     fn last_item_timestamp(&self) -> u64 {
         self.last_item_timestamp
     }
 
-    fn status(&self, items: &[Self::Key]) -> Vec<Status> {
-        items
-            .iter()
-            .map(|key| {
-                if self.pending_items.contains(key) {
-                    Status::Pending
-                } else {
-                    Status::Unknown
-                }
-            })
-            .collect()
+    fn status(&self, items: &[Self::TxHash]) -> Vec<Status> {
+        unimplemented!()
     }
 }
 
-impl<BlockId, Item, Key, Storage, RuntimeServiceId> RecoverableMempool
-    for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+impl<BlockId, Tx, Adapter, RuntimeServiceId> RecoverableMempool
+    for Mempool<BlockId, Tx, Tx::Hash, Adapter, RuntimeServiceId>
 where
-    Key: Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Tx::Hash:
+        Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Tx: TransactionDependencies
+        + Clone
+        + Ord
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>,
     BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Storage:
-        MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item> + Send + Sync + 'static,
-    Storage::Error: Debug,
+    Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Clone + Send + Sync + 'static,
+    Adapter: BlockInfoGetter<Tx>,
+    Adapter: LedgerStateGetter,
+    <Adapter as MempoolStorageAdapter<RuntimeServiceId>>::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
-    type RecoveryState = PoolRecoveryState<Key>;
+    type RecoveryState = PoolRecoveryState<Tx::Hash>;
 
     fn save(&self) -> Self::RecoveryState {
         PoolRecoveryState {
-            pending_items: self.pending_items.clone(),
-            removed_items: self.removed_items.clone(),
             last_item_timestamp: self.last_item_timestamp,
+            _phantom: PhantomData,
         }
     }
 
     fn recover(
         _settings: <Self as MemPool>::Settings,
         state: Self::RecoveryState,
-        storage: <Self as MemPool>::Storage,
+        adapter: <Self as MemPool>::Adapter,
     ) -> Self {
         Self {
-            pending_items: state.pending_items,
-            removed_items: state.removed_items,
             last_item_timestamp: state.last_item_timestamp,
-            storage_adapter: storage,
+            adapter: adapter.clone(),
+            // TODO: plug-in and recover tracker state
+            forks_tracker: ForksTracker::new(adapter),
             _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<BlockId, Item, Key, Storage, RuntimeServiceId>
-    Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
-where
-    Key: Hash + Eq + Ord + Clone + Send + Sync + 'static,
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Storage:
-        MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item> + Send + Sync + 'static,
-    Storage::Error: Debug,
-    RuntimeServiceId: Send + Sync,
-{
-    async fn prune_removed_items(&mut self) {
-        let now = current_timestamp_millis();
-        let grace_period_millis = REMOVED_ITEM_GRACE_PERIOD.as_millis() as u64;
-
-        let expired_keys = self
-            .removed_items
-            .iter()
-            .filter(|(_, removed_at)| now.saturating_sub(**removed_at) >= grace_period_millis)
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>();
-
-        if expired_keys.is_empty() {
-            return;
-        }
-
-        if let Err(e) = self.storage_adapter.remove_items(&expired_keys).await {
-            tracing::warn!("Failed to prune removed items from storage: {e:?}");
-            return;
-        }
-
-        for key in expired_keys {
-            self.removed_items.remove(&key);
         }
     }
 }

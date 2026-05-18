@@ -108,7 +108,7 @@ impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
         Self::default()
     }
 
-    async fn store_item(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error> {
+    async fn store_tx(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error> {
         self.items
             .lock()
             .expect("in-memory storage adapter lock should not be poisoned")
@@ -116,7 +116,7 @@ impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
         Ok(())
     }
 
-    async fn get_items(
+    async fn get_tx(
         &self,
         keys: &BTreeSet<Self::Key>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, Self::Error> {
@@ -133,7 +133,7 @@ impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
         Ok(Box::pin(stream::iter(items)))
     }
 
-    async fn remove_items(&mut self, keys: &[Self::Key]) -> Result<(), Self::Error> {
+    async fn remove_txs(&mut self, keys: &[Self::Key]) -> Result<(), Self::Error> {
         for key in keys {
             self.items
                 .lock()

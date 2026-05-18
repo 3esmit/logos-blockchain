@@ -50,41 +50,40 @@ where
     }
 }
 
-pub enum MempoolMsg<BlockId, Payload, Item, Key> {
+pub enum MempoolMsg<BlockId, Tx, TxHash> {
     Add {
-        payload: Payload,
-        key: Key,
+        payload: Tx,
+        key: TxHash,
         reply_channel: Sender<Result<(), MempoolError>>,
     },
     View {
         ancestor_hint: BlockId,
-        reply_channel: Sender<Pin<Box<dyn Stream<Item = Item> + Send>>>,
+        reply_channel: Sender<Pin<Box<dyn Stream<Item = Tx> + Send>>>,
     },
     /// Get specific transactions from mempool by their hashes
     ///
     /// Returns both found transactions and not found hashes.
     GetTransactionsByHashes {
-        hashes: Vec<Key>,
-        reply_channel: Sender<Result<TransactionsByHashesResponse<Item, Key>, MempoolError>>,
+        hashes: Vec<TxHash>,
+        reply_channel: Sender<Result<TransactionsByHashesResponse<Tx, TxHash>, MempoolError>>,
     },
     Remove {
-        ids: Vec<Key>,
+        ids: Vec<TxHash>,
     },
     Metrics {
         reply_channel: Sender<MempoolMetrics>,
     },
     Status {
-        items: Vec<Key>,
+        items: Vec<TxHash>,
         reply_channel: Sender<Vec<Status>>,
     },
 }
 
-impl<BlockId, Payload, Item, Key> Debug for MempoolMsg<BlockId, Payload, Item, Key>
+impl<BlockId, Tx, TxHash> Debug for MempoolMsg<BlockId, Tx, TxHash>
 where
     BlockId: Debug,
-    Payload: Debug,
-    Item: Debug,
-    Key: Debug,
+    Tx: Debug,
+    TxHash: Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         match self {

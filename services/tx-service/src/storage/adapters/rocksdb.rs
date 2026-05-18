@@ -7,8 +7,10 @@ use std::{
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
 use lb_core::{
+    block::Block,
     codec::{DeserializeOp as _, SerializeOp as _},
-    mantle::TxHash,
+    header::HeaderId,
+    mantle::{Transaction, TxHash},
 };
 use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
@@ -19,23 +21,21 @@ use crate::{backend::MempoolError, storage::MempoolStorageAdapter};
 /// A `RocksDB` storage adapter that stores transactions via storage service
 /// relay
 #[derive(Clone)]
-pub struct RocksStorageAdapter<Item, Key> {
+pub struct RocksStorageAdapter<Tx, TxId> {
     storage_relay: OutboundRelay<StorageMsg<RocksBackend>>,
-    _phantom: PhantomData<(Item, Key)>,
+    _phantom: PhantomData<(Tx, TxId)>,
 }
 
 #[async_trait]
-impl<Item, Key, RuntimeServiceId> MempoolStorageAdapter<RuntimeServiceId>
-    for RocksStorageAdapter<Item, Key>
+impl<Tx, RuntimeServiceId> MempoolStorageAdapter<RuntimeServiceId>
+    for RocksStorageAdapter<Tx, Tx::Hash>
 where
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Key: Clone + Send + Sync + 'static + Into<TxHash>,
+    Tx: Transaction + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Tx::Hash: Clone + Send + Sync + 'static + Into<TxHash>,
 {
     type Backend = RocksBackend;
 
-    type Item = Item;
-
-    type Key = Key;
+    type Tx = Tx;
 
     type Error = MempoolError;
 
@@ -50,14 +50,14 @@ where
         }
     }
 
-    async fn store_item(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error> {
-        let item_bytes = item
+    async fn store_tx(&mut self, tx: Self::Tx) -> Result<(), Self::Error> {
+        let item_bytes = tx
             .to_bytes()
             .map_err(|e| MempoolError::DynamicPoolError(e.into()))?;
 
-        let tx_hash: TxHash = key.into();
+        let tx_hash = tx.hash();
         let mut transactions = HashMap::new();
-        transactions.insert(tx_hash, item_bytes);
+        transactions.insert(tx_hash.into(), item_bytes);
 
         self.storage_relay
             .send(StorageMsg::store_transactions_request(transactions))
@@ -67,10 +67,10 @@ where
             })
     }
 
-    async fn get_items(
+    async fn get_tx(
         &self,
-        keys: &BTreeSet<Self::Key>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, Self::Error> {
+        keys: &BTreeSet<<Self::Tx as Transaction>::Hash>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, Self::Error> {
         if keys.is_empty() {
             return Ok(Box::pin(futures::stream::empty()));
         }
@@ -92,12 +92,15 @@ where
             MempoolError::DynamicPoolError("Failed to receive transactions response".into())
         })?;
 
-        let item_stream = tx_stream.filter_map(async |bytes| Self::Item::from_bytes(&bytes).ok());
+        let item_stream = tx_stream.filter_map(async |bytes| Self::Tx::from_bytes(&bytes).ok());
 
         Ok(Box::pin(item_stream))
     }
 
-    async fn remove_items(&mut self, keys: &[Self::Key]) -> Result<(), Self::Error> {
+    async fn remove_txs(
+        &mut self,
+        keys: &[<Self::Tx as Transaction>::Hash],
+    ) -> Result<(), Self::Error> {
         let tx_hashes: Vec<TxHash> = keys.iter().cloned().map(Into::into).collect();
 
         self.storage_relay
@@ -106,5 +109,24 @@ where
             .map_err(|_| {
                 MempoolError::DynamicPoolError("Failed to send remove transactions request".into())
             })
+    }
+
+    async fn get_block(&self, header: HeaderId) -> Result<Option<Block<Self::Tx>>, Self::Error> {
+        let (reply_channel, reply_rx) = tokio::sync::oneshot::channel();
+        self.storage_relay
+            .send(StorageMsg::get_block_request(header, reply_channel))
+            .await
+            .map_err(|_| {
+                MempoolError::DynamicPoolError("Failed to send get block request".into())
+            })?;
+        match reply_rx.await {
+            Ok(None) => Ok(None),
+            Ok(Some(bytes)) => Ok(Some(
+                Block::from_bytes(&bytes).map_err(|e| MempoolError::DynamicPoolError(e.into()))?,
+            )),
+            Err(_) => Err(MempoolError::DynamicPoolError(
+                "Failed to receive block response".into(),
+            )),
+        }
     }
 }

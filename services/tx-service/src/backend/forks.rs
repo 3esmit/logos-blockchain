@@ -38,28 +38,26 @@ pub enum ForksTrackerError {
     BlockNotFound,
     ParentNotFound(HeaderId),
 }
-pub struct ForksTracker<Tx, TxId, BlockGetter, LedgerGetter>
+
+pub struct ForksTracker<Tx, TxId, Adapter>
 where
     TxId: Eq + Hash,
 {
     states: HashMap<HeaderId, TxTrackerState<Tx, TxId>>,
     current_tips: HashMap<HeaderId, TxTrackerState<Tx, TxId>>,
-    block_getter: BlockGetter,
-    ledger_getter: LedgerGetter,
+    adapter: Adapter,
 }
 
-impl<Tx, BlockGetter, LedgerGetter> ForksTracker<Tx, Tx::Hash, BlockGetter, LedgerGetter>
+impl<Tx, Adapter> ForksTracker<Tx, Tx::Hash, Adapter>
 where
     Tx: TransactionDependencies + Clone,
-    BlockGetter: BlockInfoGetter<Tx> + Send,
-    LedgerGetter: LedgerStateGetter + Clone + Send,
+    Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send,
 {
-    pub fn new(block_getter: BlockGetter, ledger_getter: LedgerGetter) -> Self {
+    pub fn new(adapter: Adapter) -> Self {
         Self {
             states: HashMap::new(),
             current_tips: HashMap::new(),
-            block_getter,
-            ledger_getter,
+            adapter,
         }
     }
 
@@ -88,7 +86,7 @@ where
         let BlockInfo::<Tx> {
             parent,
             transactions,
-        } = self.block_getter.get_block(block_id).await?;
+        } = self.adapter.get_block(block_id).await?;
         // Check current_tips first, then states: a fork sibling may have already
         // moved the shared parent out of current_tips into states.
         let parent_state = self
@@ -113,7 +111,7 @@ where
     pub async fn process_new_tx(&mut self, tx: &Tx) {
         let Self { current_tips, .. } = self;
         let tips_len = current_tips.len();
-        let ledger_getter: LedgerGetter = self.ledger_getter.clone();
+        let ledger_getter: Adapter = self.adapter.clone();
         let header_ids: Vec<_> = current_tips.keys().cloned().collect();
         let mut ledger_states = pin!(
             tokio_stream::iter(

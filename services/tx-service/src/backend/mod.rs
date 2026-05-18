@@ -1,3 +1,4 @@
+pub mod adapter;
 mod forks;
 mod inspector;
 pub mod pool;
@@ -22,43 +23,39 @@ pub enum MempoolError {
 #[async_trait::async_trait]
 pub trait MemPool {
     type Settings: Send;
-    type Item: Send;
-    type Key: Send + Sync + Clone + Ord;
+    type Tx: Send;
+    type TxHash: Send + Sync + Clone + Ord;
     type BlockId: Send;
-    type Storage: Send;
+    type Adapter: Send;
 
     /// Construct a new empty pool with storage
-    fn new(settings: Self::Settings, storage: Self::Storage) -> Self;
+    fn new(settings: Self::Settings, storage: Self::Adapter) -> Self;
 
     /// Add a new item to the mempool, for example because we received it from
     /// the network. The item is stored in external storage.
-    async fn add_item<I: Into<Self::Item> + Send>(
-        &mut self,
-        key: Self::Key,
-        item: I,
-    ) -> Result<(), MempoolError>;
+    async fn add_item<I: Into<Self::Tx> + Send>(&mut self, item: I) -> Result<(), MempoolError>;
 
     /// Return a view over items contained in the mempool.
     /// Implementations should provide *at least* all the items which have not
     /// been marked as in a block.
-    /// The hint on the ancestor *can* be used by the implementation to display
-    /// additional items that were not included up to that point if
+    /// The hint on the ancestor *should* be used by the implementation to
+    /// display additional items that were not included up to that point if
     /// available.
     async fn view(
         &self,
         ancestor_hint: Self::BlockId,
-    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError>;
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, MempoolError>;
 
     /// Get multiple items by their keys from the mempool via storage lookup
     async fn get_items_by_keys<I>(
         &self,
         keys: I,
-    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError>
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, MempoolError>
     where
-        I: IntoIterator<Item = Self::Key> + Send;
+        I: IntoIterator<Item = Self::TxHash> + Send;
 
     /// Remove items from the mempool..
-    async fn remove(&mut self, items: &[Self::Key]);
+    async fn remove(&mut self, items: &[Self::TxHash]);
 
     fn pending_item_count(&self) -> usize;
     fn last_item_timestamp(&self) -> u64;
@@ -66,7 +63,7 @@ pub trait MemPool {
     // Return the status of a set of items.
     // This is a best effort attempt, and implementations are free to return
     // `Unknown` for all of them.
-    fn status(&self, items: &[Self::Key]) -> Vec<Status>;
+    fn status(&self, items: &[Self::TxHash]) -> Vec<Status>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -89,6 +86,6 @@ pub trait RecoverableMempool: MemPool {
     fn recover(
         settings: <Self as MemPool>::Settings,
         state: Self::RecoveryState,
-        storage: <Self as MemPool>::Storage,
+        storage: <Self as MemPool>::Adapter,
     ) -> Self;
 }

@@ -10,6 +10,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{DependencyId, TransactionDependencies},
 };
+use lb_ledger::LedgerState;
 use tracing::error;
 
 use super::tracker::TxTrackerState;
@@ -78,15 +79,14 @@ where
         }
     }
 
-    pub async fn process_new_block(
+    pub fn process_new_block(
         &mut self,
-        event: &ProcessedBlockEvent,
-    ) -> Result<(), ForksTrackerError> {
-        let ProcessedBlockEvent { block_id, tip, .. } = event;
-        let BlockInfo::<Tx> {
+        block_id: &HeaderId,
+        BlockInfo {
             parent,
             transactions,
-        } = self.adapter.get_block(block_id).await?;
+        }: BlockInfo<Tx>,
+    ) -> Result<(), ForksTrackerError> {
         // Check current_tips first, then states: a fork sibling may have already
         // moved the shared parent out of current_tips into states.
         let parent_state = self
@@ -108,36 +108,47 @@ where
         Ok(())
     }
 
-    pub async fn process_new_tx(&mut self, tx: &Tx) {
-        let Self { current_tips, .. } = self;
-        let tips_len = current_tips.len();
-        let ledger_getter: Adapter = self.adapter.clone();
-        let header_ids: Vec<_> = current_tips.keys().cloned().collect();
-        let mut ledger_states = pin!(
-            tokio_stream::iter(
-                header_ids
-                    .into_iter()
-                    .zip(std::iter::repeat_with(|| ledger_getter.clone()))
-            )
-            .map(async |(header_id, ledger_getter)| {
-                let ledger_state = ledger_getter.get_ledger_deps(&header_id).await;
-                (header_id, ledger_state)
-            })
-            .buffer_unordered(tips_len)
-        );
-        while let Some((header_id, ledger_state)) = ledger_states.next().await {
-            let state = current_tips
-                .get_mut(&header_id)
-                .expect("This header at this point is always present");
-            match ledger_state {
-                Ok(ledger_state_deps) => {
-                    state.process_tx(tx.clone(), &ledger_state_deps);
-                }
-                Err(e) => {
-                    error!("Error getting ledger state for block {header_id}: {e:?}");
-                }
-            }
-        }
+    pub fn process_new_tx(
+        &mut self,
+        tx: &Tx,
+        header_id: &HeaderId,
+        tip_deps: &HashSet<DependencyId>,
+    ) {
+        let state = self
+            .current_tips
+            .get_mut(header_id)
+            .expect("This header at this point is always present");
+        state.process_tx(tx.clone(), tip_deps);
+        // let Self { current_tips, .. } = self;
+        // let tips_len = current_tips.len();
+        // let ledger_getter: Adapter = self.adapter.clone();
+        // let header_ids: Vec<_> = current_tips.keys().cloned().collect();
+        // let mut ledger_states = pin!(
+        //     tokio_stream::iter(
+        //         header_ids
+        //             .into_iter()
+        //             .zip(std::iter::repeat_with(|| ledger_getter.clone()))
+        //     )
+        //     .map(async |(header_id, ledger_getter)| {
+        //         let ledger_state =
+        // ledger_getter.get_ledger_deps(&header_id).await;
+        //         (header_id, ledger_state)
+        //     })
+        //     .buffer_unordered(tips_len)
+        // );
+        // while let Some((header_id, ledger_state)) =
+        // ledger_states.next().await {     let state = current_tips
+        //         .get_mut(&header_id)
+        //         .expect("This header at this point is always present");
+        //     match ledger_state {
+        //         Ok(ledger_state_deps) => {
+        //             state.process_tx(tx.clone(), &ledger_state_deps);
+        //         }
+        //         Err(e) => {
+        //             error!("Error getting ledger state for block {header_id}:
+        // {e:?}");         }
+        //     }
+        // }
     }
 
     pub fn get_block_state(&self, header_id: &HeaderId) -> Option<TxTrackerState<Tx, Tx::Hash>> {

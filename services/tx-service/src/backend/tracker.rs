@@ -1,7 +1,7 @@
 use std::{collections::HashSet, hash::Hash};
 
 use lb_core::mantle::{DependencyId, TransactionDependencies};
-use rpds::{HashTrieMap, HashTrieSet};
+use rpds::{HashTrieMapSync as HashTrieMap, HashTrieSetSync as HashTrieSet};
 
 pub trait LedgerStateReadyDeps {
     fn frontier_deps(&self) -> &HashSet<DependencyId>;
@@ -33,10 +33,10 @@ where
 {
     pub fn new() -> Self {
         Self {
-            ready_txs: HashTrieMap::new(),
-            orphan_txs: HashTrieMap::new(),
-            dep_to_tx: HashTrieMap::new(),
-            tx_pending_count: HashTrieMap::new(),
+            ready_txs: HashTrieMap::new_sync(),
+            orphan_txs: HashTrieMap::new_sync(),
+            dep_to_tx: HashTrieMap::new_sync(),
+            tx_pending_count: HashTrieMap::new_sync(),
         }
     }
 }
@@ -59,7 +59,7 @@ where
                 if let Some(entry) = self.dep_to_tx.get_mut(&dep) {
                     entry.insert_mut(tx.hash());
                 } else {
-                    let set = HashTrieSet::new().insert(tx.hash());
+                    let set = HashTrieSet::new_sync().insert(tx.hash());
                     self.dep_to_tx.insert_mut(dep, set);
                 }
             }

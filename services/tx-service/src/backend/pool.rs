@@ -33,7 +33,7 @@ where
     // pub pending_items: BTreeSet<Key>,
     // pub removed_items: BTreeMap<Key, u64>,
     pub last_item_timestamp: u64,
-    _phantom: std::marker::PhantomData<Key>,
+    _phantom: PhantomData<Key>,
 }
 
 pub struct Mempool<BlockId, Tx, TxHash, Adapter, RuntimeServiceId>
@@ -42,8 +42,8 @@ where
 {
     last_item_timestamp: u64,
     adapter: Adapter,
-    // forks_tracker: ForksTracker<Tx, TxHash, Adapter>,
-    _phantom: std::marker::PhantomData<(Tx, TxHash, BlockId, RuntimeServiceId)>,
+    forks_tracker: ForksTracker<Tx, TxHash, Adapter>,
+    _phantom: PhantomData<(BlockId, RuntimeServiceId)>,
 }
 
 impl<BlockId, Tx, TxHash, Adapter, RuntimeServiceId> Debug
@@ -89,9 +89,9 @@ where
     fn new(_settings: Self::Settings, adapter: Self::Adapter) -> Self {
         Self {
             last_item_timestamp: 0,
-            adapter: adapter.clone(),
-            // forks_tracker: ForksTracker::new(adapter),
-            _phantom: std::marker::PhantomData,
+            forks_tracker: ForksTracker::new(adapter.clone()),
+            adapter,
+            _phantom: PhantomData,
         }
     }
 
@@ -175,9 +175,8 @@ where
     ) -> Self {
         Self {
             last_item_timestamp: state.last_item_timestamp,
-            adapter: adapter.clone(),
-            // TODO: plug-in and recover tracker state
-            // forks_tracker: ForksTracker::new(adapter),
+            forks_tracker: ForksTracker::new(adapter.clone()),
+            adapter,
             _phantom: std::marker::PhantomData,
         }
     }

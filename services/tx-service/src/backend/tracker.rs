@@ -47,10 +47,8 @@ where
 {
     pub fn process_tx(&mut self, tx: Tx, frontier_deps: &HashSet<DependencyId>) {
         let consumes: HashSet<DependencyId> = tx.consumes().collect();
-        let missing_deps: HashSet<DependencyId> = consumes
-            .difference(frontier_deps)
-            .cloned()
-            .collect();
+        let missing_deps: HashSet<DependencyId> =
+            consumes.difference(frontier_deps).cloned().collect();
         let pending_deps_count = missing_deps.len();
         if missing_deps.is_empty() {
             self.ready_txs.insert_mut(tx.hash(), tx);
@@ -87,6 +85,17 @@ where
                 }
             }
         }
+    }
+
+    pub fn get_ready_txs(&self) -> Vec<Tx> {
+        self.ready_txs.values().cloned().collect()
+    }
+
+    pub fn force_remove_tx(&mut self, id: &Tx::Hash) {
+        self.ready_txs.remove_mut(id);
+        self.orphan_txs.remove_mut(id);
+        self.tx_pending_count.remove_mut(id);
+        todo!("Remove smartly dependencies that requires of this tx");
     }
 }
 

@@ -440,8 +440,7 @@ where
         ancestor_hint: Pool::BlockId,
         reply_channel: oneshot::Sender<Pin<Box<dyn futures::Stream<Item = Pool::Tx> + Send>>>,
     ) {
-        let pending_items = pool.pending_item_count();
-        tracing::trace!(pending_items, "Handling mempool View message");
+        tracing::trace!("Handling mempool View message");
 
         let items = pool
             .view(ancestor_hint)
@@ -455,7 +454,6 @@ where
 
     fn handle_metrics_message(pool: &Pool, reply_channel: oneshot::Sender<MempoolMetrics>) {
         let info = MempoolMetrics {
-            pending_items: pool.pending_item_count(),
             last_item_timestamp: pool.last_item_timestamp(),
         };
 
@@ -551,8 +549,6 @@ where
             tracing::debug!("could not add item to the pool due to: {e}");
             return;
         }
-
-        tracing::trace!(counter.tx_mempool_pending_items = pool.pending_item_count());
 
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
     }

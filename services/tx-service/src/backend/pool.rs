@@ -8,10 +8,14 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::Stream;
-use lb_chain_service::storage::StorageAdapter;
-use lb_core::mantle::{Transaction, TransactionDependencies};
+use futures::{Stream, stream};
+use lb_chain_service::{LibUpdate, ProcessedBlockEvent, storage::StorageAdapter};
+use lb_core::{
+    header::HeaderId,
+    mantle::{Transaction, TransactionDependencies},
+};
 use serde::{Deserialize, Serialize};
+use tracing::{error, warn};
 
 use super::Status;
 use crate::{
@@ -36,21 +40,19 @@ where
     _phantom: PhantomData<Key>,
 }
 
-pub struct Mempool<BlockId, Tx, TxHash, Adapter, RuntimeServiceId>
+pub struct Mempool<Tx, TxHash, Adapter, RuntimeServiceId>
 where
     TxHash: Eq + Hash,
 {
     last_item_timestamp: u64,
     adapter: Adapter,
     forks_tracker: ForksTracker<Tx, TxHash, Adapter>,
-    _phantom: PhantomData<(BlockId, RuntimeServiceId)>,
+    _phantom: PhantomData<RuntimeServiceId>,
 }
 
-impl<BlockId, Tx, TxHash, Adapter, RuntimeServiceId> Debug
-    for Mempool<BlockId, Tx, TxHash, Adapter, RuntimeServiceId>
+impl<Tx, TxHash, Adapter, RuntimeServiceId> Debug for Mempool<Tx, TxHash, Adapter, RuntimeServiceId>
 where
     TxHash: Eq + Hash,
-    BlockId: Debug,
     Tx: Debug,
     TxHash: Debug,
 {
@@ -63,8 +65,7 @@ where
 }
 
 #[async_trait]
-impl<BlockId, Tx, Adapter, RuntimeServiceId> MemPool
-    for Mempool<BlockId, Tx, Tx::Hash, Adapter, RuntimeServiceId>
+impl<Tx, Adapter, RuntimeServiceId> MemPool for Mempool<Tx, Tx::Hash, Adapter, RuntimeServiceId>
 where
     Tx: TransactionDependencies
         + Clone
@@ -74,7 +75,6 @@ where
         + Serialize
         + for<'de> Deserialize<'de>,
     <Tx as Transaction>::Hash: Hash + Eq + Ord + Clone + Send + Sync + 'static,
-    BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Send + Sync + 'static,
     Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone,
     <Adapter as MempoolStorageAdapter<RuntimeServiceId>>::Error: Debug,
@@ -83,7 +83,7 @@ where
     type Settings = ();
     type Tx = Tx;
     type TxHash = Tx::Hash;
-    type BlockId = BlockId;
+    type BlockId = HeaderId;
     type Adapter = Adapter;
 
     fn new(_settings: Self::Settings, adapter: Self::Adapter) -> Self {
@@ -96,17 +96,18 @@ where
     }
 
     async fn add_item<I: Into<Self::Tx> + Send>(&mut self, item: I) -> Result<(), MempoolError> {
-        // metrics::mempool_transactions_added();
-        // metrics::mempool_transactions_pending(self.pending_items.len());
-
+        self.last_item_timestamp = current_timestamp_millis();
+        self.forks_tracker.process_new_tx(&item.into()).await;
         Ok(())
     }
 
     async fn view(
         &self,
-        ancestor_hint: BlockId,
+        ancestor_hint: HeaderId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, MempoolError> {
-        unimplemented!()
+        Ok(Box::pin(stream::iter(
+            self.forks_tracker.get_frontier_txs(ancestor_hint),
+        )))
     }
 
     async fn get_items_by_keys<I>(
@@ -126,21 +127,28 @@ where
         // metrics::mempool_transactions_pending(self.pending_items.len());
     }
 
-    fn pending_item_count(&self) -> usize {
-        unimplemented!()
-    }
-
     fn last_item_timestamp(&self) -> u64 {
         self.last_item_timestamp
     }
 
     fn status(&self, items: &[Self::TxHash]) -> Vec<Status> {
-        unimplemented!()
+        todo!("What to check here?");
+        vec![]
+    }
+
+    async fn process_new_block_event(&mut self, event: ProcessedBlockEvent) {
+        if let Err(e) = self.forks_tracker.process_new_block(&event).await {
+            error!("Failed to process new block event: {e:?}");
+        }
+    }
+
+    fn process_lib_event(&mut self, event: LibUpdate) {
+        self.forks_tracker.process_lib(&event);
     }
 }
 
-impl<BlockId, Tx, Adapter, RuntimeServiceId> RecoverableMempool
-    for Mempool<BlockId, Tx, Tx::Hash, Adapter, RuntimeServiceId>
+impl<Tx, Adapter, RuntimeServiceId> RecoverableMempool
+    for Mempool<Tx, Tx::Hash, Adapter, RuntimeServiceId>
 where
     Tx::Hash:
         Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
@@ -152,7 +160,6 @@ where
         + 'static
         + Serialize
         + for<'de> Deserialize<'de>,
-    BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Clone + Send + Sync + 'static,
     Adapter: BlockInfoGetter<Tx>,
     Adapter: LedgerStateGetter,
@@ -177,7 +184,7 @@ where
             last_item_timestamp: state.last_item_timestamp,
             forks_tracker: ForksTracker::new(adapter.clone()),
             adapter,
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }

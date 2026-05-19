@@ -7,6 +7,7 @@ mod tracker;
 use std::pin::Pin;
 
 use futures::Stream;
+use lb_chain_service::{LibUpdate, ProcessedBlockEvent};
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
@@ -57,13 +58,15 @@ pub trait MemPool {
     /// Remove items from the mempool..
     async fn remove(&mut self, items: &[Self::TxHash]);
 
-    fn pending_item_count(&self) -> usize;
     fn last_item_timestamp(&self) -> u64;
 
     // Return the status of a set of items.
     // This is a best effort attempt, and implementations are free to return
     // `Unknown` for all of them.
     fn status(&self, items: &[Self::TxHash]) -> Vec<Status>;
+
+    async fn process_new_block_event(&mut self, event: ProcessedBlockEvent);
+    fn process_lib_event(&mut self, event: LibUpdate);
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]

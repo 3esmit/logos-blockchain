@@ -30,13 +30,13 @@ impl<Cryptarchia, Storage, RuntimeServiceId> TrackerAdapter<Cryptarchia, Storage
 where
     Cryptarchia: CryptarchiaServiceData,
 {
-    pub fn new(
+    pub const fn new(
         crypatarchia_api: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         storage: Storage,
     ) -> Self {
         Self {
-            crypatarchia_api,
             storage,
+            crypatarchia_api,
         }
     }
 }

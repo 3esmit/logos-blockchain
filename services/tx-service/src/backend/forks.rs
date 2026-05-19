@@ -60,6 +60,25 @@ where
         }
     }
 
+    pub fn get_frontier_txs(&self, parent_hint: HeaderId) -> Vec<Tx> {
+        self.current_tips
+            .get(&parent_hint)
+            .map(TxTrackerState::get_ready_txs)
+            .unwrap_or_default()
+    }
+
+    pub fn force_remove_txs(&mut self, txs: &[Tx::Hash]) {
+        for state in self
+            .states
+            .values_mut()
+            .chain(self.current_tips.values_mut())
+        {
+            for tx in txs {
+                state.force_remove_tx(tx);
+            }
+        }
+    }
+
     pub fn process_lib(&mut self, event: &LibUpdate) {
         let LibUpdate {
             new_lib,
@@ -133,10 +152,7 @@ where
                     state.process_tx(tx.clone(), &ledger_state_deps);
                 }
                 Err(e) => {
-                    error!(
-                        "Error getting ledger state for block {header_id}:
-        {e:?}"
-                    );
+                    error!("Error getting ledger state for block {header_id}: {e:?}");
                 }
             }
         }

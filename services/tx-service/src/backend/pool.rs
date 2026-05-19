@@ -121,8 +121,9 @@ where
     }
 
     async fn remove(&mut self, keys: &[Self::TxHash]) {
-        unimplemented!();
+        self.forks_tracker.force_remove_txs(keys);
 
+        // TODO: Add metrics back
         // metrics::mempool_transactions_removed(removed_count);
         // metrics::mempool_transactions_pending(self.pending_items.len());
     }

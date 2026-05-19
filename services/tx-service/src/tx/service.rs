@@ -12,9 +12,9 @@ use std::{
     time::Duration,
 };
 
-use futures::StreamExt as _;
+use futures::{Stream, StreamExt as _};
 use lb_chain_service::{
-    Cryptarchia, CryptarchiaConsensus,
+    Cryptarchia, CryptarchiaConsensus, LibUpdate, ProcessedBlockEvent,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::mantle::{AuthenticatedMantleTx, Transaction};
@@ -32,6 +32,8 @@ use overwatch::{
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::oneshot;
+use tokio_stream::wrappers::BroadcastStream;
+use tracing::{debug, error, info};
 
 use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
@@ -237,6 +239,9 @@ where
                     .expect("Cryptarchia service relay should be available"),
             );
 
+        let mut blocks_stream = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
+        let mut lib_stream = BroadcastStream::new(cryptarchia_api.subscribe_lib_updates().await?);
+
         let adapter = TrackerAdapter::new(cryptarchia_api, storage_adapter.clone());
 
         let pool_state = self.initial_state.pool.take();
@@ -280,8 +285,14 @@ where
         )
         .await?;
 
-        self.run_event_loop(&mut pool, network_service_relay, &mut network_items)
-            .await
+        self.run_event_loop(
+            &mut pool,
+            network_service_relay,
+            &mut network_items,
+            &mut blocks_stream,
+            &mut lib_stream,
+        )
+        .await
     }
 }
 
@@ -310,9 +321,9 @@ where
         network_service_relay: OutboundRelay<
             BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>,
         >,
-        network_items: &mut Box<
-            dyn futures::Stream<Item = (Pool::TxHash, Pool::Tx)> + Unpin + Send,
-        >,
+        network_items: &mut Box<dyn Stream<Item = (Pool::TxHash, Pool::Tx)> + Unpin + Send>,
+        blocks_stream: &mut BroadcastStream<ProcessedBlockEvent>,
+        lib_stream: &mut BroadcastStream<LibUpdate>,
     ) -> Result<(), overwatch::DynError>
     where
         Pool::Settings: Send + Sync,
@@ -331,6 +342,30 @@ where
                         .network_adapter;
 
                     Self::handle_mempool_message(pool, relay_msg, network_service_relay.clone(), state_updater, settings).await;
+                }
+                Some(new_block_event) = blocks_stream.next() => {
+                    match new_block_event {
+                        Ok(new_block_event) => {
+                            debug!("Processing new block event: {:#?}", new_block_event);
+                            pool.process_new_block_event(new_block_event).await;
+                        },
+                        Err(e) => {
+                            error!("Error processing new block event: {e}");
+                        }
+                    }
+
+                }
+                Some(lib_update_event) = lib_stream.next() => {
+                    match lib_update_event {
+                        Ok(lib_update_event) => {
+                            debug!("Processing lib update event: {:#?}", lib_update_event);
+                            pool.process_lib_event(lib_update_event);
+                        },
+                        Err(e) => {
+                            error!("Error processing new lib event: {e}");
+                        }
+                    }
+
                 }
                 Some((_key, item)) = network_items.next() => {
                     Self::handle_network_item(pool, item, &self.service_resources_handle.state_updater).await;

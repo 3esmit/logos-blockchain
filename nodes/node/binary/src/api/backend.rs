@@ -23,7 +23,7 @@ pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{metrics::http_metrics_middleware, paths};
 use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
-use lb_tx_service::{TxMempoolService, backend::Mempool};
+use lb_tx_service::{TxMempoolService, backend::{Mempool, TrackerAdapter}};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
@@ -98,12 +98,11 @@ where
     TimeBackend::Settings: Clone + Send + Sync,
     StorageAdapter:
         lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+    MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
+        + lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
             Tx = SignedMantleTx,
-        > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
-        + lb_tx_service::backend::LedgerStateGetter
-        + Send
+        > + Send
         + Sync
         + Clone
         + 'static,
@@ -136,7 +135,7 @@ where
                 Mempool<
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    MempoolStorageAdapter,
+                    TrackerAdapter<Cryptarchia<RuntimeServiceId>, MempoolStorageAdapter, RuntimeServiceId>,
                     RuntimeServiceId,
                 >,
                 MempoolStorageAdapter,

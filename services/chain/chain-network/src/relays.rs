@@ -12,8 +12,10 @@ use lb_core::{
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_time_service::{TimeService, backends::TimeBackend as TimeBackendTrait};
 use lb_tx_service::{
-    MempoolMsg, TxMempoolService, backend::RecoverableMempool,
-    network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
+    MempoolMsg, TxMempoolService,
+    backend::{MemPool, RecoverableMempool, adapter::TrackerAdapter},
+    network::NetworkAdapter as MempoolNetworkAdapter,
+    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
 };
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -84,13 +86,14 @@ where
     }
 
     #[expect(clippy::allow_attributes_without_reason)]
-    pub async fn from_service_resources_handle<TimeBackend>(
+    pub async fn from_service_resources_handle<TimeBackend, StorageAdapter>(
         service_resources_handle: &OpaqueServiceResourcesHandle<
             ChainNetwork<
                 Cryptarchia,
                 NetworkAdapter,
                 Mempool,
                 MempoolNetAdapter,
+                StorageAdapter,
                 TimeBackend,
                 RuntimeServiceId,
             >,
@@ -99,8 +102,10 @@ where
     ) -> Self
     where
         Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Tx>,
+        Mempool: MemPool<Adapter = TrackerAdapter<Cryptarchia, StorageAdapter, RuntimeServiceId>>,
         Mempool::TxHash: Send,
         NetworkAdapter::Settings: Sync + Send,
+        StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync,
         RuntimeServiceId: Debug
@@ -114,7 +119,7 @@ where
                 TxMempoolService<
                     MempoolNetAdapter,
                     Mempool,
-                    Mempool::Adapter,
+                    StorageAdapter,
                     Cryptarchia,
                     RuntimeServiceId,
                 >,

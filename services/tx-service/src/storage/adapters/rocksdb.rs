@@ -16,7 +16,7 @@ use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBac
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 
-use crate::{backend::MempoolError, storage::MempoolStorageAdapter};
+use crate::{backend::MempoolError, storage::{MempoolStorageAdapter, MempoolStorageAdapterNew}};
 
 /// A `RocksDB` storage adapter that stores transactions via storage service
 /// relay
@@ -38,17 +38,6 @@ where
     type Tx = Tx;
 
     type Error = MempoolError;
-
-    fn new(
-        storage_relay: OutboundRelay<
-            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
-    ) -> Self {
-        Self {
-            storage_relay,
-            _phantom: PhantomData,
-        }
-    }
 
     async fn store_tx(&mut self, tx: Self::Tx) -> Result<(), Self::Error> {
         let item_bytes = tx
@@ -127,6 +116,24 @@ where
             Err(_) => Err(MempoolError::DynamicPoolError(
                 "Failed to receive block response".into(),
             )),
+        }
+    }
+}
+
+impl<Tx, RuntimeServiceId> MempoolStorageAdapterNew<RuntimeServiceId>
+    for RocksStorageAdapter<Tx, Tx::Hash>
+where
+    Tx: Transaction + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Tx::Hash: Clone + Send + Sync + 'static + Into<TxHash>,
+{
+    fn new(
+        storage_relay: OutboundRelay<
+            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
+        >,
+    ) -> Self {
+        Self {
+            storage_relay,
+            _phantom: PhantomData,
         }
     }
 }

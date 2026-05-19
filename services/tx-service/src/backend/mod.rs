@@ -4,6 +4,8 @@ mod inspector;
 pub mod pool;
 mod tracker;
 
+pub use adapter::TrackerAdapter;
+
 use std::pin::Pin;
 
 use futures::Stream;

@@ -1,6 +1,11 @@
-use std::{collections::HashSet, fmt::Debug};
+use std::{
+    collections::{BTreeSet, HashSet},
+    fmt::Debug,
+    pin::Pin,
+};
 
-use futures::FutureExt;
+use async_trait::async_trait;
+use futures::{FutureExt, Stream};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::Block,
@@ -24,6 +29,20 @@ where
 {
     storage: Storage,
     crypatarchia_api: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+}
+
+impl<Cryptarchia, Storage, RuntimeServiceId> Clone
+    for TrackerAdapter<Cryptarchia, Storage, RuntimeServiceId>
+where
+    Cryptarchia: CryptarchiaServiceData,
+    Storage: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            crypatarchia_api: self.crypatarchia_api.clone(),
+        }
+    }
 }
 
 impl<Cryptarchia, Storage, RuntimeServiceId> TrackerAdapter<Cryptarchia, Storage, RuntimeServiceId>
@@ -94,5 +113,43 @@ where
                 Err(ForksTrackerError::ParentNotFound(*header_id))
             }
         }
+    }
+}
+
+#[async_trait]
+impl<Cryptarchia, Storage, RuntimeServiceId> MempoolStorageAdapter<RuntimeServiceId>
+    for TrackerAdapter<Cryptarchia, Storage, RuntimeServiceId>
+where
+    Cryptarchia: CryptarchiaServiceData + Send + Sync,
+    Cryptarchia::Tx: Send + Sync,
+    Storage: crate::storage::MempoolStorageAdapter<RuntimeServiceId> + Send + Sync,
+    Storage::Tx: Send,
+    <Storage::Tx as Transaction>::Hash: Sync,
+    RuntimeServiceId: Send + Sync,
+{
+    type Backend = Storage::Backend;
+    type Tx = Storage::Tx;
+    type Error = Storage::Error;
+
+    async fn store_tx(&mut self, tx: Self::Tx) -> Result<(), Self::Error> {
+        self.storage.store_tx(tx).await
+    }
+
+    async fn get_tx(
+        &self,
+        keys: &BTreeSet<<Self::Tx as Transaction>::Hash>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, Self::Error> {
+        self.storage.get_tx(keys).await
+    }
+
+    async fn remove_txs(
+        &mut self,
+        keys: &[<Self::Tx as Transaction>::Hash],
+    ) -> Result<(), Self::Error> {
+        self.storage.remove_txs(keys).await
+    }
+
+    async fn get_block(&self, header: HeaderId) -> Result<Option<Block<Self::Tx>>, Self::Error> {
+        self.storage.get_block(header).await
     }
 }

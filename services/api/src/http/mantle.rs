@@ -6,6 +6,7 @@ use futures::{Stream, StreamExt as _, future::join_all};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
     ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Slot,
+    api::CryptarchiaServiceData,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
@@ -23,7 +24,7 @@ use lb_storage_service::{
 };
 use lb_tx_service::{
     MempoolMetrics, MempoolMsg, TxMempoolService,
-    backend::{BlockInfoGetter, LedgerStateGetter, Mempool},
+    backend::{Mempool, TrackerAdapter},
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
@@ -54,7 +55,12 @@ pub struct BlockWithChainState<Tx> {
 
 pub type MempoolService<Adapter, Cryptarchia, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash, RuntimeServiceId>,
-    Mempool<SignedMantleTx, <SignedMantleTx as Transaction>::Hash, Adapter, RuntimeServiceId>,
+    Mempool<
+        SignedMantleTx,
+        <SignedMantleTx as Transaction>::Hash,
+        TrackerAdapter<Cryptarchia, Adapter, RuntimeServiceId>,
+        RuntimeServiceId,
+    >,
     Adapter,
     Cryptarchia,
     RuntimeServiceId,
@@ -81,16 +87,17 @@ pub async fn mantle_mempool_metrics<StorageAdapter, Cryptarchia, RuntimeServiceI
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<MempoolMetrics, super::DynError>
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
-        + BlockInfoGetter<SignedMantleTx>
-        + LedgerStateGetter
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
+        + lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
         + Clone
         + 'static,
     StorageAdapter::Error: Debug,
+    Cryptarchia: CryptarchiaServiceData<Tx = SignedMantleTx> + Sync,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
+        + 'static
         + AsServiceId<MempoolService<StorageAdapter, Cryptarchia, RuntimeServiceId>>,
 {
     let relay = handle.relay().await?;
@@ -110,16 +117,17 @@ pub async fn mantle_mempool_status<StorageAdapter, Cryptarchia, RuntimeServiceId
     items: Vec<<SignedMantleTx as Transaction>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
-        + BlockInfoGetter<SignedMantleTx>
-        + LedgerStateGetter
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
+        + lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
         + Clone
         + 'static,
     StorageAdapter::Error: Debug,
+    Cryptarchia: CryptarchiaServiceData<Tx = SignedMantleTx> + Sync,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
+        + 'static
         + AsServiceId<MempoolService<StorageAdapter, Cryptarchia, RuntimeServiceId>>,
 {
     let relay = handle.relay().await?;

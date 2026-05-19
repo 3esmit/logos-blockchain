@@ -32,9 +32,9 @@ use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService,
-    backend::{MemPool, RecoverableMempool},
+    backend::{MemPool, RecoverableMempool, adapter::TrackerAdapter},
     network::NetworkAdapter as MempoolNetworkAdapter,
-    storage::MempoolStorageAdapter,
+    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
 };
 use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
@@ -134,6 +134,7 @@ pub struct CryptarchiaLeader<
     CryptarchiaService,
     ChainNetwork,
     Wallet,
+    StorageAdapter,
     RuntimeServiceId,
 > where
     BlendService: lb_blend_service::ServiceComponents,
@@ -153,6 +154,7 @@ pub struct CryptarchiaLeader<
     CryptarchiaService: CryptarchiaServiceData,
     ChainNetwork: ChainNetworkServiceData,
     Wallet: lb_wallet_service::api::WalletServiceData,
+    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     winning_pol_epoch_slots_sender: watch::Sender<Option<WinningPolInfo>>,
@@ -167,6 +169,7 @@ impl<
     CryptarchiaService,
     ChainNetwork,
     Wallet,
+    StorageAdapter,
     RuntimeServiceId,
 > ServiceData
     for CryptarchiaLeader<
@@ -178,6 +181,7 @@ impl<
         CryptarchiaService,
         ChainNetwork,
         Wallet,
+        StorageAdapter,
         RuntimeServiceId,
     >
 where
@@ -197,6 +201,7 @@ where
     CryptarchiaService: CryptarchiaServiceData,
     ChainNetwork: ChainNetworkServiceData,
     Wallet: lb_wallet_service::api::WalletServiceData,
+    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
 {
     type Settings = LeaderSettings<TxS::Settings, BlendService::BroadcastSettings>;
     type State = overwatch::services::state::NoState<Self::Settings>;
@@ -214,6 +219,7 @@ impl<
     CryptarchiaService,
     ChainNetwork,
     Wallet,
+    StorageAdapter,
     RuntimeServiceId,
 > ServiceCore<RuntimeServiceId>
     for CryptarchiaLeader<
@@ -225,6 +231,7 @@ impl<
         CryptarchiaService,
         ChainNetwork,
         Wallet,
+        StorageAdapter,
         RuntimeServiceId,
     >
 where
@@ -238,7 +245,7 @@ where
         + Sync
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Tx = SignedMantleTx>
+    Mempool: MemPool<Tx = SignedMantleTx, Adapter = TrackerAdapter<CryptarchiaService, StorageAdapter, RuntimeServiceId>>
         + RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>
         + Send
         + Sync
@@ -269,6 +276,7 @@ where
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Tx>,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Tx>,
     Wallet: lb_wallet_service::api::WalletServiceData,
+    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -280,7 +288,7 @@ where
             TxMempoolService<
                 MempoolNetAdapter,
                 Mempool,
-                Mempool::Adapter,
+                StorageAdapter,
                 CryptarchiaService,
                 RuntimeServiceId,
             >,
@@ -309,6 +317,7 @@ where
             Self,
             TimeBackend,
             CryptarchiaService,
+            StorageAdapter,
         >(&self.service_resources_handle)
         .await;
 
@@ -504,6 +513,7 @@ impl<
     CryptarchiaService,
     ChainNetwork,
     Wallet,
+    StorageAdapter,
     RuntimeServiceId,
 >
     CryptarchiaLeader<
@@ -515,6 +525,7 @@ impl<
         CryptarchiaService,
         ChainNetwork,
         Wallet,
+        StorageAdapter,
         RuntimeServiceId,
     >
 where
@@ -559,6 +570,7 @@ where
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Tx>,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Tx>,
     Wallet: lb_wallet_service::api::WalletServiceData,
+    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
     RuntimeServiceId: Debug + Display + Sync + Send + 'static + AsServiceId<Wallet>,
 {
     #[expect(clippy::allow_attributes_without_reason)]

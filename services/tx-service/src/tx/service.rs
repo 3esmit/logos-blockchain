@@ -39,7 +39,7 @@ use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
     backend::{MemPool as MemPoolTrait, MempoolError, RecoverableMempool, adapter::TrackerAdapter},
     network::NetworkAdapter as NetworkAdapterTrait,
-    storage::MempoolStorageAdapter,
+    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
     tx::{settings::TxMempoolSettings, state::TxMempoolState},
 };
 
@@ -97,8 +97,12 @@ pub struct GenericTxMempoolService<
     ChainService,
     RuntimeServiceId,
 > where
-    Pool: MemPoolTrait<Adapter = Adapter> + RecoverableMempool + Send + Sync,
-    Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Pool: MemPoolTrait<Adapter = TrackerAdapter<ChainService, Adapter, RuntimeServiceId>>
+        + RecoverableMempool
+        + Send
+        + Sync,
+    Adapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    ChainService: CryptarchiaServiceData,
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
@@ -119,8 +123,12 @@ impl<Pool, NetworkAdapter, RecoveryBackend, Adapter, ChainService, RuntimeServic
         RuntimeServiceId,
     >
 where
-    Pool: MemPoolTrait<Adapter = Adapter> + RecoverableMempool + Send + Sync,
-    Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Pool: MemPoolTrait<Adapter = TrackerAdapter<ChainService, Adapter, RuntimeServiceId>>
+        + RecoverableMempool
+        + Send
+        + Sync,
+    Adapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    ChainService: CryptarchiaServiceData,
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
@@ -148,8 +156,12 @@ impl<Pool, NetworkAdapter, RecoveryBackend, Adapter, ChainService, RuntimeServic
         RuntimeServiceId,
     >
 where
-    Pool: MemPoolTrait<Adapter = Adapter> + RecoverableMempool + Send + Sync,
-    Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Pool: MemPoolTrait<Adapter = TrackerAdapter<ChainService, Adapter, RuntimeServiceId>>
+        + RecoverableMempool
+        + Send
+        + Sync,
+    Adapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    ChainService: CryptarchiaServiceData,
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
@@ -177,8 +189,11 @@ impl<Pool, NetworkAdapter, RecoveryBackend, Adapter, ChainService, RuntimeServic
         RuntimeServiceId,
     >
 where
-    Pool: MemPoolTrait<Adapter = Adapter> + RecoverableMempool + Send + Sync,
-    Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Pool: MemPoolTrait<Adapter = TrackerAdapter<ChainService, Adapter, RuntimeServiceId>>
+        + RecoverableMempool
+        + Send
+        + Sync,
+    Adapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
     Pool::TxHash: Send + Sync + 'static,
     Pool::Tx: Transaction<Hash = Pool::TxHash> + Debug + Eq + Clone + Send + Sync + 'static,
@@ -229,7 +244,7 @@ where
             .expect("Storage service relay should be available");
 
         let storage_adapter =
-            <Adapter as MempoolStorageAdapter<RuntimeServiceId>>::new(storage_relay);
+            <Adapter as MempoolStorageAdapterNew<RuntimeServiceId>>::new(storage_relay);
 
         let cryptarchia_api: CryptarchiaServiceApi<ChainService, RuntimeServiceId> =
             CryptarchiaServiceApi::new(
@@ -242,16 +257,16 @@ where
         let mut blocks_stream = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
         let mut lib_stream = BroadcastStream::new(cryptarchia_api.subscribe_lib_updates().await?);
 
-        let adapter = TrackerAdapter::new(cryptarchia_api, storage_adapter.clone());
+        let pool_adapter = TrackerAdapter::new(cryptarchia_api, storage_adapter);
 
         let pool_state = self.initial_state.pool.take();
 
         let mut pool = match pool_state {
-            None => <Pool as MemPoolTrait>::new(settings.pool.clone(), storage_adapter),
+            None => <Pool as MemPoolTrait>::new(settings.pool.clone(), pool_adapter),
             Some(recovered_pool_state) => <Pool as RecoverableMempool>::recover(
                 settings.pool.clone(),
                 recovered_pool_state,
-                storage_adapter,
+                pool_adapter,
             ),
         };
 
@@ -306,8 +321,12 @@ impl<Pool, NetworkAdapter, RecoveryBackend, Adapter, Cryptarchia, RuntimeService
         RuntimeServiceId,
     >
 where
-    Pool: MemPoolTrait<Adapter = Adapter> + RecoverableMempool + Send + Sync,
-    Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Pool: MemPoolTrait<Adapter = TrackerAdapter<Cryptarchia, Adapter, RuntimeServiceId>>
+        + RecoverableMempool
+        + Send
+        + Sync,
+    Adapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    Cryptarchia: CryptarchiaServiceData,
     Pool::Tx: Transaction<Hash = Pool::TxHash> + Clone + Send + 'static,
     Pool::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Tx> + Send + Sync,

@@ -1,5 +1,6 @@
 use std::{fmt::Debug, marker::PhantomData};
 
+use lb_chain_service::api::CryptarchiaServiceData;
 use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction as _, TxHash},
@@ -7,7 +8,7 @@ use lb_core::{
 use lb_sdp_service::mempool::{MempoolAdapterError, SdpMempoolAdapter as SdpMempoolAdapterTrait};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
-    backend::{MemPool, RecoverableMempool},
+    backend::{MemPool, RecoverableMempool, TrackerAdapter},
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
@@ -17,7 +18,13 @@ use tokio::sync::oneshot;
 
 type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Key>>;
 
-pub struct SdpMempoolAdapter<MempoolNetAdapter, Mempool, ChainService, RuntimeServiceId>
+pub struct SdpMempoolAdapter<
+    MempoolNetAdapter,
+    Mempool,
+    StorageAdapter,
+    ChainService,
+    RuntimeServiceId,
+>
 where
     Mempool: MemPool<BlockId = HeaderId, TxHash = TxHash>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Key = Mempool::TxHash>,
@@ -27,29 +34,38 @@ where
     RuntimeServiceId: Send + Sync,
 {
     pub mempool_relay: MempoolRelay<Mempool::Tx, Mempool::TxHash>,
-    _phantom: PhantomData<(MempoolNetAdapter, ChainService, RuntimeServiceId)>,
+    _phantom: PhantomData<(MempoolNetAdapter, StorageAdapter, ChainService, RuntimeServiceId)>,
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, ChainService, RuntimeServiceId> SdpMempoolAdapterTrait
-    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, ChainService, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, StorageAdapter, ChainService, RuntimeServiceId>
+    SdpMempoolAdapterTrait
+    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, StorageAdapter, ChainService, RuntimeServiceId>
 where
-    Mempool:
-        RecoverableMempool<BlockId = HeaderId, TxHash = TxHash, Tx = SignedMantleTx> + Send + Sync,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash, Tx = SignedMantleTx>
+        + MemPool<Adapter = TrackerAdapter<ChainService, StorageAdapter, RuntimeServiceId>>
+        + Send
+        + Sync,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Send + Sync + Clone,
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
+        + MempoolStorageAdapter<RuntimeServiceId>
+        + Send
+        + Sync
+        + Clone
+        + 'static,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>
         + Send
         + Sync,
     MempoolNetAdapter::Settings: Send + Sync,
-    ChainService: Send + Sync + 'static,
-    RuntimeServiceId: Send + Sync,
+    ChainService: CryptarchiaServiceData + Send + Sync + 'static,
+    ChainService::Tx: Send + Sync,
+    RuntimeServiceId: Send + Sync + 'static,
 {
     type MempoolService = TxMempoolService<
         MempoolNetAdapter,
         Mempool,
-        Mempool::Adapter,
+        StorageAdapter,
         ChainService,
         RuntimeServiceId,
     >;

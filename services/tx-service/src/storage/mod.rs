@@ -7,9 +7,20 @@ use lb_core::{
     header::HeaderId,
     mantle::Transaction,
 };
-use lb_storage_service::backends::StorageBackend;
+use lb_storage_service::{StorageService, backends::StorageBackend};
+use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 pub mod adapters;
+
+pub trait MempoolStorageAdapterNew<RuntimeServiceId>:
+    MempoolStorageAdapter<RuntimeServiceId> + Sized
+{
+    fn new(
+        storage_relay: OutboundRelay<
+            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
+        >,
+    ) -> Self;
+}
 
 #[async_trait]
 pub trait MempoolStorageAdapter<RuntimeServiceId>: Send + Sync {
@@ -18,12 +29,6 @@ pub trait MempoolStorageAdapter<RuntimeServiceId>: Send + Sync {
     type Tx: Transaction + Send;
 
     type Error: Send;
-
-    fn new(
-        storage_relay: overwatch::services::relay::OutboundRelay<
-            <lb_storage_service::StorageService<Self::Backend, RuntimeServiceId> as overwatch::services::ServiceData>::Message,
-        >,
-    ) -> Self;
 
     async fn store_tx(&mut self, key: Self::Tx) -> Result<(), Self::Error>;
 

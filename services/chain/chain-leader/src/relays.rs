@@ -8,8 +8,10 @@ use lb_core::{
 };
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
 use lb_tx_service::{
-    MempoolMsg, TxMempoolService, backend::RecoverableMempool,
-    network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
+    MempoolMsg, TxMempoolService,
+    backend::{MemPool, RecoverableMempool, adapter::TrackerAdapter},
+    network::NetworkAdapter as MempoolNetworkAdapter,
+    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
 };
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -71,7 +73,7 @@ where
     }
 
     #[expect(clippy::allow_attributes_without_reason)]
-    pub async fn from_service_resources_handle<S, TimeBackend, CryptarchiaService>(
+    pub async fn from_service_resources_handle<S, TimeBackend, CryptarchiaService, StorageAdapter>(
         service_resources_handle: &OpaqueServiceResourcesHandle<S, RuntimeServiceId>,
     ) -> Self
     where
@@ -79,12 +81,14 @@ where
         <S as ServiceData>::Message: Send + Sync + 'static,
         <S as ServiceData>::Settings: Send + Sync + 'static,
         <S as ServiceData>::State: Send + Sync + 'static,
+        Mempool: MemPool<Adapter = TrackerAdapter<CryptarchiaService, StorageAdapter, RuntimeServiceId>>,
         Mempool::TxHash: Send,
         Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
         Mempool::Settings: Sync,
         BlendService: lb_blend_service::ServiceComponents,
         BlendService::BroadcastSettings: Send + Sync,
         <BlendService as ServiceData>::Message: Send + 'static,
+        StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync + 'static,
         RuntimeServiceId: Debug
@@ -97,7 +101,7 @@ where
                 TxMempoolService<
                     MempoolNetAdapter,
                     Mempool,
-                    Mempool::Adapter,
+                    StorageAdapter,
                     CryptarchiaService,
                     RuntimeServiceId,
                 >,

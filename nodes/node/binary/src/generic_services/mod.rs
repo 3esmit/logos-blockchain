@@ -5,7 +5,10 @@ use lb_core::mantle::{SignedMantleTx, Transaction, TxHash};
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::NtpTimeBackend;
-use lb_tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
+use lb_tx_service::{
+    backend::{TrackerAdapter, pool::Mempool},
+    storage::adapters::rocksdb::RocksStorageAdapter,
+};
 
 use crate::{MB16, generic_services::blend::BlendService};
 
@@ -21,7 +24,11 @@ pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
     Mempool<
         SignedMantleTx,
         TxHash,
-        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        TrackerAdapter<
+            CryptarchiaService<RuntimeServiceId>,
+            RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+            RuntimeServiceId,
+        >,
         RuntimeServiceId,
     >,
     RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
@@ -41,7 +48,11 @@ pub type MempoolAdapter<RuntimeServiceId> = lb_tx_service::network::adapters::li
 pub type MempoolBackend<RuntimeServiceId> = Mempool<
     SignedMantleTx,
     <SignedMantleTx as Transaction>::Hash,
-    RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+    TrackerAdapter<
+        CryptarchiaService<RuntimeServiceId>,
+        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        RuntimeServiceId,
+    >,
     RuntimeServiceId,
 >;
 
@@ -53,6 +64,7 @@ pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::Chain
     LibP2pAdapter<SignedMantleTx, RuntimeServiceId>,
     MempoolBackend<RuntimeServiceId>,
     MempoolAdapter<RuntimeServiceId>,
+    RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
     NtpTimeBackend,
     RuntimeServiceId,
 >;
@@ -78,6 +90,7 @@ pub type CryptarchiaLeaderService<Cryptarchia, ChainNetwork, Wallet, RuntimeServ
         Cryptarchia,
         ChainNetwork,
         Wallet,
+        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
         RuntimeServiceId,
     >;
 
@@ -90,9 +103,14 @@ pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
     Mempool<
         SignedMantleTx,
         TxHash,
-        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        TrackerAdapter<
+            CryptarchiaService<RuntimeServiceId>,
+            RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+            RuntimeServiceId,
+        >,
         RuntimeServiceId,
     >,
+    RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
     CryptarchiaService<RuntimeServiceId>,
     RuntimeServiceId,
 >;

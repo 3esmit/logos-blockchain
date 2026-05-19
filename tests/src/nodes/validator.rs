@@ -359,7 +359,6 @@ impl Validator {
             .await
             .unwrap();
         MempoolMetrics {
-            pending_items: res["pending_items"].as_u64().unwrap() as usize,
             last_item_timestamp: res["last_item_timestamp"].as_u64().unwrap(),
         }
     }

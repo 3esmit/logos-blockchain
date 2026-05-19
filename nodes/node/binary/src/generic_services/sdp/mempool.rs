@@ -15,36 +15,44 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Item, Key>>;
+type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Key>>;
 
-pub struct SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
+pub struct SdpMempoolAdapter<MempoolNetAdapter, Mempool, ChainService, RuntimeServiceId>
 where
-    Mempool: MemPool<BlockId = HeaderId, Key = TxHash>,
-    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Key = Mempool::Key>,
-    Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Key: Debug + 'static,
+    Mempool: MemPool<BlockId = HeaderId, TxHash = TxHash>,
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Key = Mempool::TxHash>,
+    Mempool::Tx: Clone + Eq + Debug + 'static,
+    Mempool::TxHash: Debug + 'static,
+    ChainService: Send + Sync,
+    RuntimeServiceId: Send + Sync,
 {
-    pub mempool_relay: MempoolRelay<Mempool::Item, Mempool::Key>,
-    _phantom: PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
+    pub mempool_relay: MempoolRelay<Mempool::Tx, Mempool::TxHash>,
+    _phantom: PhantomData<(MempoolNetAdapter, ChainService, RuntimeServiceId)>,
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, RuntimeServiceId> SdpMempoolAdapterTrait
-    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, ChainService, RuntimeServiceId> SdpMempoolAdapterTrait
+    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, ChainService, RuntimeServiceId>
 where
     Mempool:
-        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = SignedMantleTx> + Send + Sync,
+        RecoverableMempool<BlockId = HeaderId, TxHash = TxHash, Tx = SignedMantleTx> + Send + Sync,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Send + Sync + Clone,
-    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Send + Sync + Clone,
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>
         + Send
         + Sync,
     MempoolNetAdapter::Settings: Send + Sync,
+    ChainService: Send + Sync + 'static,
     RuntimeServiceId: Send + Sync,
 {
-    type MempoolService =
-        TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
+    type MempoolService = TxMempoolService<
+        MempoolNetAdapter,
+        Mempool,
+        Mempool::Adapter,
+        ChainService,
+        RuntimeServiceId,
+    >;
     type Tx = SignedMantleTx;
 
     fn new(mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>) -> Self {

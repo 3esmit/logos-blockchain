@@ -1,9 +1,13 @@
 use core::{fmt::Debug, hash::Hash};
 use std::fmt::Display;
 
-use lb_core::{header::HeaderId, mantle::Transaction};
+use lb_core::mantle::{Transaction, TransactionDependencies};
 use lb_network_service::backends::NetworkBackend;
-use lb_tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
+use lb_tx_service::{
+    MempoolMsg, TxMempoolService,
+    backend::{BlockInfoGetter, LedgerStateGetter, Mempool},
+    network::NetworkAdapter,
+};
 use overwatch::{DynError, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
@@ -29,11 +33,21 @@ where
         + 'static,
     MempoolNetworkAdapter::Settings: Send + Sync,
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = Item>
+        + BlockInfoGetter<Item>
+        + LedgerStateGetter
         + Clone
         + 'static,
     StorageAdapter::Error: Debug,
-    Item: Transaction + Clone + Debug + Send + Sync + Serialize + DeserializeOwned + 'static,
-    Key: Clone + Debug + Ord + Hash + Send + Sync + Serialize + DeserializeOwned + 'static,
+    Item: TransactionDependencies
+        + Transaction<Hash = Key>
+        + Clone
+        + Debug
+        + Send
+        + Sync
+        + Serialize
+        + DeserializeOwned
+        + 'static,
+    Key: Clone + Debug + Eq + Ord + Hash + Send + Sync + Serialize + DeserializeOwned + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send

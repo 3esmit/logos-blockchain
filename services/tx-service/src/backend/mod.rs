@@ -8,6 +8,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent};
+pub use forks::{BlockInfo, BlockInfoGetter, ForksTrackerError, LedgerStateGetter};
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 

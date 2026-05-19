@@ -18,10 +18,7 @@ use lb_api_service::{Backend, http::consensus::Cryptarchia};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::CryptarchiaConsensus;
-use lb_core::{
-    header::HeaderId,
-    mantle::{SignedMantleTx, Transaction},
-};
+use lb_core::mantle::{SignedMantleTx, Transaction};
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{metrics::http_metrics_middleware, paths};
 use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
@@ -103,9 +100,10 @@ where
         lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
-        > + Send
+            Tx = SignedMantleTx,
+        > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
+        + lb_tx_service::backend::LedgerStateGetter
+        + Send
         + Sync
         + Clone
         + 'static,
@@ -136,13 +134,13 @@ where
                     RuntimeServiceId,
                 >,
                 Mempool<
-                    HeaderId,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
                     MempoolStorageAdapter,
                     RuntimeServiceId,
                 >,
                 MempoolStorageAdapter,
+                Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >

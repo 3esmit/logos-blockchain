@@ -341,9 +341,10 @@ pub async fn mantle_metrics<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
-        > + Send
+            Tx = SignedMantleTx,
+        > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
+        + lb_tx_service::backend::LedgerStateGetter
+        + Send
         + Sync
         + Clone
         + 'static,
@@ -361,19 +362,20 @@ where
                     RuntimeServiceId,
                 >,
                 Mempool<
-                    HeaderId,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
 {
     make_request_and_return_response!(mantle::mantle_mempool_metrics::<
         StorageAdapter,
+        Cryptarchia<RuntimeServiceId>,
         RuntimeServiceId,
     >(&handle))
 }
@@ -393,9 +395,10 @@ pub async fn mantle_status<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
-        > + Send
+            Tx = SignedMantleTx,
+        > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
+        + lb_tx_service::backend::LedgerStateGetter
+        + Send
         + Sync
         + Clone
         + 'static,
@@ -413,19 +416,20 @@ where
                     RuntimeServiceId,
                 >,
                 Mempool<
-                    HeaderId,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
 {
     make_request_and_return_response!(mantle::mantle_mempool_status::<
         StorageAdapter,
+        Cryptarchia<RuntimeServiceId>,
         RuntimeServiceId,
     >(&handle, items))
 }
@@ -563,9 +567,10 @@ pub async fn add_tx<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
-        > + Send
+            Tx = SignedMantleTx,
+        > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
+        + lb_tx_service::backend::LedgerStateGetter
+        + Send
         + Sync
         + Clone
         + 'static,
@@ -583,13 +588,13 @@ where
                     RuntimeServiceId,
                 >,
                 Mempool<
-                    HeaderId,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
@@ -604,6 +609,7 @@ where
         StorageAdapter,
         SignedMantleTx,
         <SignedMantleTx as Transaction>::Hash,
+        Cryptarchia<RuntimeServiceId>,
         RuntimeServiceId,
     >(&handle, tx, Transaction::hash))
 }
@@ -643,9 +649,10 @@ where
     WalletService: WalletServiceData,
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
-        > + Send
+            Tx = SignedMantleTx,
+        > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
+        + lb_tx_service::backend::LedgerStateGetter
+        + Send
         + Sync
         + Clone
         + 'static,
@@ -664,13 +671,13 @@ where
                     RuntimeServiceId,
                 >,
                 Mempool<
-                    HeaderId,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
                 StorageAdapter,
+                Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
@@ -715,6 +722,7 @@ where
             StorageAdapter,
             SignedMantleTx,
             <SignedMantleTx as Transaction>::Hash,
+            Cryptarchia<RuntimeServiceId>,
             RuntimeServiceId,
         >(&handle, signed_tx, Transaction::hash)
         .await?;
@@ -1164,9 +1172,10 @@ pub mod wallet {
         WalletService: WalletServiceData + 'static,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedMantleTx,
-                Key = <SignedMantleTx as Transaction>::Hash,
-            > + Send
+                Tx = SignedMantleTx,
+            > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
+            + lb_tx_service::backend::LedgerStateGetter
+            + Send
             + Sync
             + Clone
             + 'static,
@@ -1185,13 +1194,13 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     Mempool<
-                        HeaderId,
                         SignedMantleTx,
                         <SignedMantleTx as Transaction>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    Cryptarchia<RuntimeServiceId>,
                     RuntimeServiceId,
                 >,
             >,
@@ -1230,6 +1239,7 @@ pub mod wallet {
                     StorageAdapter,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
+                    Cryptarchia<RuntimeServiceId>,
                     RuntimeServiceId,
                 >(&handle, transaction.clone(), Transaction::hash)
                 .await
@@ -1259,9 +1269,10 @@ pub mod wallet {
         WalletService: WalletServiceData,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedMantleTx,
-                Key = <SignedMantleTx as Transaction>::Hash,
-            > + Send
+                Tx = SignedMantleTx,
+            > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
+            + lb_tx_service::backend::LedgerStateGetter
+            + Send
             + Sync
             + Clone
             + 'static,
@@ -1280,13 +1291,13 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     Mempool<
-                        HeaderId,
                         SignedMantleTx,
                         <SignedMantleTx as Transaction>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    Cryptarchia<RuntimeServiceId>,
                     RuntimeServiceId,
                 >,
             >,
@@ -1317,9 +1328,10 @@ pub mod wallet {
         WalletService: WalletServiceData,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedMantleTx,
-                Key = <SignedMantleTx as Transaction>::Hash,
-            > + Send
+                Tx = SignedMantleTx,
+            > + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
+            + lb_tx_service::backend::LedgerStateGetter
+            + Send
             + Sync
             + Clone
             + 'static,
@@ -1338,13 +1350,13 @@ pub mod wallet {
                         RuntimeServiceId,
                     >,
                     Mempool<
-                        HeaderId,
                         SignedMantleTx,
                         <SignedMantleTx as Transaction>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
+                    Cryptarchia<RuntimeServiceId>,
                     RuntimeServiceId,
                 >,
             >,

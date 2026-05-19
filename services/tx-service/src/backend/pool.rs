@@ -155,7 +155,6 @@ where
         Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Tx: TransactionDependencies
         + Clone
-        + Ord
         + Send
         + Sync
         + 'static

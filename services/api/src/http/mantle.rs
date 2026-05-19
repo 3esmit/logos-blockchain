@@ -22,7 +22,8 @@ use lb_storage_service::{
     },
 };
 use lb_tx_service::{
-    MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
+    MempoolMetrics, MempoolMsg, TxMempoolService,
+    backend::{BlockInfoGetter, LedgerStateGetter, Mempool},
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
@@ -81,6 +82,8 @@ pub async fn mantle_mempool_metrics<StorageAdapter, Cryptarchia, RuntimeServiceI
 ) -> Result<MempoolMetrics, super::DynError>
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
+        + BlockInfoGetter<SignedMantleTx>
+        + LedgerStateGetter
         + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -108,6 +111,8 @@ pub async fn mantle_mempool_status<StorageAdapter, Cryptarchia, RuntimeServiceId
 ) -> Result<Vec<Status>, super::DynError>
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
+        + BlockInfoGetter<SignedMantleTx>
+        + LedgerStateGetter
         + Clone
         + 'static,
     StorageAdapter::Error: Debug,

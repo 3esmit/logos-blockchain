@@ -1,10 +1,7 @@
 use lb_chain_leader_service::CryptarchiaLeader;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapter;
 use lb_chain_service::CryptarchiaConsensus;
-use lb_core::{
-    header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash},
-};
+use lb_core::mantle::{SignedMantleTx, Transaction, TxHash};
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::NtpTimeBackend;
@@ -22,13 +19,13 @@ pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
         RuntimeServiceId,
     >,
     Mempool<
-        HeaderId,
         SignedMantleTx,
         TxHash,
         RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
         RuntimeServiceId,
     >,
     RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+    CryptarchiaService<RuntimeServiceId>,
     RuntimeServiceId,
 >;
 
@@ -42,7 +39,6 @@ pub type MempoolAdapter<RuntimeServiceId> = lb_tx_service::network::adapters::li
 >;
 
 pub type MempoolBackend<RuntimeServiceId> = Mempool<
-    HeaderId,
     SignedMantleTx,
     <SignedMantleTx as Transaction>::Hash,
     RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
@@ -92,12 +88,12 @@ pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
         RuntimeServiceId,
     >,
     Mempool<
-        HeaderId,
         SignedMantleTx,
         TxHash,
         RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
         RuntimeServiceId,
     >,
+    CryptarchiaService<RuntimeServiceId>,
     RuntimeServiceId,
 >;
 

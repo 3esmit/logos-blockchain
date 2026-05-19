@@ -33,11 +33,11 @@ where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     Mempool:
-        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
+        RecoverableMempool<BlockId = HeaderId, TxHash = TxHash, Tx = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     pub cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    pub mempool_adapter: MempoolAdapter<Mempool::Item>,
+    pub mempool_adapter: MempoolAdapter<Mempool::Tx>,
 }
 
 impl<Cryptarchia, Mempool, RuntimeServiceId> IbdBlockProcessor<Block<Cryptarchia::Tx>>
@@ -46,7 +46,7 @@ where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     Mempool:
-        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
+        RecoverableMempool<BlockId = HeaderId, TxHash = TxHash, Tx = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     async fn info(&self) -> Result<CryptarchiaInfo, Error> {

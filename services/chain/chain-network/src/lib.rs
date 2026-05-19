@@ -107,19 +107,19 @@ pub struct ChainNetwork<
     TimeBackend,
     RuntimeServiceId,
 > where
-    Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
+    Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Tx>,
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
     NetAdapter::Backend: 'static,
     NetAdapter::Settings: Send,
     NetAdapter::PeerId: Clone + Eq + Hash,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Mempool::Tx: Clone + Eq + Debug + 'static,
+    Mempool::Tx: AuthenticatedMantleTx,
     MempoolNetAdapter:
-        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
+        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>,
     MempoolNetAdapter::Settings: Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
@@ -137,17 +137,17 @@ impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeSe
         RuntimeServiceId,
     >
 where
-    Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
+    Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Tx>,
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
     NetAdapter::Settings: Send,
     NetAdapter::PeerId: Clone + Eq + Hash,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: AuthenticatedMantleTx + Clone + Eq + Debug,
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Mempool::Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     MempoolNetAdapter:
-        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
+        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>,
     MempoolNetAdapter::Settings: Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
@@ -155,7 +155,7 @@ where
     type Settings = ChainNetworkSettings<NetAdapter::PeerId, NetAdapter::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = Message<Mempool::Item>;
+    type Message = Message<Mempool::Tx>;
 }
 
 #[async_trait::async_trait]
@@ -170,19 +170,19 @@ impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeSe
         RuntimeServiceId,
     >
 where
-    Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
-    NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Item>, Proposal = Proposal>
+    Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Tx>,
+    NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Tx>, Proposal = Proposal>
         + Clone
         + Send
         + Sync
         + 'static,
     NetAdapter::Settings: Send + Sync + 'static,
     NetAdapter::PeerId: Clone + Eq + Hash + Copy + Debug + Send + Sync + Unpin + 'static,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync + 'static,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash> + Send + Sync + 'static,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Mempool::Tx: Transaction<Hash = Mempool::TxHash>
         + AuthenticatedMantleTx
         + Debug
         + Clone
@@ -193,7 +193,7 @@ where
         + Sync
         + Unpin
         + 'static,
-    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>
         + Send
         + Sync
         + 'static,
@@ -209,7 +209,13 @@ where
         + AsServiceId<Cryptarchia>
         + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<
-            TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+            TxMempoolService<
+                MempoolNetAdapter,
+                Mempool,
+                Mempool::Adapter,
+                Cryptarchia,
+                RuntimeServiceId,
+            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
 {
@@ -250,7 +256,7 @@ where
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             NetworkService<_, _>,
-            TxMempoolService<_, _, _, _>,
+            TxMempoolService<_, _, _, _, _>,
             TimeService<_, _>
         )
         .await?;
@@ -381,19 +387,19 @@ where
 impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
     ChainNetwork<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId>
 where
-    Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
-    NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Item>, Proposal = Proposal>
+    Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Tx>,
+    NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Tx>, Proposal = Proposal>
         + Clone
         + Send
         + Sync
         + 'static,
     NetAdapter::Settings: Send + Sync + 'static,
     NetAdapter::PeerId: Clone + Eq + Hash + Copy + Debug + Send + Sync,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync + 'static,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash> + Send + Sync + 'static,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Mempool::Tx: Transaction<Hash = Mempool::TxHash>
         + AuthenticatedMantleTx
         + Debug
         + Clone
@@ -403,7 +409,7 @@ where
         + Send
         + Sync
         + 'static,
-    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>
         + Send
         + Sync
         + 'static,
@@ -498,7 +504,7 @@ where
 
     async fn apply_reconstructed_block(
         &self,
-        block: Block<Mempool::Item>,
+        block: Block<Mempool::Tx>,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
@@ -529,7 +535,7 @@ where
     }
 
     async fn apply_block_with_future_block_retry(
-        block: Block<Mempool::Item>,
+        block: Block<Mempool::Tx>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
             Mempool,
@@ -556,7 +562,7 @@ where
         .await
     }
 
-    fn log_received_block(block: &Block<Mempool::Item>) {
+    fn log_received_block(block: &Block<Mempool::Tx>) {
         let content_size = 0; // TODO: calculate the actual content size
         let transactions = block.transactions().len();
 
@@ -572,7 +578,7 @@ where
     }
 
     async fn handle_message(
-        msg: Message<Mempool::Item>,
+        msg: Message<Mempool::Tx>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
             Mempool,
@@ -729,13 +735,13 @@ where
 async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceId>(
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    mempool_adapter: &MempoolAdapter<Mempool::Item>,
+    mempool_adapter: &MempoolAdapter<Mempool::Tx>,
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     Mempool:
-        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
+        RecoverableMempool<BlockId = HeaderId, TxHash = TxHash, Tx = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     debug!("Received proposal with ID: {:?}", block.header().id());

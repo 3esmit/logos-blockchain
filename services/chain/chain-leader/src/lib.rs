@@ -137,16 +137,16 @@ pub struct CryptarchiaLeader<
     RuntimeServiceId,
 > where
     BlendService: lb_blend_service::ServiceComponents,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone,
-    Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
+    Mempool::TxHash: Clone + Eq + Debug + 'static,
+    Mempool::Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     MempoolNetAdapter:
-        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
+        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    TxS: TxSelect<Tx = Mempool::Item>,
+    TxS: TxSelect<Tx = Mempool::Tx>,
     TxS::Settings: Send,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
@@ -182,15 +182,15 @@ impl<
     >
 where
     BlendService: lb_blend_service::ServiceComponents,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Settings: Clone,
-    Mempool::Item: AuthenticatedMantleTx + Clone + Eq + Debug,
+    Mempool::Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     MempoolNetAdapter:
-        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
+        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    TxS: TxSelect<Tx = Mempool::Item>,
+    TxS: TxSelect<Tx = Mempool::Tx>,
     TxS::Settings: Send,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
@@ -238,15 +238,15 @@ where
         + Sync
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Item = SignedMantleTx>
-        + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
+    Mempool: MemPool<Tx = SignedMantleTx>
+        + RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>
         + Send
         + Sync
         + 'static,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
+    Mempool::Tx: Transaction<Hash = Mempool::TxHash>
         + Debug
         + Clone
         + Eq
@@ -256,18 +256,18 @@ where
         + Sync
         + Unpin
         + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
-    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
+    Mempool::Tx: AuthenticatedMantleTx,
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>
         + Send
         + Sync
         + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    TxS: TxSelect<Tx = Mempool::Item> + Clone + Send + Sync + 'static,
+    TxS: TxSelect<Tx = Mempool::Tx> + Clone + Send + Sync + 'static,
     TxS::Settings: Send + Sync + 'static,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
-    CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
-    ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
+    CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Tx>,
+    ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Tx>,
     Wallet: lb_wallet_service::api::WalletServiceData,
     RuntimeServiceId: Debug
         + Send
@@ -277,7 +277,13 @@ where
         + AsServiceId<Self>
         + AsServiceId<BlendService>
         + AsServiceId<
-            TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+            TxMempoolService<
+                MempoolNetAdapter,
+                Mempool,
+                Mempool::Adapter,
+                CryptarchiaService,
+                RuntimeServiceId,
+            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<CryptarchiaService>
@@ -359,7 +365,7 @@ where
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
             BlendService,
-            TxMempoolService<_, _, _, _>,
+            TxMempoolService<_, _, _, _, _>,
             TimeService<_, _>,
             Wallet,
             PreloadKmsService<_>
@@ -522,14 +528,14 @@ where
         + Sync
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Item = SignedMantleTx>
-        + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
+    Mempool: MemPool<Tx = SignedMantleTx>
+        + RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>
         + Send
         + Sync
         + 'static,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Item: AuthenticatedMantleTx<Hash = Mempool::Key>
+    Mempool::Tx: AuthenticatedMantleTx<Hash = Mempool::TxHash>
         + Debug
         + Clone
         + Eq
@@ -539,19 +545,19 @@ where
         + Sync
         + 'static,
     MempoolNetAdapter:
-        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
-    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
+        MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>,
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>
         + Send
         + Sync
         + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    <Mempool as MemPool>::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    TxS: TxSelect<Tx = Mempool::Item> + Clone + Send + Sync + 'static,
+    <Mempool as MemPool>::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    TxS: TxSelect<Tx = Mempool::Tx> + Clone + Send + Sync + 'static,
     TxS::Settings: Send + Sync + 'static,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
-    CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
-    ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
+    CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Tx>,
+    ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Tx>,
     Wallet: lb_wallet_service::api::WalletServiceData,
     RuntimeServiceId: Debug + Display + Sync + Send + 'static + AsServiceId<Wallet>,
 {
@@ -578,7 +584,7 @@ where
         >,
         mut ledger_state: LedgerState,
         ledger_config: &lb_ledger::Config,
-    ) -> Result<Block<Mempool::Item>, Error> {
+    ) -> Result<Block<Mempool::Tx>, Error> {
         let txs_stream = relays
             .mempool_adapter()
             .get_mempool_view([0; 32].into())
@@ -647,7 +653,7 @@ where
 
     /// Publish our own proposed block to the blend network.
     async fn publish_block_proposal(
-        block: Block<Mempool::Item>,
+        block: Block<Mempool::Tx>,
         blend_adapter: &BlendAdapter<BlendService>,
     ) {
         // TODO: enable this once we elimnate sessions from Blend and so on
@@ -668,7 +674,7 @@ where
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,
-        mempool: &MempoolAdapter<Mempool::Item>,
+        mempool: &MempoolAdapter<Mempool::Tx>,
     ) {
         match msg {
             LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
@@ -688,7 +694,7 @@ where
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,
-        mempool: &MempoolAdapter<Mempool::Item>,
+        mempool: &MempoolAdapter<Mempool::Tx>,
         resp_tx: oneshot::Sender<Result<TxHash, Error>>,
     ) {
         let result = Self::build_and_submit_claim_tx(cryptarchia, wallet, mempool, config).await;
@@ -700,7 +706,7 @@ where
     async fn build_and_submit_claim_tx(
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
-        mempool: &MempoolAdapter<Mempool::Item>,
+        mempool: &MempoolAdapter<Mempool::Tx>,
         config: &LeaderWalletConfig,
     ) -> Result<TxHash, Error> {
         let (tip, ledger_state) = Self::get_tip_ledger_state(cryptarchia).await?;

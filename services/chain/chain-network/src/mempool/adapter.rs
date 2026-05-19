@@ -10,12 +10,12 @@ use super::MempoolAdapter as MempoolAdapterTrait;
 
 #[derive(Clone)]
 pub struct MempoolAdapter<Tx> {
-    mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>,
+    mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Tx, TxHash>>,
 }
 
 impl<Tx> MempoolAdapter<Tx> {
     #[must_use]
-    pub const fn new(mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>) -> Self {
+    pub const fn new(mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Tx, TxHash>>) -> Self {
         Self { mempool_relay }
     }
 }

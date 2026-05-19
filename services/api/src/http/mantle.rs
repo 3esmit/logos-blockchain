@@ -51,16 +51,11 @@ pub struct BlockWithChainState<Tx> {
     pub lib_slot: Slot,
 }
 
-pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
+pub type MempoolService<Adapter, Cryptarchia, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash, RuntimeServiceId>,
-    Mempool<
-        HeaderId,
-        SignedMantleTx,
-        <SignedMantleTx as Transaction>::Hash,
-        StorageAdapter,
-        RuntimeServiceId,
-    >,
-    StorageAdapter,
+    Mempool<SignedMantleTx, <SignedMantleTx as Transaction>::Hash, Adapter, RuntimeServiceId>,
+    Adapter,
+    Cryptarchia,
     RuntimeServiceId,
 >;
 
@@ -81,22 +76,19 @@ where
         .ok_or_else(|| "channel not found".into())
 }
 
-pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_mempool_metrics<StorageAdapter, Cryptarchia, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<MempoolMetrics, super::DynError>
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Key = <SignedMantleTx as Transaction>::Hash,
-            Item = SignedMantleTx,
-        > + Clone
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
+        + Clone
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, Cryptarchia, RuntimeServiceId>>,
 {
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
@@ -110,23 +102,20 @@ where
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
 
-pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_mempool_status<StorageAdapter, Cryptarchia, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     items: Vec<<SignedMantleTx as Transaction>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Key = <SignedMantleTx as Transaction>::Hash,
-            Item = SignedMantleTx,
-        > + Clone
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
+        + Clone
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Sync
         + Send
         + Display
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, Cryptarchia, RuntimeServiceId>>,
 {
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();

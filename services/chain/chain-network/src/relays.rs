@@ -34,13 +34,13 @@ pub struct ChainNetworkRelays<
     RuntimeServiceId,
 > where
     Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash> + Send + Sync,
     MempoolNetAdapter: lb_tx_service::network::NetworkAdapter<RuntimeServiceId>,
     NetworkAdapter: network::NetworkAdapter<RuntimeServiceId>,
 {
     cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
-    mempool_adapter: MempoolAdapter<Mempool::Item>,
+    mempool_adapter: MempoolAdapter<Mempool::Tx>,
     _mempool_adapter: PhantomData<MempoolNetAdapter>,
 }
 
@@ -48,9 +48,9 @@ impl<Cryptarchia, Mempool, MempoolNetAdapter, NetworkAdapter, RuntimeServiceId>
     ChainNetworkRelays<Cryptarchia, Mempool, MempoolNetAdapter, NetworkAdapter, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash> + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
-    Mempool::Item: Debug
+    Mempool::Tx: Debug
         + Serialize
         + DeserializeOwned
         + Eq
@@ -60,8 +60,8 @@ where
         + 'static
         + AuthenticatedMantleTx,
     Mempool::Settings: Clone + Send + Sync,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>
         + Send
         + Sync,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -72,7 +72,7 @@ where
     pub const fn new(
         cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
-        mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Mempool::Item, Mempool::Item, TxHash>>,
+        mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Mempool::Tx, TxHash>>,
     ) -> Self {
         let mempool_adapter = MempoolAdapter::new(mempool_relay);
         Self {
@@ -98,8 +98,8 @@ where
         >,
     ) -> Self
     where
-        Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Item>,
-        Mempool::Key: Send,
+        Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Tx>,
+        Mempool::TxHash: Send,
         NetworkAdapter::Settings: Sync + Send,
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync,
@@ -111,7 +111,13 @@ where
             + AsServiceId<Cryptarchia>
             + AsServiceId<NetworkService<NetworkAdapter::Backend, RuntimeServiceId>>
             + AsServiceId<
-                TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+                TxMempoolService<
+                    MempoolNetAdapter,
+                    Mempool,
+                    Mempool::Adapter,
+                    Cryptarchia,
+                    RuntimeServiceId,
+                >,
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
     {
@@ -130,7 +136,7 @@ where
 
         let mempool_relay = service_resources_handle
             .overwatch_handle
-            .relay::<TxMempoolService<_, _, _, _>>()
+            .relay::<TxMempoolService<_, _, _, _, _>>()
             .await
             .expect("Relay connection with MempoolService should succeed");
 
@@ -145,7 +151,7 @@ where
         &self.network_relay
     }
 
-    pub const fn mempool_adapter(&self) -> &MempoolAdapter<Mempool::Item> {
+    pub const fn mempool_adapter(&self) -> &MempoolAdapter<Mempool::Tx> {
         &self.mempool_adapter
     }
 }

@@ -14,6 +14,7 @@ pub async fn add_tx<
     StorageAdapter,
     Item,
     Key,
+    CryptarchiaService,
     RuntimeServiceId,
 >(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
@@ -27,7 +28,7 @@ where
         + Sync
         + 'static,
     MempoolNetworkAdapter::Settings: Send + Sync,
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item>
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = Item>
         + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -40,8 +41,9 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter,
-                Mempool<HeaderId, Item, Key, StorageAdapter, RuntimeServiceId>,
+                Mempool<Item, Key, StorageAdapter, RuntimeServiceId>,
                 StorageAdapter,
+                CryptarchiaService,
                 RuntimeServiceId,
             >,
         >,

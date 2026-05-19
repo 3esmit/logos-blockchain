@@ -25,11 +25,11 @@ type TimeRelay = OutboundRelay<TimeServiceMessage>;
 pub struct CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
 where
     BlendService: ServiceData,
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
+    Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId>,
 {
     blend_relay: BlendRelay<BlendService>,
-    mempool_adapter: adapter::MempoolAdapter<Mempool::Item>,
+    mempool_adapter: adapter::MempoolAdapter<Mempool::Tx>,
     time_relay: TimeRelay,
     _mempool_adapter: std::marker::PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
 }
@@ -38,10 +38,10 @@ impl<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
     CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
 where
     BlendService: ServiceData,
-    Mempool: Send + Sync + RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
-    Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+    Mempool: Send + Sync + RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
+    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
-    Mempool::Item: Debug
+    Mempool::Tx: Debug
         + Serialize
         + DeserializeOwned
         + Eq
@@ -51,14 +51,14 @@ where
         + 'static
         + AuthenticatedMantleTx,
     Mempool::Settings: Clone,
-    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>
         + Send
         + Sync,
     MempoolNetAdapter::Settings: Send + Sync,
 {
     pub const fn new(
         blend_relay: BlendRelay<BlendService>,
-        mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Mempool::Item, Mempool::Item, TxHash>>,
+        mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Mempool::Tx, TxHash>>,
         time_relay: TimeRelay,
     ) -> Self {
         let mempool_adapter = adapter::MempoolAdapter::new(mempool_relay);
@@ -79,8 +79,8 @@ where
         <S as ServiceData>::Message: Send + Sync + 'static,
         <S as ServiceData>::Settings: Send + Sync + 'static,
         <S as ServiceData>::State: Send + Sync + 'static,
-        Mempool::Key: Send,
-        Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
+        Mempool::TxHash: Send,
+        Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
         Mempool::Settings: Sync,
         BlendService: lb_blend_service::ServiceComponents,
         BlendService::BroadcastSettings: Send + Sync,
@@ -94,11 +94,17 @@ where
             + 'static
             + AsServiceId<BlendService>
             + AsServiceId<
-                TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+                TxMempoolService<
+                    MempoolNetAdapter,
+                    Mempool,
+                    Mempool::Adapter,
+                    CryptarchiaService,
+                    RuntimeServiceId,
+                >,
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
             + AsServiceId<CryptarchiaService>,
-        CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
+        CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Tx>,
     {
         let blend_relay = service_resources_handle
             .overwatch_handle
@@ -111,7 +117,7 @@ where
 
         let mempool_relay = service_resources_handle
             .overwatch_handle
-            .relay::<TxMempoolService<_, _, _, _>>()
+            .relay::<TxMempoolService<_, _, _, _, _>>()
             .await
             .expect("Relay connection with MempoolService should succeed");
 
@@ -128,7 +134,7 @@ where
         &self.blend_relay
     }
 
-    pub const fn mempool_adapter(&self) -> &adapter::MempoolAdapter<Mempool::Item> {
+    pub const fn mempool_adapter(&self) -> &adapter::MempoolAdapter<Mempool::Tx> {
         &self.mempool_adapter
     }
 

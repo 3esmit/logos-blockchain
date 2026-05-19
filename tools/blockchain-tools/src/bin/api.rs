@@ -100,6 +100,12 @@ struct PostBlendDeclarationArgs {
     #[arg(long, value_name = "NODE_URL", default_value = "http://localhost:8080")]
     node_address: Url,
 
+    /// Base admin node URL used for wallet operations. Defaults to
+    /// `--node-address` for compatibility with deployments where wallet routes
+    /// are exposed on the same API.
+    #[arg(long, value_name = "ADMIN_NODE_URL")]
+    admin_node_address: Option<Url>,
+
     /// Optional basic auth username for the API.
     #[arg(long, value_name = "USERNAME")]
     username: Option<String>,
@@ -124,6 +130,7 @@ async fn post_blend_declaration(
         locked_note_id,
         blend_addr,
         node_address,
+        admin_node_address,
         user_config_path,
         username,
         password,
@@ -150,7 +157,7 @@ async fn post_blend_declaration(
         locator,
     } = extract_values(
         &client,
-        node_address.clone(),
+        admin_node_address.unwrap_or_else(|| node_address.clone()),
         &user_config,
         locked_note_id,
         blend_addr,
@@ -184,7 +191,7 @@ struct ExtractedUserConfigValues {
 
 async fn extract_values(
     client: &CommonHttpClient,
-    node_address: Url,
+    admin_node_address: Url,
     config: &UserConfig,
     locked_note_id: NoteId,
     blend_address: Option<Locator>,
@@ -204,7 +211,7 @@ async fn extract_values(
 
     let zk_id = extract_blend_zk_key(config)?;
 
-    verify_locked_note_id_value(client, node_address, zk_id, locked_note_id).await?;
+    verify_locked_note_id_value(client, admin_node_address, zk_id, locked_note_id).await?;
 
     Ok(ExtractedUserConfigValues {
         provider_id,
@@ -251,17 +258,17 @@ fn extract_blend_zk_key(config: &UserConfig) -> Result<ZkPublicKey> {
 
 async fn verify_locked_note_id_value(
     client: &CommonHttpClient,
-    node_address: Url,
+    admin_node_address: Url,
     zk_id: ZkPublicKey,
     locked_note_id: NoteId,
 ) -> Result<()> {
     let WalletBalanceResponseBody { notes, .. } = client
-        .get_wallet_balance(node_address, zk_id, None)
+        .get_wallet_balance(admin_node_address, zk_id, None)
         .await
         .context("Failed to fetch wallet balance for Blend ZK ID")?;
 
     // Preflight guard: fail early when the provided note does not belong to the
-    // declaration ZK key according to the wallet view at `node_address`.
+    // declaration ZK key according to the admin wallet view.
     // TODO: Also verify minimum stake amount once that threshold is exposed here.
     if !notes.contains_key(&locked_note_id) {
         bail!(

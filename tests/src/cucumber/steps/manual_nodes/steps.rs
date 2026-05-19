@@ -1091,7 +1091,7 @@ async fn step_run_blend_sdp_declaration_cli(
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
 
-    let declarer_api_base_url = world
+    let declarer_client = world
         .nodes_info
         .get(&declarer_node_name)
         .ok_or_else(|| StepError::LogicalError {
@@ -1099,7 +1099,15 @@ async fn step_run_blend_sdp_declaration_cli(
         })?
         .started_node
         .client
-        .base_url()
+        .clone();
+    let declarer_api_base_url = declarer_client.base_url().clone();
+    let declarer_admin_base_url = declarer_client
+        .admin_url()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Admin API URL for node '{declarer_node_name}' not found in world state"
+            ),
+        })?
         .clone();
 
     // Query notes from the declarer node API so wallet ownership lookups use
@@ -1109,7 +1117,7 @@ async fn step_run_blend_sdp_declaration_cli(
     let mut last_lookup_error: Option<String>;
     let locked_note_id = loop {
         let Ok(wallet_balance) = CommonHttpClient::new(None)
-            .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
+            .get_wallet_balance(declarer_admin_base_url.clone(), blend_zk_pk, None)
             .await
         else {
             continue;
@@ -1154,6 +1162,8 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg(locked_note_id)
         .arg("--node-address")
         .arg(declarer_api_base_url.to_string())
+        .arg("--admin-node-address")
+        .arg(declarer_admin_base_url.to_string())
         .output()
         .await?;
 
@@ -1198,7 +1208,7 @@ async fn step_verify_blend_sdp_declaration_included(
 ) -> StepResult {
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
 
-    let declarer_api_base_url = world
+    let declarer_client = world
         .nodes_info
         .get(&declarer_node_name)
         .ok_or_else(|| StepError::LogicalError {
@@ -1206,7 +1216,15 @@ async fn step_verify_blend_sdp_declaration_included(
         })?
         .started_node
         .client
-        .base_url()
+        .clone();
+    let declarer_api_base_url = declarer_client.base_url().clone();
+    let declarer_admin_base_url = declarer_client
+        .admin_url()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Admin API URL for node '{declarer_node_name}' not found in world state"
+            ),
+        })?
         .clone();
 
     let note_lookup_timeout = Duration::from_secs(30);
@@ -1214,7 +1232,7 @@ async fn step_verify_blend_sdp_declaration_included(
     let mut last_lookup_error: Option<String>;
     let locked_note_id = loop {
         let Ok(wallet_balance) = CommonHttpClient::new(None)
-            .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
+            .get_wallet_balance(declarer_admin_base_url.clone(), blend_zk_pk, None)
             .await
         else {
             continue;

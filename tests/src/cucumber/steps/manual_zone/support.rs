@@ -945,13 +945,13 @@ pub async fn wait_for_lib_advance(
 /// Builds a regular channel deposit for an existing funding note with the
 /// exact deposit value.
 pub async fn build_zone_deposit(
-    node_url: &Url,
+    node_client: &NodeHttpClient,
     channel_id: ChannelId,
     funding_public_key: ZkPublicKey,
     amount: Value,
     metadata: Vec<u8>,
 ) -> Result<DepositOp, ZoneTestError> {
-    let note = get_note_with_exact_value(node_url, funding_public_key, amount).await?;
+    let note = get_note_with_exact_value(node_client, funding_public_key, amount).await?;
 
     Ok(DepositOp {
         channel_id,
@@ -994,7 +994,7 @@ pub async fn submit_zone_deposit(
 /// Builds and submits a single transaction that both creates the deposit note
 /// and publishes the zone inscription that consumes it.
 pub async fn submit_atomic_zone_deposit(
-    node_url: &Url,
+    node_client: &NodeHttpClient,
     sequencer: &SequencerHandle<ZoneNodeHttpClient>,
     channel_id: ChannelId,
     funding_public_key: ZkPublicKey,
@@ -1002,7 +1002,7 @@ pub async fn submit_atomic_zone_deposit(
     metadata: Vec<u8>,
     inscription_data: Vec<u8>,
 ) -> Result<AtomicZoneDepositSubmission, ZoneTestError> {
-    let transfer = build_atomic_deposit_transfer(node_url, funding_public_key, amount).await?;
+    let transfer = build_atomic_deposit_transfer(node_client, funding_public_key, amount).await?;
     let deposit = build_atomic_deposit_op(channel_id, metadata, &transfer)?;
 
     let (tx, msg_id, sequencer_sig) = sequencer
@@ -1015,7 +1015,7 @@ pub async fn submit_atomic_zone_deposit(
             message: error.to_string(),
         })?;
 
-    let user_sig = sign_tx_zk(node_url, &tx, vec![funding_public_key]).await?;
+    let user_sig = sign_tx_zk(node_client, &tx, vec![funding_public_key]).await?;
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
@@ -1044,11 +1044,11 @@ pub async fn submit_atomic_zone_deposit(
 /// Builds the funding transfer that creates the note consumed by an atomic
 /// zone deposit.
 async fn build_atomic_deposit_transfer(
-    node_url: &Url,
+    node_client: &NodeHttpClient,
     funding_public_key: ZkPublicKey,
     amount: Value,
 ) -> Result<TransferOp, ZoneTestError> {
-    let funding_note = get_note_with_value(node_url, funding_public_key, amount).await?;
+    let funding_note = get_note_with_value(node_client, funding_public_key, amount).await?;
     let deposit_note = Note::new(amount, funding_public_key);
     let change = funding_note.value.checked_sub(amount).ok_or_else(|| {
         ZoneTestError::BuildAtomicDeposit {
@@ -1156,11 +1156,11 @@ pub async fn submit_zone_withdraw(
 
 /// Selects a wallet note large enough to fund a zone operation.
 async fn get_note_with_value(
-    node_url: &Url,
+    node_client: &NodeHttpClient,
     public_key: ZkPublicKey,
     min_value: Value,
 ) -> Result<SelectedNote, ZoneTestError> {
-    let balance = get_wallet_balance(node_url, public_key).await?;
+    let balance = get_wallet_balance(node_client, public_key).await?;
 
     balance
         .notes
@@ -1172,11 +1172,11 @@ async fn get_note_with_value(
 
 /// Selects a wallet note that must be consumed directly by a deposit test.
 async fn get_note_with_exact_value(
-    node_url: &Url,
+    node_client: &NodeHttpClient,
     public_key: ZkPublicKey,
     value: Value,
 ) -> Result<SelectedNote, ZoneTestError> {
-    let balance = get_wallet_balance(node_url, public_key).await?;
+    let balance = get_wallet_balance(node_client, public_key).await?;
 
     balance
         .notes
@@ -1188,20 +1188,11 @@ async fn get_note_with_exact_value(
 
 /// Reads wallet-visible notes for the test funding key from the node API.
 async fn get_wallet_balance(
-    node_url: &Url,
+    node_client: &NodeHttpClient,
     public_key: ZkPublicKey,
 ) -> Result<WalletBalanceResponseBody, ZoneTestError> {
-    let request_url = node_url
-        .join(&format!(
-            "wallet/{}/balance",
-            hex::encode(lb_groth16::fr_to_bytes(&public_key.into()))
-        ))
-        .map_err(|error| ZoneTestError::WalletBalance {
-            message: error.to_string(),
-        })?;
-
-    CommonHttpClient::new(None)
-        .get::<(), WalletBalanceResponseBody>(request_url, None)
+    node_client
+        .wallet_balance(public_key, None)
         .await
         .map_err(|error| ZoneTestError::WalletBalance {
             message: error.to_string(),
@@ -1211,12 +1202,17 @@ async fn get_wallet_balance(
 /// Asks the node wallet service to sign a Mantle transaction for the requested
 /// ZK keys.
 async fn sign_tx_zk(
-    node_url: &Url,
+    node_client: &NodeHttpClient,
     tx: &MantleTx,
     public_keys: Vec<ZkPublicKey>,
 ) -> Result<ZkSignature, ZoneTestError> {
+    let admin_url = node_client
+        .admin_url()
+        .ok_or_else(|| ZoneTestError::SignTransaction {
+            message: "admin api unavailable".to_owned(),
+        })?;
     let request_url =
-        node_url
+        admin_url
             .join("wallet/sign/zk")
             .map_err(|error| ZoneTestError::SignTransaction {
                 message: error.to_string(),

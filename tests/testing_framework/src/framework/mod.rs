@@ -71,7 +71,7 @@ impl Application for LbcEnv {
         let basic_auth = external_basic_auth(&endpoint);
 
         Ok(NodeHttpClient::from_urls_with_basic_auth(
-            endpoint, None, basic_auth,
+            endpoint, None, None, basic_auth,
         ))
     }
 
@@ -82,7 +82,12 @@ impl Application for LbcEnv {
             .map(|port| Url::parse(&format!("http://{}:{port}", access.host())))
             .transpose()?;
 
-        Ok(NodeHttpClient::from_urls(base_url, testing_url))
+        let admin_url = access
+            .named_port("admin")
+            .map(|port| Url::parse(&format!("http://{}:{port}", access.host())))
+            .transpose()?;
+
+        Ok(NodeHttpClient::from_urls(base_url, testing_url, admin_url))
     }
 
     fn node_readiness_path() -> &'static str {

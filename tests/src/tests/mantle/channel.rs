@@ -23,8 +23,8 @@ use lb_testing_framework::{
 };
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::common::manual_cluster::{
-    ManualNodeLayout, api_url, get_wallet_balance, start_local_manual_cluster_with_layout,
-    wait_for_nodes_height,
+    ManualNodeLayout, admin_api_url, api_url, get_wallet_balance,
+    start_local_manual_cluster_with_layout, wait_for_nodes_height,
 };
 use serial_test::serial;
 use testing_framework_core::scenario::DynError;
@@ -206,7 +206,7 @@ fn channel_test_config(mut config: RunConfig) -> RunConfig {
 
 async fn get_wallet_note(node: &NodeHttpClient, pk: ZkPublicKey, min_value: u64) -> (NoteId, u64) {
     let pk_hex = hex::encode(lb_groth16::fr_to_bytes(&pk.into()));
-    let url = api_url(node, &format!("wallet/{pk_hex}/balance"));
+    let url = admin_api_url(node, &format!("wallet/{pk_hex}/balance"));
 
     let response = reqwest::Client::new()
         .get(url)

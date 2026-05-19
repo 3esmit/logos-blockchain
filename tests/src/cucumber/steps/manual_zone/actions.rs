@@ -222,10 +222,11 @@ pub(super) async fn submit_zone_deposit_transaction(
     amount: u64,
     metadata: String,
 ) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url())?;
+    let node_client = log_step_error(step, world.zone_node_http_client())?;
+    let node_url = node_client.base_url().clone();
     let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
     let deposit = build_zone_deposit(
-        &node_url,
+        &node_client,
         world.zone.sequencer_channel_id(&channel_alias)?,
         funding_public_key,
         amount,
@@ -255,13 +256,13 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     amount: u64,
     metadata: String,
 ) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url())?;
+    let node_client = log_step_error(step, world.zone_node_http_client())?;
     let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
     let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
     let inscription_data = format!("Mint {amount} to Alice").into_bytes();
 
     let submission = submit_atomic_zone_deposit(
-        &node_url,
+        &node_client,
         sequencer,
         world.zone.sequencer_channel_id(sequencer_alias)?,
         funding_public_key,

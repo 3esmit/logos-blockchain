@@ -828,9 +828,13 @@ fn add_wallets(
             WalletType::User { .. } => "User",
             WalletType::Funding { .. } => "Funding",
         };
+        let wallet_api_base_url = started_node
+            .client
+            .admin_url()
+            .unwrap_or_else(|| started_node.client.base_url());
         info!(target: TARGET, "{wallet_type} wallet `{}/{node_name}` created: {}",
            wallet_name,
-           format!("{}wallet/{}/balance", started_node.client.base_url(), info.public_key_hex())
+           format!("{wallet_api_base_url}wallet/{}/balance", info.public_key_hex())
         );
     }
 

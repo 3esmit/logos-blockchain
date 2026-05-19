@@ -14,7 +14,12 @@ use axum::{
 };
 use http::StatusCode;
 use lb_api_service::Backend;
+use lb_core::{
+    header::HeaderId,
+    mantle::{SignedMantleTx, Transaction},
+};
 use lb_http_api_common::paths;
+use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
@@ -27,9 +32,30 @@ use tower_http::{
 use tracing::Level as TracingLevel;
 
 use crate::{
-    TracingService,
-    api::{admin::handlers::reload_tracing_filter, backend::AxumBackendSettings},
+    TracingService, WalletService,
+    api::{admin::handlers::reload_tracing_filter, backend::AxumBackendSettings, handlers::wallet},
 };
+
+type MempoolStorageAdapter = lb_tx_service::storage::adapters::rocksdb::RocksStorageAdapter<
+    SignedMantleTx,
+    <SignedMantleTx as Transaction>::Hash,
+>;
+type AdminMempoolService<RuntimeServiceId> = TxMempoolService<
+    lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
+        SignedMantleTx,
+        <SignedMantleTx as Transaction>::Hash,
+        RuntimeServiceId,
+    >,
+    Mempool<
+        HeaderId,
+        SignedMantleTx,
+        <SignedMantleTx as Transaction>::Hash,
+        MempoolStorageAdapter,
+        RuntimeServiceId,
+    >,
+    MempoolStorageAdapter,
+    RuntimeServiceId,
+>;
 
 pub struct AdminAxumBackend {
     settings: AxumBackendSettings,
@@ -38,7 +64,15 @@ pub struct AdminAxumBackend {
 #[async_trait::async_trait]
 impl<RuntimeServiceId> Backend<RuntimeServiceId> for AdminAxumBackend
 where
-    RuntimeServiceId: Debug + Sync + Send + Display + Clone + 'static + AsServiceId<TracingService>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Send
+        + Display
+        + Clone
+        + 'static
+        + AsServiceId<TracingService>
+        + AsServiceId<WalletService>
+        + AsServiceId<AdminMempoolService<RuntimeServiceId>>,
 {
     type Error = io::Error;
     type Settings = AxumBackendSettings;
@@ -67,7 +101,15 @@ fn build_router<RuntimeServiceId>(
     settings: &AxumBackendSettings,
 ) -> Result<Router, io::Error>
 where
-    RuntimeServiceId: Debug + Sync + Send + Display + Clone + 'static + AsServiceId<TracingService>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Send
+        + Display
+        + Clone
+        + 'static
+        + AsServiceId<TracingService>
+        + AsServiceId<WalletService>
+        + AsServiceId<AdminMempoolService<RuntimeServiceId>>,
 {
     let router = Router::new();
 
@@ -75,6 +117,26 @@ where
         paths::admin::TRACING_FILTER,
         routing::put(reload_tracing_filter::<RuntimeServiceId>),
     );
+
+    let router = router
+        .route(
+            paths::wallet::BALANCE,
+            routing::get(wallet::get_balance::<WalletService, _>),
+        )
+        .route(
+            paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
+            routing::post(
+                wallet::post_transactions_transfer_funds::<WalletService, MempoolStorageAdapter, _>,
+            ),
+        )
+        .route(
+            paths::wallet::SIGN_TX_ED25519,
+            routing::post(wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>),
+        )
+        .route(
+            paths::wallet::SIGN_TX_ZK,
+            routing::post(wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>),
+        );
 
     let router = router
         .with_state(handle)

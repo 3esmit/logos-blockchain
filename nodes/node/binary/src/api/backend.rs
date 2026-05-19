@@ -46,7 +46,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use super::handlers::{
     add_tx, blend_info, block, block_events, blocks_range_stream, blocks_stream,
     cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, immutable_blocks, libp2p_info,
-    mantle_metrics, mantle_status, transaction, wallet,
+    mantle_metrics, mantle_status, transaction,
 };
 use crate::{
     BlendBroadcastSettings, BlendService, WalletService,
@@ -288,28 +288,6 @@ where
             .route(
                 paths::LEADER_CLAIM,
                 routing::post(leader_claim::<ChainLeader, RuntimeServiceId>),
-            )
-            .route(
-                paths::wallet::BALANCE,
-                routing::get(wallet::get_balance::<WalletService, _>),
-            )
-            .route(
-                paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
-                routing::post(
-                    wallet::post_transactions_transfer_funds::<
-                        WalletService,
-                        MempoolStorageAdapter,
-                        _,
-                    >,
-                ),
-            )
-            .route(
-                paths::wallet::SIGN_TX_ED25519,
-                routing::post(wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>),
-            )
-            .route(
-                paths::wallet::SIGN_TX_ZK,
-                routing::post(wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>),
             );
 
         let app = app.route(

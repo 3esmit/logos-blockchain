@@ -181,19 +181,9 @@ pub async fn wait_for_nodes_height(
 }
 
 pub async fn get_wallet_balance(node: &NodeHttpClient, pk: ZkPublicKey) -> u64 {
-    let pk_hex = hex::encode(lb_groth16::fr_to_bytes(&pk.into()));
-    let url = api_url(node, &format!("wallet/{pk_hex}/balance"));
-
     for _ in 0..5 {
-        let response = reqwest::Client::new()
-            .get(url.clone())
-            .send()
-            .await
-            .expect("balance request should not fail");
-
-        if response.status().is_success() {
-            let body: serde_json::Value = response.json().await.unwrap();
-            return body["balance"].as_u64().unwrap_or(0);
+        if let Ok(body) = node.wallet_balance(pk, None).await {
+            return body.balance;
         }
 
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -207,6 +197,14 @@ pub fn api_url(node: &NodeHttpClient, path: &str) -> Url {
     node.base_url()
         .join(path)
         .expect("manual-cluster client base URL should join API path")
+}
+
+#[must_use]
+pub fn admin_api_url(node: &NodeHttpClient, path: &str) -> Url {
+    node.admin_url()
+        .expect("manual-cluster node client should include admin API URL")
+        .join(path)
+        .expect("manual-cluster admin URL should join API path")
 }
 
 #[must_use]

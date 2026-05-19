@@ -194,8 +194,11 @@ impl LocalDeployerEnv for LbcEnv {
         let testing_api = endpoints
             .port(&NodeEndpointPort::TestingApi)
             .map(|port| (endpoints.api.ip(), port).into());
+        let admin_api = endpoints
+            .port(&NodeEndpointPort::Custom("admin".to_owned()))
+            .map(|port| (endpoints.api.ip(), port).into());
 
-        Ok(NodeHttpClient::new(endpoints.api, testing_api))
+        Ok(NodeHttpClient::new(endpoints.api, testing_api, admin_api))
     }
 
     fn readiness_endpoint_path() -> &'static str {
@@ -232,6 +235,10 @@ fn add_endpoint_ports(endpoints: &mut NodeEndpoints, config: &RunConfig) {
     endpoints.insert_port(
         NodeEndpointPort::TestingApi,
         config.user.api.testing.listen_address.port(),
+    );
+    endpoints.insert_port(
+        NodeEndpointPort::Custom("admin".to_owned()),
+        config.user.api.admin.listen_address.port(),
     );
     endpoints.insert_port(
         NodeEndpointPort::Network,

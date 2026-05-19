@@ -23,8 +23,6 @@ use utoipa::OpenApi;
         crate::api::handlers::block_events,
         crate::api::handlers::blocks_stream,
         crate::api::handlers::transaction,
-        crate::api::handlers::wallet::get_balance,
-        crate::api::handlers::wallet::post_transactions_transfer_funds,
     ),
     components(schemas(schema::Status, schema::MempoolMetrics)),
     tags()

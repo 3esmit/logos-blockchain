@@ -215,6 +215,10 @@ fn build_node_values(kind: &'static str, index: usize, node: &NodePlan) -> NodeV
                 "testing-http",
                 node.general.api_config.testing_http_address.port(),
             ),
+            NodePortValues::tcp(
+                "admin-http",
+                node.general.api_config.admin_http_address.port(),
+            ),
             NodePortValues::udp("swarm-udp", node.general.network_config.backend.swarm.port),
             NodePortValues::udp(
                 "blend-udp",

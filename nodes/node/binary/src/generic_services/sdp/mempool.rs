@@ -8,9 +8,8 @@ use lb_core::{
 use lb_sdp_service::mempool::{MempoolAdapterError, SdpMempoolAdapter as SdpMempoolAdapterTrait};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
-    backend::{MemPool, RecoverableMempool, TrackerAdapter},
+    backend::{MemPool, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,
-    storage::MempoolStorageAdapter,
 };
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
@@ -21,7 +20,7 @@ type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Key>>;
 pub struct SdpMempoolAdapter<
     MempoolNetAdapter,
     Mempool,
-    StorageAdapter,
+    MempoolAdapter,
     ChainService,
     RuntimeServiceId,
 >
@@ -34,22 +33,21 @@ where
     RuntimeServiceId: Send + Sync,
 {
     pub mempool_relay: MempoolRelay<Mempool::Tx, Mempool::TxHash>,
-    _phantom: PhantomData<(MempoolNetAdapter, StorageAdapter, ChainService, RuntimeServiceId)>,
+    _phantom: PhantomData<(MempoolNetAdapter, MempoolAdapter, ChainService, RuntimeServiceId)>,
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, StorageAdapter, ChainService, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, MempoolAdapter, ChainService, RuntimeServiceId>
     SdpMempoolAdapterTrait
-    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, StorageAdapter, ChainService, RuntimeServiceId>
+    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, MempoolAdapter, ChainService, RuntimeServiceId>
 where
     Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash, Tx = SignedMantleTx>
-        + MemPool<Adapter = TrackerAdapter<ChainService, StorageAdapter, RuntimeServiceId>>
+        + MemPool<Adapter = MempoolAdapter>
         + Send
         + Sync,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync,
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-        + MempoolStorageAdapter<RuntimeServiceId>
+    MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
         + Send
         + Sync
         + Clone
@@ -65,7 +63,7 @@ where
     type MempoolService = TxMempoolService<
         MempoolNetAdapter,
         Mempool,
-        StorageAdapter,
+        MempoolAdapter,
         ChainService,
         RuntimeServiceId,
     >;

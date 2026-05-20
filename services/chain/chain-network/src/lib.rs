@@ -29,9 +29,8 @@ use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
 use lb_tx_service::{
     TxMempoolService,
-    backend::{MemPool, RecoverableMempool, adapter::TrackerAdapter},
+    backend::{MemPool, MempoolAdapter as TxMempoolAdapter, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,
-    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
 };
 use network::NetworkAdapter;
 use overwatch::{
@@ -106,7 +105,7 @@ pub struct ChainNetwork<
     NetAdapter,
     Mempool,
     MempoolNetAdapter,
-    StorageAdapter,
+    MempoolAdapter,
     TimeBackend,
     RuntimeServiceId,
 > where
@@ -118,27 +117,26 @@ pub struct ChainNetwork<
     Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Tx: Clone + Eq + Debug + 'static,
     Mempool::Tx: AuthenticatedMantleTx,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>,
     MempoolNetAdapter::Settings: Send + Sync,
-    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolAdapter: Clone + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, StorageAdapter, TimeBackend, RuntimeServiceId>
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, MempoolAdapter, TimeBackend, RuntimeServiceId>
     ServiceData
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
         Mempool,
         MempoolNetAdapter,
-        StorageAdapter,
+        MempoolAdapter,
         TimeBackend,
         RuntimeServiceId,
     >
@@ -150,12 +148,11 @@ where
     Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Tx, Key = Mempool::TxHash>,
     MempoolNetAdapter::Settings: Send + Sync,
-    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolAdapter: Clone + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
 {
@@ -166,14 +163,14 @@ where
 }
 
 #[async_trait::async_trait]
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, StorageAdapter, TimeBackend, RuntimeServiceId>
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, MempoolAdapter, TimeBackend, RuntimeServiceId>
     ServiceCore<RuntimeServiceId>
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
         Mempool,
         MempoolNetAdapter,
-        StorageAdapter,
+        MempoolAdapter,
         TimeBackend,
         RuntimeServiceId,
     >
@@ -187,13 +184,12 @@ where
     NetAdapter::Settings: Send + Sync + 'static,
     NetAdapter::PeerId: Clone + Eq + Hash + Copy + Debug + Send + Sync + Unpin + 'static,
     Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>
-        + MemPool<Adapter = TrackerAdapter<Cryptarchia, StorageAdapter, RuntimeServiceId>>
+        + MemPool<Adapter = MempoolAdapter>
         + Send
         + Sync
         + 'static,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Tx: Transaction<Hash = Mempool::TxHash>
         + AuthenticatedMantleTx
         + Debug
@@ -210,7 +206,7 @@ where
         + Sync
         + 'static,
     MempoolNetAdapter::Settings: Send + Sync,
-    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolAdapter: TxMempoolAdapter<Mempool::Tx, RuntimeServiceId> + Clone + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Debug
@@ -225,7 +221,7 @@ where
             TxMempoolService<
                 MempoolNetAdapter,
                 Mempool,
-                StorageAdapter,
+                MempoolAdapter,
                 Cryptarchia,
                 RuntimeServiceId,
             >,
@@ -249,7 +245,7 @@ where
             MempoolNetAdapter,
             NetAdapter,
             RuntimeServiceId,
-        > = ChainNetworkRelays::from_service_resources_handle::<TimeBackend, StorageAdapter>(
+        > = ChainNetworkRelays::from_service_resources_handle::<TimeBackend, MempoolAdapter>(
             &self.service_resources_handle,
         )
         .await;
@@ -397,8 +393,8 @@ where
     }
 }
 
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, StorageAdapter, TimeBackend, RuntimeServiceId>
-    ChainNetwork<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, StorageAdapter, TimeBackend, RuntimeServiceId>
+impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, MempoolAdapter, TimeBackend, RuntimeServiceId>
+    ChainNetwork<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, MempoolAdapter, TimeBackend, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Tx>,
     NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Tx>, Proposal = Proposal>
@@ -411,7 +407,6 @@ where
     Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash> + Send + Sync + 'static,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Tx: Transaction<Hash = Mempool::TxHash>
         + AuthenticatedMantleTx
         + Debug
@@ -427,7 +422,7 @@ where
         + Sync
         + 'static,
     MempoolNetAdapter::Settings: Send + Sync,
-    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolAdapter: Clone + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Display + AsServiceId<Self> + Sync,

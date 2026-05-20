@@ -23,7 +23,7 @@ pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{metrics::http_metrics_middleware, paths};
 use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
-use lb_tx_service::{TxMempoolService, backend::{Mempool, TrackerAdapter}};
+use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
@@ -59,7 +59,7 @@ type BlockStorageService<RuntimeServiceId> = StorageService<BlockStorageBackend,
 pub struct AxumBackend<
     TimeBackend,
     HttpStorageAdapter,
-    MempoolStorageAdapter,
+    MempoolAdapter,
     SdpMempool,
     SdpWallet,
     ChainLeader,
@@ -68,7 +68,7 @@ pub struct AxumBackend<
     _phantom: PhantomData<(
         TimeBackend,
         HttpStorageAdapter,
-        MempoolStorageAdapter,
+        MempoolAdapter,
         SdpMempool,
         SdpWallet,
         ChainLeader,
@@ -79,7 +79,7 @@ pub struct AxumBackend<
 impl<
     TimeBackend,
     StorageAdapter,
-    MempoolStorageAdapter,
+    MempoolAdapter,
     SdpMempool,
     SdpWallet,
     ChainLeader,
@@ -88,7 +88,7 @@ impl<
     for AxumBackend<
         TimeBackend,
         StorageAdapter,
-        MempoolStorageAdapter,
+        MempoolAdapter,
         SdpMempool,
         SdpWallet,
         ChainLeader,
@@ -98,15 +98,12 @@ where
     TimeBackend::Settings: Clone + Send + Sync,
     StorageAdapter:
         lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-        + lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Tx = SignedMantleTx,
-        > + Send
+    MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+        + Send
         + Sync
         + Clone
         + 'static,
-    MempoolStorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
     SdpWallet: SdpWalletAdapter + Send + Sync + 'static,
     ChainLeader: ChainLeaderServiceData,
@@ -135,10 +132,10 @@ where
                 Mempool<
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    TrackerAdapter<Cryptarchia<RuntimeServiceId>, MempoolStorageAdapter, RuntimeServiceId>,
+                    MempoolAdapter,
                     RuntimeServiceId,
                 >,
-                MempoolStorageAdapter,
+                MempoolAdapter,
                 Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
@@ -188,11 +185,11 @@ where
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
             .route(
                 paths::MANTLE_METRICS,
-                routing::get(mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>),
+                routing::get(mantle_metrics::<MempoolAdapter, RuntimeServiceId>),
             )
             .route(
                 paths::MANTLE_STATUS,
-                routing::post(mantle_status::<MempoolStorageAdapter, RuntimeServiceId>),
+                routing::post(mantle_status::<MempoolAdapter, RuntimeServiceId>),
             )
             .route(
                 paths::CRYPTARCHIA_INFO,
@@ -216,13 +213,13 @@ where
             )
             .route(
                 paths::MEMPOOL_ADD_TX,
-                routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
+                routing::post(add_tx::<MempoolAdapter, RuntimeServiceId>),
             )
             .route(paths::CHANNEL, routing::get(channel::<RuntimeServiceId>))
             .route(
                 paths::CHANNEL_DEPOSIT,
                 routing::post(
-                    channel_deposit::<WalletService, MempoolStorageAdapter, RuntimeServiceId>,
+                    channel_deposit::<WalletService, MempoolAdapter, RuntimeServiceId>,
                 ),
             )
             .route(
@@ -271,18 +268,18 @@ where
                 routing::post(
                     wallet::post_transactions_transfer_funds::<
                         WalletService,
-                        MempoolStorageAdapter,
+                        MempoolAdapter,
                         _,
                     >,
                 ),
             )
             .route(
                 paths::wallet::SIGN_TX_ED25519,
-                routing::post(wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>),
+                routing::post(wallet::sign_tx_ed25519::<WalletService, MempoolAdapter, _>),
             )
             .route(
                 paths::wallet::SIGN_TX_ZK,
-                routing::post(wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>),
+                routing::post(wallet::sign_tx_zk::<WalletService, MempoolAdapter, _>),
             );
 
         let app = app.route(

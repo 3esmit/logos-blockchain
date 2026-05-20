@@ -31,7 +31,11 @@ pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
         >,
         RuntimeServiceId,
     >,
-    RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+    TrackerAdapter<
+        CryptarchiaService<RuntimeServiceId>,
+        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        RuntimeServiceId,
+    >,
     CryptarchiaService<RuntimeServiceId>,
     RuntimeServiceId,
 >;
@@ -64,7 +68,11 @@ pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::Chain
     LibP2pAdapter<SignedMantleTx, RuntimeServiceId>,
     MempoolBackend<RuntimeServiceId>,
     MempoolAdapter<RuntimeServiceId>,
-    RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+    TrackerAdapter<
+        CryptarchiaService<RuntimeServiceId>,
+        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        RuntimeServiceId,
+    >,
     NtpTimeBackend,
     RuntimeServiceId,
 >;
@@ -90,7 +98,11 @@ pub type CryptarchiaLeaderService<Cryptarchia, ChainNetwork, Wallet, RuntimeServ
         Cryptarchia,
         ChainNetwork,
         Wallet,
-        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        TrackerAdapter<
+            Cryptarchia,
+            RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+            RuntimeServiceId,
+        >,
         RuntimeServiceId,
     >;
 
@@ -110,7 +122,11 @@ pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
         >,
         RuntimeServiceId,
     >,
-    RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+    TrackerAdapter<
+        CryptarchiaService<RuntimeServiceId>,
+        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        RuntimeServiceId,
+    >,
     CryptarchiaService<RuntimeServiceId>,
     RuntimeServiceId,
 >;

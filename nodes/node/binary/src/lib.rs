@@ -33,7 +33,7 @@ pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 #[cfg(feature = "tracing")]
 pub use lb_tracing_service::Tracing;
-use lb_tx_service::storage::adapters::RocksStorageAdapter;
+use lb_tx_service::{backend::TrackerAdapter, storage::adapters::RocksStorageAdapter};
 pub use lb_tx_service::{
     network::adapters::libp2p::{
         Libp2pAdapter as MempoolNetworkAdapter, Settings as MempoolAdapterSettings,
@@ -105,7 +105,11 @@ pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
         ApiStorageAdapter<RuntimeServiceId>,
-        RocksStorageAdapter<SignedMantleTx, TxHash>,
+        TrackerAdapter<
+            CryptarchiaService,
+            RocksStorageAdapter<SignedMantleTx, TxHash>,
+            RuntimeServiceId,
+        >,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
         CryptarchiaLeaderService,

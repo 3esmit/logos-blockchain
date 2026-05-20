@@ -32,9 +32,8 @@ use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService,
-    backend::{MemPool, RecoverableMempool, adapter::TrackerAdapter},
+    backend::{MemPool, MempoolAdapter as TxMempoolAdapter, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,
-    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
 };
 use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
@@ -134,12 +133,11 @@ pub struct CryptarchiaLeader<
     CryptarchiaService,
     ChainNetwork,
     Wallet,
-    StorageAdapter,
+    MempoolAdapter,
     RuntimeServiceId,
 > where
     BlendService: lb_blend_service::ServiceComponents,
     Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone,
     Mempool::TxHash: Clone + Eq + Debug + 'static,
@@ -154,7 +152,7 @@ pub struct CryptarchiaLeader<
     CryptarchiaService: CryptarchiaServiceData,
     ChainNetwork: ChainNetworkServiceData,
     Wallet: lb_wallet_service::api::WalletServiceData,
-    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolAdapter: Clone + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     winning_pol_epoch_slots_sender: watch::Sender<Option<WinningPolInfo>>,
@@ -169,7 +167,7 @@ impl<
     CryptarchiaService,
     ChainNetwork,
     Wallet,
-    StorageAdapter,
+    MempoolAdapter,
     RuntimeServiceId,
 > ServiceData
     for CryptarchiaLeader<
@@ -181,14 +179,13 @@ impl<
         CryptarchiaService,
         ChainNetwork,
         Wallet,
-        StorageAdapter,
+        MempoolAdapter,
         RuntimeServiceId,
     >
 where
     BlendService: lb_blend_service::ServiceComponents,
     Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Settings: Clone,
     Mempool::Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
     MempoolNetAdapter:
@@ -201,7 +198,7 @@ where
     CryptarchiaService: CryptarchiaServiceData,
     ChainNetwork: ChainNetworkServiceData,
     Wallet: lb_wallet_service::api::WalletServiceData,
-    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolAdapter: Clone + Send + Sync,
 {
     type Settings = LeaderSettings<TxS::Settings, BlendService::BroadcastSettings>;
     type State = overwatch::services::state::NoState<Self::Settings>;
@@ -219,7 +216,7 @@ impl<
     CryptarchiaService,
     ChainNetwork,
     Wallet,
-    StorageAdapter,
+    MempoolAdapter,
     RuntimeServiceId,
 > ServiceCore<RuntimeServiceId>
     for CryptarchiaLeader<
@@ -231,7 +228,7 @@ impl<
         CryptarchiaService,
         ChainNetwork,
         Wallet,
-        StorageAdapter,
+        MempoolAdapter,
         RuntimeServiceId,
     >
 where
@@ -245,12 +242,11 @@ where
         + Sync
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Tx = SignedMantleTx, Adapter = TrackerAdapter<CryptarchiaService, StorageAdapter, RuntimeServiceId>>
+    Mempool: MemPool<Tx = SignedMantleTx, Adapter = MempoolAdapter>
         + RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>
         + Send
         + Sync
         + 'static,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Tx: Transaction<Hash = Mempool::TxHash>
@@ -276,7 +272,7 @@ where
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Tx>,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Tx>,
     Wallet: lb_wallet_service::api::WalletServiceData,
-    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolAdapter: TxMempoolAdapter<SignedMantleTx, RuntimeServiceId> + Clone + Send + Sync,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -288,7 +284,7 @@ where
             TxMempoolService<
                 MempoolNetAdapter,
                 Mempool,
-                StorageAdapter,
+                MempoolAdapter,
                 CryptarchiaService,
                 RuntimeServiceId,
             >,
@@ -317,7 +313,7 @@ where
             Self,
             TimeBackend,
             CryptarchiaService,
-            StorageAdapter,
+            MempoolAdapter,
         >(&self.service_resources_handle)
         .await;
 
@@ -513,7 +509,7 @@ impl<
     CryptarchiaService,
     ChainNetwork,
     Wallet,
-    StorageAdapter,
+    MempoolAdapter,
     RuntimeServiceId,
 >
     CryptarchiaLeader<
@@ -525,7 +521,7 @@ impl<
         CryptarchiaService,
         ChainNetwork,
         Wallet,
-        StorageAdapter,
+        MempoolAdapter,
         RuntimeServiceId,
     >
 where
@@ -562,7 +558,6 @@ where
         + Sync
         + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    <Mempool as MemPool>::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     TxS: TxSelect<Tx = Mempool::Tx> + Clone + Send + Sync + 'static,
     TxS::Settings: Send + Sync + 'static,
     TimeBackend: lb_time_service::backends::TimeBackend,
@@ -570,7 +565,7 @@ where
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Tx>,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Tx>,
     Wallet: lb_wallet_service::api::WalletServiceData,
-    StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    MempoolAdapter: Clone + Send + Sync,
     RuntimeServiceId: Debug + Display + Sync + Send + 'static + AsServiceId<Wallet>,
 {
     #[expect(clippy::allow_attributes_without_reason)]
@@ -686,7 +681,7 @@ where
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,
-        mempool: &MempoolAdapter<Mempool::Tx>,
+        mempool: &mempool::adapter::MempoolAdapter<Mempool::Tx>,
     ) {
         match msg {
             LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
@@ -706,7 +701,7 @@ where
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,
-        mempool: &MempoolAdapter<Mempool::Tx>,
+        mempool: &mempool::adapter::MempoolAdapter<Mempool::Tx>,
         resp_tx: oneshot::Sender<Result<TxHash, Error>>,
     ) {
         let result = Self::build_and_submit_claim_tx(cryptarchia, wallet, mempool, config).await;
@@ -718,7 +713,7 @@ where
     async fn build_and_submit_claim_tx(
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
-        mempool: &MempoolAdapter<Mempool::Tx>,
+        mempool: &mempool::adapter::MempoolAdapter<Mempool::Tx>,
         config: &LeaderWalletConfig,
     ) -> Result<TxHash, Error> {
         let (tip, ledger_state) = Self::get_tip_ledger_state(cryptarchia).await?;

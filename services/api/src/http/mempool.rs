@@ -6,7 +6,7 @@ use lb_core::mantle::{Transaction, TransactionDependencies};
 use lb_network_service::backends::NetworkBackend;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
-    backend::{Mempool, TrackerAdapter},
+    backend::{Mempool, MempoolAdapter as TxMempoolAdapter},
     network::NetworkAdapter,
 };
 use overwatch::{DynError, services::AsServiceId};
@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 pub async fn add_tx<
     MempoolNetworkBackend,
     MempoolNetworkAdapter,
-    StorageAdapter,
+    MempoolAdapter,
     Item,
     Key,
     CryptarchiaService,
@@ -33,11 +33,10 @@ where
         + Sync
         + 'static,
     MempoolNetworkAdapter::Settings: Send + Sync,
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-        + lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = Item>
+    MempoolAdapter: TxMempoolAdapter<Item, RuntimeServiceId>
         + Clone
         + 'static,
-    StorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     CryptarchiaService: CryptarchiaServiceData<Tx = Item> + Sync,
     Item: TransactionDependencies
         + Transaction<Hash = Key>
@@ -57,8 +56,8 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter,
-                Mempool<Item, Key, TrackerAdapter<CryptarchiaService, StorageAdapter, RuntimeServiceId>, RuntimeServiceId>,
-                StorageAdapter,
+                Mempool<Item, Key, MempoolAdapter, RuntimeServiceId>,
+                MempoolAdapter,
                 CryptarchiaService,
                 RuntimeServiceId,
             >,

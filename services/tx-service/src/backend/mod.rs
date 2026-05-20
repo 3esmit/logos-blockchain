@@ -28,7 +28,7 @@ pub enum MempoolError {
 
 #[async_trait::async_trait]
 pub trait MempoolAdapter<Tx, RuntimeServiceId>:
-    MempoolStorageAdapter<RuntimeServiceId> + BlockInfoGetter<Tx> + LedgerStateGetter + Sized
+    MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + BlockInfoGetter<Tx> + LedgerStateGetter + Sized
 {
     async fn new(handle: OverwatchHandle<RuntimeServiceId>) -> Result<Self, DynError>;
 }

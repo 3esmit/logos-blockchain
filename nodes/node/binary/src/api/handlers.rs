@@ -46,7 +46,7 @@ use lb_storage_service::{
 };
 use lb_tx_service::{
     TxMempoolService,
-    backend::{Mempool, TrackerAdapter},
+    backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
@@ -336,19 +336,16 @@ macro_rules! make_request_and_return_response {
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn mantle_metrics<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_metrics<MempoolAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-        + lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Tx = SignedMantleTx,
-        > + Send
+    MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+        + Send
         + Sync
         + Clone
         + 'static,
-    StorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -364,17 +361,17 @@ where
                 Mempool<
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    TrackerAdapter<Cryptarchia<RuntimeServiceId>, StorageAdapter, RuntimeServiceId>,
+                    MempoolAdapter,
                     RuntimeServiceId,
                 >,
-                StorageAdapter,
+                MempoolAdapter,
                 Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
 {
     make_request_and_return_response!(mantle::mantle_mempool_metrics::<
-        StorageAdapter,
+        MempoolAdapter,
         Cryptarchia<RuntimeServiceId>,
         RuntimeServiceId,
     >(&handle))
@@ -388,20 +385,17 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn mantle_status<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_status<MempoolAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(items): Json<Vec<<SignedMantleTx as Transaction>::Hash>>,
 ) -> Response
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-        + lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Tx = SignedMantleTx,
-        > + Send
+    MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+        + Send
         + Sync
         + Clone
         + 'static,
-    StorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -417,17 +411,17 @@ where
                 Mempool<
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    TrackerAdapter<Cryptarchia<RuntimeServiceId>, StorageAdapter, RuntimeServiceId>,
+                    MempoolAdapter,
                     RuntimeServiceId,
                 >,
-                StorageAdapter,
+                MempoolAdapter,
                 Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
 {
     make_request_and_return_response!(mantle::mantle_mempool_status::<
-        StorageAdapter,
+        MempoolAdapter,
         Cryptarchia<RuntimeServiceId>,
         RuntimeServiceId,
     >(&handle, items))
@@ -559,20 +553,17 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn add_tx<StorageAdapter, RuntimeServiceId>(
+pub async fn add_tx<MempoolAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(tx): Json<SignedMantleTx>,
 ) -> Response
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-        + lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Tx = SignedMantleTx,
-        > + Send
+    MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+        + Send
         + Sync
         + Clone
         + 'static,
-    StorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -588,10 +579,10 @@ where
                 Mempool<
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    TrackerAdapter<Cryptarchia<RuntimeServiceId>, StorageAdapter, RuntimeServiceId>,
+                    MempoolAdapter,
                     RuntimeServiceId,
                 >,
-                StorageAdapter,
+                MempoolAdapter,
                 Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
@@ -604,7 +595,7 @@ where
             <SignedMantleTx as Transaction>::Hash,
             RuntimeServiceId,
         >,
-        StorageAdapter,
+        MempoolAdapter,
         SignedMantleTx,
         <SignedMantleTx as Transaction>::Hash,
         Cryptarchia<RuntimeServiceId>,
@@ -639,21 +630,18 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn channel_deposit<WalletService, StorageAdapter, RuntimeServiceId>(
+pub async fn channel_deposit<WalletService, MempoolAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(req): Json<ChannelDepositRequestBody>,
 ) -> Response
 where
     WalletService: WalletServiceData,
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-        + lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Tx = SignedMantleTx,
-        > + Send
+    MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+        + Send
         + Sync
         + Clone
         + 'static,
-    StorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Display
         + Send
@@ -670,10 +658,10 @@ where
                 Mempool<
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    TrackerAdapter<Cryptarchia<RuntimeServiceId>, StorageAdapter, RuntimeServiceId>,
+                    MempoolAdapter,
                     RuntimeServiceId,
                 >,
-                StorageAdapter,
+                MempoolAdapter,
                 Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
@@ -716,7 +704,7 @@ where
                 <SignedMantleTx as Transaction>::Hash,
                 RuntimeServiceId,
             >,
-            StorageAdapter,
+            MempoolAdapter,
             SignedMantleTx,
             <SignedMantleTx as Transaction>::Hash,
             Cryptarchia<RuntimeServiceId>,
@@ -1161,21 +1149,18 @@ pub mod wallet {
         (status = 500, description = "Internal server error", body = String),
     )
     )]
-    pub async fn post_transactions_transfer_funds<WalletService, StorageAdapter, RuntimeServiceId>(
+    pub async fn post_transactions_transfer_funds<WalletService, MempoolAdapter, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Json(body): Json<WalletTransferFundsRequestBody>,
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-            + lb_tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Tx = SignedMantleTx,
-            > + Send
+        MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+            + Send
             + Sync
             + Clone
             + 'static,
-        StorageAdapter::Error: Debug,
+        MempoolAdapter::Error: Debug,
         RuntimeServiceId: Debug
             + Send
             + Sync
@@ -1192,10 +1177,10 @@ pub mod wallet {
                     Mempool<
                         SignedMantleTx,
                         <SignedMantleTx as Transaction>::Hash,
-                        TrackerAdapter<Cryptarchia<RuntimeServiceId>, StorageAdapter, RuntimeServiceId>,
+                        MempoolAdapter,
                         RuntimeServiceId,
                     >,
-                    StorageAdapter,
+                    MempoolAdapter,
                     Cryptarchia<RuntimeServiceId>,
                     RuntimeServiceId,
                 >,
@@ -1232,7 +1217,7 @@ pub mod wallet {
                         <SignedMantleTx as Transaction>::Hash,
                         RuntimeServiceId,
                     >,
-                    StorageAdapter,
+                    MempoolAdapter,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
                     Cryptarchia<RuntimeServiceId>,
@@ -1257,21 +1242,18 @@ pub mod wallet {
             (status = 500, description = "Internal server error", body = String),
         )
     )]
-    pub async fn sign_tx_ed25519<WalletService, StorageAdapter, RuntimeServiceId>(
+    pub async fn sign_tx_ed25519<WalletService, MempoolAdapter, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Json(req): Json<WalletSignTxEd25519RequestBody>,
     ) -> Response
     where
         WalletService: WalletServiceData,
-        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-            + lb_tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Tx = SignedMantleTx,
-            > + Send
+        MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+            + Send
             + Sync
             + Clone
             + 'static,
-        StorageAdapter::Error: Debug,
+        MempoolAdapter::Error: Debug,
         RuntimeServiceId: Debug
             + Display
             + Send
@@ -1288,10 +1270,10 @@ pub mod wallet {
                     Mempool<
                         SignedMantleTx,
                         <SignedMantleTx as Transaction>::Hash,
-                        TrackerAdapter<Cryptarchia<RuntimeServiceId>, StorageAdapter, RuntimeServiceId>,
+                        MempoolAdapter,
                         RuntimeServiceId,
                     >,
-                    StorageAdapter,
+                    MempoolAdapter,
                     Cryptarchia<RuntimeServiceId>,
                     RuntimeServiceId,
                 >,
@@ -1315,21 +1297,18 @@ pub mod wallet {
             (status = 500, description = "Internal server error", body = String),
         )
     )]
-    pub async fn sign_tx_zk<WalletService, StorageAdapter, RuntimeServiceId>(
+    pub async fn sign_tx_zk<WalletService, MempoolAdapter, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Json(req): Json<WalletSignTxZkRequestBody>,
     ) -> Response
     where
         WalletService: WalletServiceData,
-        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapterNew<RuntimeServiceId>
-            + lb_tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Tx = SignedMantleTx,
-            > + Send
+        MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+            + Send
             + Sync
             + Clone
             + 'static,
-        StorageAdapter::Error: Debug,
+        MempoolAdapter::Error: Debug,
         RuntimeServiceId: Debug
             + Display
             + Send
@@ -1346,10 +1325,10 @@ pub mod wallet {
                     Mempool<
                         SignedMantleTx,
                         <SignedMantleTx as Transaction>::Hash,
-                        TrackerAdapter<Cryptarchia<RuntimeServiceId>, StorageAdapter, RuntimeServiceId>,
+                        MempoolAdapter,
                         RuntimeServiceId,
                     >,
-                    StorageAdapter,
+                    MempoolAdapter,
                     Cryptarchia<RuntimeServiceId>,
                     RuntimeServiceId,
                 >,

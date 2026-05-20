@@ -9,9 +9,8 @@ use lb_core::{
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
-    backend::{MemPool, RecoverableMempool, adapter::TrackerAdapter},
+    backend::{MemPool, MempoolAdapter as TxMempoolAdapter, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,
-    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
 };
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -41,7 +40,6 @@ impl<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
 where
     BlendService: ServiceData,
     Mempool: Send + Sync + RecoverableMempool<BlockId = HeaderId, TxHash = TxHash>,
-    Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Tx: Debug
         + Serialize
@@ -73,7 +71,7 @@ where
     }
 
     #[expect(clippy::allow_attributes_without_reason)]
-    pub async fn from_service_resources_handle<S, TimeBackend, CryptarchiaService, StorageAdapter>(
+    pub async fn from_service_resources_handle<S, TimeBackend, CryptarchiaService, MempoolAdapter>(
         service_resources_handle: &OpaqueServiceResourcesHandle<S, RuntimeServiceId>,
     ) -> Self
     where
@@ -81,14 +79,13 @@ where
         <S as ServiceData>::Message: Send + Sync + 'static,
         <S as ServiceData>::Settings: Send + Sync + 'static,
         <S as ServiceData>::State: Send + Sync + 'static,
-        Mempool: MemPool<Adapter = TrackerAdapter<CryptarchiaService, StorageAdapter, RuntimeServiceId>>,
+        Mempool: MemPool<Adapter = MempoolAdapter>,
         Mempool::TxHash: Send,
-        Mempool::Adapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
         Mempool::Settings: Sync,
         BlendService: lb_blend_service::ServiceComponents,
         BlendService::BroadcastSettings: Send + Sync,
         <BlendService as ServiceData>::Message: Send + 'static,
-        StorageAdapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+        MempoolAdapter: TxMempoolAdapter<Mempool::Tx, RuntimeServiceId> + Clone + Send + Sync,
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync + 'static,
         RuntimeServiceId: Debug
@@ -101,7 +98,7 @@ where
                 TxMempoolService<
                     MempoolNetAdapter,
                     Mempool,
-                    StorageAdapter,
+                    MempoolAdapter,
                     CryptarchiaService,
                     RuntimeServiceId,
                 >,

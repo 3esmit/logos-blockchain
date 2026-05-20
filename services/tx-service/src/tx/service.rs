@@ -37,7 +37,10 @@ use tracing::{debug, error, info};
 
 use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
-    backend::{MemPool as MemPoolTrait, MempoolError, RecoverableMempool, adapter::TrackerAdapter},
+    backend::{
+        MemPool as MemPoolTrait, MempoolAdapter, MempoolError, RecoverableMempool,
+        adapter::TrackerAdapter,
+    },
     network::NetworkAdapter as NetworkAdapterTrait,
     storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
     tx::{settings::TxMempoolSettings, state::TxMempoolState},
@@ -193,7 +196,7 @@ where
         + RecoverableMempool
         + Send
         + Sync,
-    Adapter: MempoolStorageAdapterNew<RuntimeServiceId> + Clone + Send + Sync,
+    Adapter: MempoolAdapter<Pool::Tx, RuntimeServiceId> + Clone,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
     Pool::TxHash: Send + Sync + 'static,
     Pool::Tx: Transaction<Hash = Pool::TxHash> + Debug + Eq + Clone + Send + Sync + 'static,
@@ -235,17 +238,6 @@ where
 
         let overwatch_handle = &self.service_resources_handle.overwatch_handle;
 
-        let storage_relay = overwatch_handle
-            .relay::<StorageService<
-                <Adapter as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
-                RuntimeServiceId,
-            >>()
-            .await
-            .expect("Storage service relay should be available");
-
-        let storage_adapter =
-            <Adapter as MempoolStorageAdapterNew<RuntimeServiceId>>::new(storage_relay);
-
         let cryptarchia_api: CryptarchiaServiceApi<ChainService, RuntimeServiceId> =
             CryptarchiaServiceApi::new(
                 overwatch_handle
@@ -257,7 +249,7 @@ where
         let mut blocks_stream = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
         let mut lib_stream = BroadcastStream::new(cryptarchia_api.subscribe_lib_updates().await?);
 
-        let pool_adapter = TrackerAdapter::new(cryptarchia_api, storage_adapter);
+        let pool_adapter = Adapter::new(overwatch_handle.clone()).await?;
 
         let pool_state = self.initial_state.pool.take();
 

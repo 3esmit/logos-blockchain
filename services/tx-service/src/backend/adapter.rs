@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeSet, HashSet},
-    fmt::Debug,
+    fmt::{Debug, Display},
     pin::Pin,
 };
 
@@ -12,15 +12,18 @@ use lb_core::{
     header::HeaderId,
     mantle::{DependencyId, Transaction},
 };
+use lb_storage_service::StorageService;
+use overwatch::{DynError, overwatch::OverwatchHandle, services::AsServiceId};
 use tokio_stream::StreamExt;
 use tracing::error;
 
 use crate::{
     backend::{
+        MempoolAdapter,
         forks::{BlockInfo, BlockInfoGetter, ForksTrackerError, LedgerStateGetter},
         inspector::LedgerStateInspector,
     },
-    storage::MempoolStorageAdapter,
+    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
 };
 
 pub struct TrackerAdapter<Cryptarchia, Storage, RuntimeServiceId>
@@ -122,7 +125,7 @@ impl<Cryptarchia, Storage, RuntimeServiceId> MempoolStorageAdapter<RuntimeServic
 where
     Cryptarchia: CryptarchiaServiceData + Send + Sync,
     Cryptarchia::Tx: Send + Sync,
-    Storage: crate::storage::MempoolStorageAdapter<RuntimeServiceId> + Send + Sync,
+    Storage: MempoolStorageAdapter<RuntimeServiceId> + Send + Sync,
     Storage::Tx: Send,
     <Storage::Tx as Transaction>::Hash: Sync,
     RuntimeServiceId: Send + Sync,
@@ -151,5 +154,47 @@ where
 
     async fn get_block(&self, header: HeaderId) -> Result<Option<Block<Self::Tx>>, Self::Error> {
         self.storage.get_block(header).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<Cryptarchia, Storage, RuntimeServiceId> MempoolAdapter<Cryptarchia::Tx, RuntimeServiceId>
+    for TrackerAdapter<Cryptarchia, Storage, RuntimeServiceId>
+where
+    Cryptarchia::Tx: Transaction + Clone + Send + Sync,
+    <Cryptarchia::Tx as Transaction>::Hash: Sync,
+    Storage: MempoolStorageAdapterNew<RuntimeServiceId, Tx = Cryptarchia::Tx>,
+    Cryptarchia: CryptarchiaServiceData + Send + Sync,
+    Cryptarchia::Tx: Send + Sync,
+    Storage: MempoolStorageAdapter<RuntimeServiceId, Tx = Cryptarchia::Tx> + Send + Sync,
+    Storage::Error: Debug,
+    RuntimeServiceId: Debug
+        + Display
+        + Send
+        + Sync
+        + AsServiceId<
+            StorageService<
+                <Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >,
+        > + AsServiceId<Cryptarchia>,
+{
+    async fn new(overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Result<Self, DynError> {
+        let storage_relay = overwatch_handle
+            .relay::<StorageService<
+                <Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >>()
+            .await?;
+        let storage_adapter =
+            <Storage as MempoolStorageAdapterNew<RuntimeServiceId>>::new(storage_relay);
+        let cryptarchia_api: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId> =
+            CryptarchiaServiceApi::new(
+                overwatch_handle
+                    .relay::<Cryptarchia>()
+                    .await
+                    .expect("Cryptarchia service relay should be available"),
+            );
+        Ok(Self::new(cryptarchia_api, storage_adapter))
     }
 }

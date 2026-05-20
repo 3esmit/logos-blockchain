@@ -4,15 +4,17 @@ mod inspector;
 pub mod pool;
 mod tracker;
 
-pub use adapter::TrackerAdapter;
-
 use std::pin::Pin;
 
+pub use adapter::TrackerAdapter;
+pub use forks::{BlockInfo, BlockInfoGetter, ForksTrackerError, LedgerStateGetter};
 use futures::Stream;
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent};
-pub use forks::{BlockInfo, BlockInfoGetter, ForksTrackerError, LedgerStateGetter};
+use overwatch::{DynError, overwatch::OverwatchHandle};
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
+
+use crate::storage::{MempoolStorageAdapter, StorageRelay};
 
 #[derive(thiserror::Error, Debug)]
 pub enum MempoolError {
@@ -22,6 +24,13 @@ pub enum MempoolError {
     StorageError(String),
     #[error(transparent)]
     DynamicPoolError(#[from] overwatch::DynError),
+}
+
+#[async_trait::async_trait]
+pub trait MempoolAdapter<Tx, RuntimeServiceId>:
+    MempoolStorageAdapter<RuntimeServiceId> + BlockInfoGetter<Tx> + LedgerStateGetter + Sized
+{
+    async fn new(handle: OverwatchHandle<RuntimeServiceId>) -> Result<Self, DynError>;
 }
 
 #[async_trait::async_trait]

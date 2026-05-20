@@ -12,14 +12,13 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 pub mod adapters;
 
+pub type StorageRelay<Backend, RuntimeServiceId> =
+    OutboundRelay<<StorageService<Backend, RuntimeServiceId> as ServiceData>::Message>;
+
 pub trait MempoolStorageAdapterNew<RuntimeServiceId>:
     MempoolStorageAdapter<RuntimeServiceId> + Sized
 {
-    fn new(
-        storage_relay: OutboundRelay<
-            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
-    ) -> Self;
+    fn new(storage_relay: StorageRelay<Self::Backend, RuntimeServiceId>) -> Self;
 }
 
 #[async_trait]

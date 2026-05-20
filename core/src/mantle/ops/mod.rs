@@ -53,6 +53,12 @@ pub trait OpId {
     fn op_bytes(&self) -> Vec<u8>;
 }
 
+impl<T: OpId> OpId for &T {
+    fn op_bytes(&self) -> Vec<u8> {
+        OpId::op_bytes(self)
+    }
+}
+
 /// Core set of supported Mantle operations.
 ///
 /// This type serves as the public-facing representation of [`OpSer`] and

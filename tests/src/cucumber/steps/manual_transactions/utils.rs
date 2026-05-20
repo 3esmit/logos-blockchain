@@ -339,7 +339,7 @@ pub(crate) async fn submit_prepared_user_wallet_transaction(
     world.record_tracked_spent_fee(
         sender_wallet_name,
         signed_tx
-            .total_gas_cost::<MainnetGasConstants>(gas_prices)
+            .total_gas_cost::<MainnetGasConstants>(&gas_prices)
             .map_err(|e| StepError::LogicalError {
                 message: format!("Step `{step}` error: failed to compute gas cost: {e}"),
             })
@@ -1567,7 +1567,7 @@ async fn collect_multiple_wallets_utxos(
         }
 
         for tx in &block.transactions {
-            let transfers = tx.mantle_tx.transfers();
+            let transfers: Vec<_> = tx.mantle_tx.transfers().collect();
 
             for transfer in &transfers {
                 for utxo in transfer.outputs.utxos(transfer) {

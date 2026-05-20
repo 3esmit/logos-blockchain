@@ -12,8 +12,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        AuthenticatedMantleTx, DependencyId, StorageSize, Transaction, TransactionDependencies,
-        TransactionHasher, Value,
+        AuthenticatedMantleTx, DependencyId, StorageSize, Transaction, TransactionHasher,
+        TxDependencies, Value,
         channel::Channels,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
@@ -285,7 +285,7 @@ impl Transaction for MantleTx {
     }
 }
 
-impl TransactionDependencies for MantleTx {
+impl TxDependencies for MantleTx {
     fn consumes(&self) -> impl Iterator<Item = DependencyId> {
         let consumes: HashSet<DependencyId> = self.ops().iter().flat_map(Op::consumes).collect();
         let produces: HashSet<DependencyId> = self.ops().iter().flat_map(Op::produces).collect();
@@ -566,7 +566,7 @@ impl Transaction for SignedMantleTx {
     }
 }
 
-impl TransactionDependencies for SignedMantleTx {
+impl TxDependencies for SignedMantleTx {
     fn consumes(&self) -> impl Iterator<Item = DependencyId> {
         self.mantle_tx.consumes()
     }
@@ -1108,7 +1108,7 @@ mod tests {
         use lb_key_management_system_keys::keys::Ed25519Key;
 
         use crate::mantle::{
-            DependencyId, MantleTx, TransactionDependencies as _,
+            DependencyId, MantleTx, TxDependencies as _,
             ops::{
                 Op,
                 channel::{MsgId, inscribe::InscriptionOp},

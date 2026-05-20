@@ -2,7 +2,7 @@ use core::{fmt::Debug, hash::Hash};
 use std::fmt::Display;
 
 use lb_chain_service::api::CryptarchiaServiceData;
-use lb_core::mantle::{Transaction, TransactionDependencies};
+use lb_core::mantle::{Transaction, TxDependencies};
 use lb_network_service::backends::NetworkBackend;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
@@ -33,12 +33,10 @@ where
         + Sync
         + 'static,
     MempoolNetworkAdapter::Settings: Send + Sync,
-    MempoolAdapter: TxMempoolAdapter<Item, RuntimeServiceId>
-        + Clone
-        + 'static,
+    MempoolAdapter: TxMempoolAdapter<Item, RuntimeServiceId> + Clone + 'static,
     MempoolAdapter::Error: Debug,
     CryptarchiaService: CryptarchiaServiceData<Tx = Item> + Sync,
-    Item: TransactionDependencies
+    Item: TxDependencies
         + Transaction<Hash = Key>
         + Clone
         + Debug

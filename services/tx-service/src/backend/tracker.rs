@@ -1,6 +1,6 @@
 use std::{collections::HashSet, hash::Hash};
 
-use lb_core::mantle::{DependencyId, TransactionDependencies};
+use lb_core::mantle::{DependencyId, TxDependencies};
 use rpds::{HashTrieMapSync as HashTrieMap, HashTrieSetSync as HashTrieSet};
 
 pub trait LedgerStateReadyDeps {
@@ -43,7 +43,7 @@ where
 
 impl<Tx> TxTrackerState<Tx, Tx::Hash>
 where
-    Tx: TransactionDependencies + Clone,
+    Tx: TxDependencies + Clone,
 {
     pub fn process_tx(&mut self, tx: Tx, frontier_deps: &HashSet<DependencyId>) {
         let consumes: HashSet<DependencyId> = tx.consumes().collect();
@@ -136,7 +136,7 @@ mod tests {
     use std::collections::HashSet;
 
     use bytes::Bytes;
-    use lb_core::mantle::{DependencyId, Transaction, TransactionDependencies, TransactionHasher};
+    use lb_core::mantle::{DependencyId, Transaction, TransactionHasher, TxDependencies};
 
     use super::TxTrackerState;
 
@@ -161,7 +161,7 @@ mod tests {
         }
     }
 
-    impl TransactionDependencies for TestTx {
+    impl TxDependencies for TestTx {
         fn consumes(&self) -> impl Iterator<Item = DependencyId> {
             self.consumes
                 .iter()

@@ -8,7 +8,7 @@ use futures::StreamExt;
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo};
 use lb_core::{
     header::HeaderId,
-    mantle::{DependencyId, TransactionDependencies},
+    mantle::{DependencyId, TxDependencies},
 };
 use tracing::error;
 
@@ -49,7 +49,7 @@ where
 
 impl<Tx, Adapter> ForksTracker<Tx, Tx::Hash, Adapter>
 where
-    Tx: TransactionDependencies + Clone,
+    Tx: TxDependencies + Clone,
     Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send,
 {
     pub fn new(adapter: Adapter) -> Self {
@@ -178,7 +178,7 @@ mod tests {
     use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Slot};
     use lb_core::{
         header::HeaderId,
-        mantle::{DependencyId, Transaction, TransactionDependencies, TransactionHasher},
+        mantle::{DependencyId, Transaction, TransactionHasher, TxDependencies},
     };
 
     use super::{BlockInfo, BlockInfoGetter, ForksTracker, ForksTrackerError, LedgerStateGetter};
@@ -205,7 +205,7 @@ mod tests {
         }
     }
 
-    impl TransactionDependencies for TestTx {
+    impl TxDependencies for TestTx {
         fn consumes(&self) -> impl Iterator<Item = DependencyId> {
             self.consumes
                 .iter()

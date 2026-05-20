@@ -193,7 +193,7 @@ pub enum Error {
 
 pub type DependencyId = Bytes;
 
-pub trait TransactionDependencies: Transaction {
+pub trait TxDependencies: Transaction {
     fn consumes(&self) -> impl Iterator<Item = DependencyId>;
     fn produces(&self) -> impl Iterator<Item = DependencyId>;
 }

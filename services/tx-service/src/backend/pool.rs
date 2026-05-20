@@ -12,7 +12,7 @@ use futures::{Stream, stream};
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent, storage::StorageAdapter};
 use lb_core::{
     header::HeaderId,
-    mantle::{Transaction, TransactionDependencies},
+    mantle::{Transaction, TxDependencies},
 };
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
@@ -67,13 +67,7 @@ where
 #[async_trait]
 impl<Tx, Adapter, RuntimeServiceId> MemPool for Mempool<Tx, Tx::Hash, Adapter, RuntimeServiceId>
 where
-    Tx: TransactionDependencies
-        + Clone
-        + Send
-        + Sync
-        + 'static
-        + Serialize
-        + for<'de> Deserialize<'de>,
+    Tx: TxDependencies + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     <Tx as Transaction>::Hash: Hash + Eq + Ord + Clone + Send + Sync + 'static,
     Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Send + Sync + 'static,
     Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone,
@@ -153,13 +147,7 @@ impl<Tx, Adapter, RuntimeServiceId> RecoverableMempool
 where
     Tx::Hash:
         Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Tx: TransactionDependencies
-        + Clone
-        + Send
-        + Sync
-        + 'static
-        + Serialize
-        + for<'de> Deserialize<'de>,
+    Tx: TxDependencies + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Clone + Send + Sync + 'static,
     Adapter: BlockInfoGetter<Tx>,
     Adapter: LedgerStateGetter,

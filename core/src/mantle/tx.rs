@@ -13,15 +13,16 @@ use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
         AuthenticatedMantleTx, DependencyId, StorageSize, Transaction, TransactionHasher,
-        TxDependencies, Value,
+        TxDependencies, TxFeeTip, Value,
         channel::Channels,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+        ledger::Utxos,
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
-            transfer::TransferOp,
+            transfer::{TransferError, TransferOp},
         },
     },
     proofs::{
@@ -250,15 +251,11 @@ impl MantleTx {
         super::encoding::predict_signed_mantle_tx_size(self, context) as u64
     }
 
-    #[must_use]
-    pub fn transfers(&self) -> Vec<TransferOp> {
-        let mut transfers: Vec<TransferOp> = vec![];
-        for op in self.ops().clone() {
-            if let Op::Transfer(transfer_op) = op {
-                transfers.push(transfer_op);
-            }
-        }
-        transfers
+    pub fn transfers(&self) -> impl Iterator<Item = &TransferOp> + '_ {
+        self.ops().iter().filter_map(|op| match op {
+            Op::Transfer(transfer_op) => Some(transfer_op),
+            _ => None,
+        })
     }
 
     #[must_use]
@@ -300,6 +297,19 @@ impl TxDependencies for MantleTx {
         let external_produces: HashSet<DependencyId> =
             produces.difference(&consumes).cloned().collect();
         external_produces.into_iter()
+    }
+}
+
+impl TxFeeTip for MantleTx {
+    fn fee_tip(&self, utxos: &Utxos) -> Result<i128, TransferError> {
+        let balance = self
+            .transfers()
+            .map(|transfer_op| transfer_op.balance(utxos))
+            .try_fold(0i128, |acc, balance| {
+                acc.checked_add(balance?)
+                    .ok_or(TransferError::BalanceOverflow)
+            });
+        Ok(0)
     }
 }
 
@@ -577,42 +587,12 @@ impl TxDependencies for SignedMantleTx {
 }
 
 impl AuthenticatedMantleTx for SignedMantleTx {
-    type Context = GasPrices;
-
     fn mantle_tx(&self) -> &MantleTx {
         &self.mantle_tx
     }
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
         self.mantle_tx.ops().iter().zip(self.ops_proofs.iter())
-    }
-
-    fn total_gas_cost<Constants: GasConstants>(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        GasCalculator::total_gas_cost::<Constants>(&self, &context)
-    }
-
-    fn storage_gas_cost(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        GasCalculator::storage_gas_cost(&self, &context)
-    }
-
-    fn execution_gas_consumption<Constants: GasConstants>(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<Gas, GasOverflow> {
-        GasCalculator::execution_gas_consumption::<Constants>(&self, &context)
-    }
-
-    fn storage_gas_consumption(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<Gas, GasOverflow> {
-        GasCalculator::storage_gas_consumption(&self, &context)
     }
 
     fn verify_ops_proofs_with_helper(

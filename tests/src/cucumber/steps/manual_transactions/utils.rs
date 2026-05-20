@@ -11,8 +11,8 @@ use hex::ToHex as _;
 use lb_core::{
     codec::SerializeOp as _,
     mantle::{
-        AuthenticatedMantleTx as _, Note, NoteId, OpProof, SignedMantleTx, Transaction as _,
-        TxHash, Utxo,
+        AuthenticatedMantleTx as _, GasCalculator as _, Note, NoteId, OpProof, SignedMantleTx,
+        Transaction as _, TxHash, Utxo,
         gas::MainnetGasConstants,
         ops::Op,
         tx::{GasPrices, MantleTxContext, MantleTxGasContext},

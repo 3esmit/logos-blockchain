@@ -72,7 +72,7 @@ pub async fn current_utxos_for_public_key(
                     owned.remove(input);
                 }
 
-                for utxo in transfer.outputs.utxos(&transfer) {
+                for utxo in transfer.outputs.utxos(transfer) {
                     if utxo.note.pk == public_key {
                         owned.insert(utxo.id(), utxo);
                     }

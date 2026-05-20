@@ -14,7 +14,8 @@ pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, VerificationError,
+        AuthenticatedMantleTx, GasCalculator, GenesisTx, NoteId, Op, OpProof, Utxo, Value,
+        VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
         ledger::Operation as _,
         ops::{
@@ -359,8 +360,7 @@ impl LedgerState {
                 storage_gas_price: *self.cryptarchia_ledger.storage_gas_price(),
             };
             // Check the transaction is balanced
-            let total_gas_cost =
-                AuthenticatedMantleTx::total_gas_cost::<Constants>(&tx, gas_prices.clone())?;
+            let total_gas_cost = GasCalculator::total_gas_cost::<Constants>(&tx, &gas_prices)?;
             tracing::debug!(
                 balance,
                 total_gas_cost = total_gas_cost.into_inner(),
@@ -377,22 +377,16 @@ impl LedgerState {
 
             // Update the total of fee burned and tipped in the block
             let tx_fee_burned = GasCost::calculate(
-                AuthenticatedMantleTx::execution_gas_consumption::<Constants>(
-                    &tx,
-                    gas_prices.clone(),
-                )?,
+                GasCalculator::execution_gas_consumption::<Constants>(&tx, &gas_prices)?,
                 gas_prices.execution_base_gas_price,
             )?
-            .checked_add(AuthenticatedMantleTx::storage_gas_cost(
-                &tx,
-                gas_prices.clone(),
-            )?)?;
+            .checked_add(GasCalculator::storage_gas_cost(&tx, &gas_prices)?)?;
 
             let tx_fee_tip = GasCost::from(balance as Value).checked_sub(tx_fee_burned)?;
             total_fee_burned = total_fee_burned.checked_add(tx_fee_burned)?;
             total_fee_tip = total_fee_tip.checked_add(tx_fee_tip)?;
             total_block_execution_gas = total_block_execution_gas.checked_add(
-                AuthenticatedMantleTx::execution_gas_consumption::<Constants>(&tx, gas_prices)?,
+                GasCalculator::execution_gas_consumption::<Constants>(&tx, &gas_prices)?,
             )?;
 
             // Check that the block is not exceeding the Gas limit
@@ -840,9 +834,8 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        let fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::default())
-                .unwrap();
+        let fees = GasCalculator::total_gas_cost::<MainnetGasConstants>(&tx, &GasPrices::default())
+            .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
@@ -1431,11 +1424,9 @@ mod tests {
             std::slice::from_ref(&sk),
         );
         // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
-        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(
-            &tx,
-            ledger.get_gas_prices(),
-        )
-        .unwrap();
+        let fees =
+            GasCalculator::total_gas_cost::<MainnetGasConstants>(&tx, &ledger.get_gas_prices())
+                .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
@@ -1471,11 +1462,9 @@ mod tests {
         update_ledger_prices(&mut ledger, 1, 1);
         // The tx pays 794 fees = 590 execution base fee + 0 execution tip + 204
         // storage
-        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(
-            &tx,
-            ledger.get_gas_prices(),
-        )
-        .unwrap();
+        let fees =
+            GasCalculator::total_gas_cost::<MainnetGasConstants>(&tx, &ledger.get_gas_prices())
+                .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(
             vec![utxo.id()],

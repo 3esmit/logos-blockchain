@@ -656,7 +656,7 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            AuthenticatedMantleTx, MantleTx, Note, Op,
+            AuthenticatedMantleTx, GasCalculator, MantleTx, Note, Op,
             OpProof::ZkSig,
             SignedMantleTx, Transaction as _,
             gas::MainnetGasConstants,
@@ -1299,7 +1299,7 @@ pub mod tests {
         );
 
         let _fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
+            GasCalculator::total_gas_cost::<MainnetGasConstants>(&tx, &GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
             &transfer_op,
@@ -1331,7 +1331,7 @@ pub mod tests {
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
         let _fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
+            GasCalculator::total_gas_cost::<MainnetGasConstants>(&tx, &GasPrices::new(0, 0));
         let (new_state, balance) = ledger_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
@@ -1368,7 +1368,7 @@ pub mod tests {
         );
         let locked_notes = LockedNotes::new();
         let _fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
+            GasCalculator::total_gas_cost::<MainnetGasConstants>(&tx, &GasPrices::new(0, 0));
         let (final_state, final_balance) = new_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
@@ -1497,7 +1497,7 @@ pub mod tests {
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
         let _fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
+            GasCalculator::total_gas_cost::<MainnetGasConstants>(&tx, &GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
             &transfer_op,

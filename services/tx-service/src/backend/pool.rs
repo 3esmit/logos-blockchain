@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeSet,
+    error::Error,
     fmt::Debug,
     hash::Hash,
     marker::PhantomData,
@@ -12,7 +13,7 @@ use futures::{Stream, stream};
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent, storage::StorageAdapter};
 use lb_core::{
     header::HeaderId,
-    mantle::{Transaction, TxDependencies},
+    mantle::{Transaction, TxDependencies, TxRewardsRatio},
 };
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
@@ -67,7 +68,14 @@ where
 #[async_trait]
 impl<Tx, Adapter, RuntimeServiceId> MemPool for Mempool<Tx, Tx::Hash, Adapter, RuntimeServiceId>
 where
-    Tx: TxDependencies + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Tx: TxDependencies
+        + TxRewardsRatio
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>,
     <Tx as Transaction>::Hash: Hash + Eq + Ord + Clone + Send + Sync + 'static,
     Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Send + Sync + 'static,
     Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone,
@@ -100,7 +108,10 @@ where
         ancestor_hint: HeaderId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, MempoolError> {
         Ok(Box::pin(stream::iter(
-            self.forks_tracker.get_frontier_txs(ancestor_hint),
+            self.forks_tracker
+                .get_frontier_txs(ancestor_hint)
+                .await
+                .map_err(|e| MempoolError::DynamicPoolError(Box::new(e)))?,
         )))
     }
 
@@ -147,7 +158,14 @@ impl<Tx, Adapter, RuntimeServiceId> RecoverableMempool
 where
     Tx::Hash:
         Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Tx: TxDependencies + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Tx: TxDependencies
+        + TxRewardsRatio
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>,
     Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Clone + Send + Sync + 'static,
     Adapter: BlockInfoGetter<Tx>,
     Adapter: LedgerStateGetter,

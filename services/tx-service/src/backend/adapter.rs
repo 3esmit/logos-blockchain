@@ -12,6 +12,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{DependencyId, Transaction},
 };
+use lb_ledger::LedgerState;
 use lb_storage_service::StorageService;
 use overwatch::{DynError, overwatch::OverwatchHandle, services::AsServiceId};
 use tokio_stream::StreamExt;
@@ -104,6 +105,17 @@ where
     Storage: MempoolStorageAdapter<RuntimeServiceId, Tx = Cryptarchia::Tx>,
     RuntimeServiceId: Send + Sync,
 {
+    async fn get_ledger_state(
+        &self,
+        header_id: HeaderId,
+    ) -> Result<LedgerState, ForksTrackerError> {
+        self.crypatarchia_api
+            .get_ledger_state(header_id)
+            .await
+            .map_err(|_| ForksTrackerError::ParentNotFound(header_id))?
+            .ok_or_else(|| ForksTrackerError::ParentNotFound(header_id))
+    }
+
     async fn get_ledger_deps(
         &self,
         header_id: &HeaderId,

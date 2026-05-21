@@ -5,11 +5,15 @@ use std::{
 };
 
 use futures::StreamExt;
-use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo};
+use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, api::ApiError};
 use lb_core::{
     header::HeaderId,
-    mantle::{DependencyId, TxDependencies},
+    mantle::{
+        DependencyId, GenesisTx, SignedMantleTx, Transaction, TxDependencies, TxRewardsRatio,
+        gas::MainnetGasConstants,
+    },
 };
+use lb_ledger::LedgerState;
 use tracing::error;
 
 use super::tracker::TxTrackerState;
@@ -26,16 +30,22 @@ pub trait BlockInfoGetter<Tx> {
 
 #[async_trait::async_trait]
 pub trait LedgerStateGetter {
+    async fn get_ledger_state(&self, header_id: HeaderId)
+    -> Result<LedgerState, ForksTrackerError>;
     async fn get_ledger_deps(
         &self,
         header_id: &HeaderId,
     ) -> Result<HashSet<DependencyId>, ForksTrackerError>;
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ForksTrackerError {
+    #[error("Block not found in block store")]
     BlockNotFound,
+    #[error("Parent {0} not found in current_tips or states")]
     ParentNotFound(HeaderId),
+    #[error(transparent)]
+    CryptarchiaApi(#[from] ApiError),
 }
 
 pub struct ForksTracker<Tx, TxId, Adapter>
@@ -49,7 +59,7 @@ where
 
 impl<Tx, Adapter> ForksTracker<Tx, Tx::Hash, Adapter>
 where
-    Tx: TxDependencies + Clone,
+    Tx: TxDependencies + TxRewardsRatio + Clone,
     Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send,
 {
     pub fn new(adapter: Adapter) -> Self {
@@ -60,11 +70,35 @@ where
         }
     }
 
-    pub fn get_frontier_txs(&self, parent_hint: HeaderId) -> Vec<Tx> {
-        self.current_tips
+    pub async fn get_frontier_txs(
+        &self,
+        parent_hint: HeaderId,
+    ) -> Result<Vec<Tx>, ForksTrackerError> {
+        let mut txs: Vec<Tx> = self
+            .current_tips
             .get(&parent_hint)
             .map(TxTrackerState::get_ready_txs)
-            .unwrap_or_default()
+            .ok_or_else(|| ForksTrackerError::ParentNotFound(parent_hint))?;
+        let ledger_state: LedgerState = self.adapter.get_ledger_state(parent_hint).await?;
+        let utxos = &ledger_state.epoch_state().utxos;
+        let gas_prices = ledger_state.get_gas_prices();
+        let cached_keys: HashMap<_, _> = txs
+            .iter()
+            .filter_map(|tx| {
+                match TxRewardsRatio::rewards_ratio::<MainnetGasConstants>(tx, &gas_prices, utxos) {
+                    Ok(ratio) => Some((tx.hash(), ratio)),
+                    Err(e) => {
+                        error!(
+                            "Error computing rewards ratio for tx {:?}: {e:?}",
+                            tx.hash()
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+        txs.sort_unstable_by_key(|tx| cached_keys[&tx.hash()]);
+        Ok(txs)
     }
 
     pub fn force_remove_txs(&mut self, txs: &[Tx::Hash]) {
@@ -180,6 +214,7 @@ mod tests {
         header::HeaderId,
         mantle::{DependencyId, Transaction, TransactionHasher, TxDependencies},
     };
+    use lb_ledger::LedgerState;
 
     use super::{BlockInfo, BlockInfoGetter, ForksTracker, ForksTrackerError, LedgerStateGetter};
     use crate::backend::tracker::TxTrackerState;
@@ -257,6 +292,13 @@ mod tests {
 
     #[async_trait]
     impl LedgerStateGetter for MockAdapter {
+        async fn get_ledger_state(
+            &self,
+            header_id: HeaderId,
+        ) -> Result<LedgerState, ForksTrackerError> {
+            Err(ForksTrackerError::LedgerStateNotFound(header_id))
+        }
+
         async fn get_ledger_deps(
             &self,
             _: &HeaderId,

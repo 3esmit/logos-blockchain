@@ -23,9 +23,10 @@ use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
 pub use tx::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 
 use crate::mantle::{
+    gas::{GasOverflow, GasPrice},
     ledger::Utxos,
     ops::transfer::{TransferError, TransferOp},
-    tx::OperationVerificationHelper,
+    tx::{GasPrices, OperationVerificationHelper},
 };
 
 pub const MAX_MANTLE_TXS: usize = 1024;
@@ -148,6 +149,19 @@ pub trait TxDependencies: Transaction {
     fn produces(&self) -> impl Iterator<Item = DependencyId>;
 }
 
-pub trait TxFeeTip: Transaction + GasCalculator {
-    fn fee_tip(&self, utxos: &Utxos) -> Result<i128, TransferError>;
+#[derive(thiserror::Error, Debug)]
+pub enum TxRewardsRatioError {
+    #[error("Balance overflow")]
+    OverflownBalance,
+    #[error(transparent)]
+    GasOverflow(#[from] GasOverflow),
+    #[error(transparent)]
+    TransferError(#[from] TransferError),
+}
+pub trait TxRewardsRatio: AuthenticatedMantleTx {
+    fn rewards_ratio<Constants: GasConstants>(
+        &self,
+        gas_price: &GasPrices,
+        utxos: &Utxos,
+    ) -> Result<Value, TxRewardsRatioError>;
 }

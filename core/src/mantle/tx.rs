@@ -5,15 +5,18 @@ use std::{
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
+use futures::TryStreamExt;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use nom::number::{f64, i128};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
+    codec::SerializeOp,
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
         AuthenticatedMantleTx, DependencyId, StorageSize, Transaction, TransactionHasher,
-        TxDependencies, TxFeeTip, Value,
+        TxDependencies, TxRewardsRatio, TxRewardsRatioError, Value,
         channel::Channels,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
@@ -297,19 +300,6 @@ impl TxDependencies for MantleTx {
         let external_produces: HashSet<DependencyId> =
             produces.difference(&consumes).cloned().collect();
         external_produces.into_iter()
-    }
-}
-
-impl TxFeeTip for MantleTx {
-    fn fee_tip(&self, utxos: &Utxos) -> Result<i128, TransferError> {
-        let balance = self
-            .transfers()
-            .map(|transfer_op| transfer_op.balance(utxos))
-            .try_fold(0i128, |acc, balance| {
-                acc.checked_add(balance?)
-                    .ok_or(TransferError::BalanceOverflow)
-            });
-        Ok(0)
     }
 }
 
@@ -636,6 +626,34 @@ impl GasCalculator for SignedMantleTx {
 
     fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
         Ok(self.gas_storage_size().into())
+    }
+}
+
+impl TxRewardsRatio for SignedMantleTx {
+    fn rewards_ratio<Constants: GasConstants>(
+        &self,
+        gas_prices: &GasPrices,
+        utxos: &Utxos,
+    ) -> Result<Value, TxRewardsRatioError> {
+        // compute the balance
+        let balance: Result<i128, _> =
+            self.mantle_tx
+                .transfers()
+                .try_fold(0i128, |accum, transfer| {
+                    accum
+                        .checked_add(transfer.balance(utxos)?)
+                        .ok_or(TxRewardsRatioError::OverflownBalance)
+                });
+        // Update the total of fee burned and tipped in the block
+        let tx_fee_burned = GasCost::calculate(
+            GasCalculator::execution_gas_consumption::<Constants>(self, &gas_prices)?,
+            gas_prices.execution_base_gas_price,
+        )?
+        .checked_add(GasCalculator::storage_gas_cost(self, &gas_prices)?)?;
+
+        Ok(GasCost::from(balance? as Value)
+            .checked_sub(tx_fee_burned)?
+            .into_inner())
     }
 }
 

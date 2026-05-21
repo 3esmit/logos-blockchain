@@ -3,7 +3,7 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     pin::Pin,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ use crate::{
         MemPool, MempoolError, RecoverableMempool,
         forks::{BlockInfoGetter, ForksTracker, LedgerStateGetter},
     },
+    metrics::{mempool_transactions_added, mempool_transactions_removed},
     storage::MempoolStorageAdapter,
 };
 
@@ -91,7 +92,8 @@ where
 
     async fn add_item<I: Into<Self::Tx> + Send>(&mut self, item: I) -> Result<(), MempoolError> {
         self.last_item_timestamp = current_timestamp_millis();
-        self.forks_tracker.process_new_tx(&item.into()).await;
+        self.forks_tracker.process_new_tx(item.into()).await;
+        mempool_transactions_added();
         Ok(())
     }
 
@@ -113,24 +115,27 @@ where
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, MempoolError>
     where
         I: IntoIterator<Item = Self::TxHash> + Send,
+        <I as IntoIterator>::IntoIter: Send,
     {
-        unimplemented!()
+        let mut txs = self.forks_tracker.get_txs();
+        let txs: Vec<Tx> = keys
+            .into_iter()
+            .filter_map(move |key| txs.remove(&key))
+            .collect();
+        Ok(Box::pin(stream::iter(txs)))
     }
 
     async fn remove(&mut self, keys: &[Self::TxHash]) {
-        self.forks_tracker.force_remove_txs(keys);
-
-        // TODO: Add metrics back
-        // metrics::mempool_transactions_removed(removed_count);
-        // metrics::mempool_transactions_pending(self.pending_items.len());
+        let removed_count = self.forks_tracker.force_remove_txs(keys);
+        mempool_transactions_removed(removed_count);
     }
 
     fn last_item_timestamp(&self) -> u64 {
         self.last_item_timestamp
     }
 
-    fn status(&self, items: &[Self::TxHash]) -> Vec<Status> {
-        todo!("What to check here?");
+    fn status(&self, _items: &[Self::TxHash]) -> Vec<Status> {
+        // TODO: were to check from here? Canonical chain? or change to query by tip?
         vec![]
     }
 
@@ -184,8 +189,7 @@ where
     ) -> Self {
         Self {
             last_item_timestamp: state.last_item_timestamp,
-            forks_tracker: ForksTracker::new(adapter.clone()),
-            adapter,
+            forks_tracker: ForksTracker::new(adapter),
             _phantom: PhantomData,
         }
     }

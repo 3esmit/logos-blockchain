@@ -65,7 +65,8 @@ pub trait MemPool {
         keys: I,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, MempoolError>
     where
-        I: IntoIterator<Item = Self::TxHash> + Send;
+        I: IntoIterator<Item = Self::TxHash> + Send,
+        <I as IntoIterator>::IntoIter: Send;
 
     /// Remove items from the mempool..
     async fn remove(&mut self, items: &[Self::TxHash]);

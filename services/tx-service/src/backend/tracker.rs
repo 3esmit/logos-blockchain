@@ -3,7 +3,6 @@ use std::{collections::HashSet, hash::Hash};
 use lb_core::mantle::{DependencyId, TxDependencies};
 use rpds::{HashTrieMapSync as HashTrieMap, HashTrieSetSync as HashTrieSet};
 
-
 #[derive(Clone, Debug)]
 pub struct TxTrackerState<Tx, TxId>
 where
@@ -35,6 +34,10 @@ where
             dep_to_tx: HashTrieMap::new_sync(),
             tx_pending_count: HashTrieMap::new_sync(),
         }
+    }
+
+    pub fn get_txs(&self) -> impl Iterator<Item = &Tx> + '_ {
+        self.ready_txs.values().chain(self.orphan_txs.values())
     }
 }
 
@@ -88,11 +91,20 @@ where
         self.ready_txs.values().cloned().collect()
     }
 
-    pub fn force_remove_tx(&mut self, id: &Tx::Hash) {
+    pub fn force_remove_tx(&mut self, id: &Tx::Hash) -> bool {
+        let will_remove = [
+            self.ready_txs.contains_key(id),
+            self.orphan_txs.contains_key(id),
+            self.tx_pending_count.contains_key(id),
+        ]
+        .iter()
+        .any(|b| *b);
+
         self.ready_txs.remove_mut(id);
         self.orphan_txs.remove_mut(id);
         self.tx_pending_count.remove_mut(id);
-        todo!("Remove smartly dependencies that requires of this tx");
+        // TODO: Remove smartly dependencies that requires of this tx
+        will_remove
     }
 }
 
@@ -211,7 +223,10 @@ mod tests {
     ///                  └── tx_combine (token_a + coin_y → nft_1 + coin_w) ─┤
     ///                         └── tx_settle (coin_z + coin_w → coin_final) ┘
     /// ```
-    #[expect(clippy::too_many_lines, reason = "comprehensive integration test for dependency graph")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "comprehensive integration test for dependency graph"
+    )]
     #[test]
     fn test_diamond_dependency_graph() {
         let mut tracker: TxTrackerState<TestTx, TestTxId> = TxTrackerState::new();

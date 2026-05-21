@@ -545,10 +545,10 @@ impl ClusterSummary {
             .iter()
             .filter_map(|node| node.network.as_ref().ok())
             .collect::<Vec<_>>();
-        let mempools = diagnostics
+        let mempool_ok = diagnostics
             .iter()
             .filter_map(|node| node.mempool.as_ref().ok())
-            .collect::<Vec<_>>();
+            .count();
         let blend_ok = diagnostics
             .iter()
             .filter(|node| matches!(node.blend, Ok(Some(_))))
@@ -578,7 +578,7 @@ impl ClusterSummary {
             network_ok: network.len(),
             blend_ok,
             blend_unavailable,
-            mempool_ok: mempools.len(),
+            mempool_ok,
             height_range: format_range_u64(
                 &consensus
                     .iter()

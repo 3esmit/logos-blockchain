@@ -1,9 +1,9 @@
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use tracing::info;
 
 use super::{SDPActiveOp, SdpError};
 use crate::{
-    block::BlockNumber,
     events::Events,
     mantle::{
         TxHash,
@@ -18,7 +18,7 @@ pub struct SDPActiveValidationContext<'a> {
 }
 
 pub struct SDPActiveExecutionContext {
-    pub block_number: BlockNumber,
+    pub epoch: Epoch,
     pub declarations: Declarations,
 }
 
@@ -61,12 +61,12 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
             .get_mut(&self.declaration_id)
             .expect("The operation should have been validated");
 
-        declaration.active = ctx.block_number;
+        declaration.active = ctx.epoch;
         declaration.nonce = self.nonce;
         info!(
             provider_id = ?declaration.provider_id,
-            active = declaration.active,
-            nonce = declaration.nonce,
+            active = ?declaration.active,
+            nonce = ?declaration.nonce,
             "updated declaration with active message"
         );
 

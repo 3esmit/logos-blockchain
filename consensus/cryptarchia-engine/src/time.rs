@@ -44,6 +44,11 @@ impl Epoch {
     pub const fn saturating_add(self, rhs: Self) -> Self {
         Self(self.0.saturating_add(rhs.0))
     }
+
+    #[must_use]
+    pub const fn saturating_sub(self, rhs: Self) -> Self {
+        Self(self.0.saturating_sub(rhs.0))
+    }
 }
 
 impl Slot {
@@ -163,6 +168,22 @@ impl Add<u32> for Epoch {
     }
 }
 
+impl Add for Epoch {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub for Epoch {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
@@ -198,6 +219,11 @@ impl EpochConfig {
     #[must_use]
     pub fn starting_slot(&self, epoch: &Epoch, base_period_length: NonZero<u64>) -> Slot {
         Slot::from(u64::from(u32::from(*epoch)) * self.epoch_length(base_period_length))
+    }
+
+    #[must_use]
+    pub fn last_slot(&self, epoch: Epoch, base_period_length: NonZero<u64>) -> Slot {
+        Slot::from(u64::from(epoch.into_inner() + 1) * self.epoch_length(base_period_length) - 1)
     }
 }
 

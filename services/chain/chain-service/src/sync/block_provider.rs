@@ -920,6 +920,7 @@ mod tests {
                     header_id,
                     parent_id,
                     store_result.unwrap(),
+                    Bytes::new(),
                     Events::new().try_into().unwrap(),
                 ))
                 .await

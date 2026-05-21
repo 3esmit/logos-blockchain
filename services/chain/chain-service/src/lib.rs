@@ -3,6 +3,7 @@ mod bootstrap;
 mod metrics;
 mod notifier;
 mod relays;
+mod sdp;
 mod states;
 pub mod storage;
 mod sync;
@@ -11,7 +12,7 @@ mod tests;
 
 use core::fmt::Debug;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     fmt::Display,
     path::PathBuf,
     pin::Pin,
@@ -20,12 +21,8 @@ use std::{
 
 use bytes::Bytes;
 use derivative::Derivative;
-use futures::{
-    FutureExt as _, Stream, StreamExt as _, TryStreamExt as _, future::join_all, stream,
-};
-use lb_chain_broadcast_service::{
-    BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate,
-};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, future::join_all, stream};
+use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_core::{
     block::{Block, genesis::GenesisBlock},
     events::Events,
@@ -34,7 +31,7 @@ use lb_core::{
         AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
         tx::GasPrices,
     },
-    sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
+    sdp::{Declaration, DeclarationId, Declarations, ServiceType},
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
@@ -55,7 +52,6 @@ use overwatch::{
 use relays::BroadcastRelay;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_with::serde_as;
-use strum::IntoEnumIterator as _;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::{
@@ -70,6 +66,7 @@ use crate::{
     bootstrap::state::choose_engine_state,
     notifier::ChainOnlineNotifier,
     relays::CryptarchiaConsensusRelays,
+    sdp::take_and_broadcast_sdp_snapshot,
     states::CryptarchiaConsensusState,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
     sync::block_provider::BlockProvider,
@@ -287,15 +284,22 @@ pub struct Cryptarchia {
     pub ledger: lb_ledger::Ledger<HeaderId>,
     pub consensus: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
     pub genesis_id: HeaderId,
+    // TODO: remove this after persisting genesis block: https://github.com/logos-blockchain/logos-blockchain/issues/2747
+    pub genesis_declarations: Declarations,
 }
 
 impl Cryptarchia {
     /// Initialize a new [`Cryptarchia`] instance.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TODO: remove genesis_declaration after persisting genesis block"
+    )]
     pub fn from_lib(
         lib_id: HeaderId,
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
+        genesis_declarations: Declarations,
         ledger_config: lb_ledger::Config,
         state: State,
         lib_slot: Slot,
@@ -311,6 +315,7 @@ impl Cryptarchia {
             ),
             ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
             genesis_id,
+            genesis_declarations,
         }
     }
 
@@ -451,6 +456,7 @@ impl Cryptarchia {
             ledger: self.ledger,
             consensus,
             genesis_id: self.genesis_id,
+            genesis_declarations: self.genesis_declarations,
         };
 
         // Prune the ledger states of all the pruned blocks.
@@ -475,31 +481,8 @@ impl Cryptarchia {
         self.consensus.branches().get(block_id).is_some()
     }
 
-    fn active_session_providers(
-        &self,
-        block_id: &HeaderId,
-        service_type: ServiceType,
-    ) -> Result<HashMap<ProviderId, ProviderInfo>, Error> {
-        let ledger = self
-            .ledger
-            .state(block_id)
-            .ok_or(Error::HeaderIdNotFound(*block_id))?;
-
-        ledger
-            .active_session_providers(service_type)
-            .ok_or(Error::ServiceSessionNotFound(service_type))
-    }
-
-    fn active_sessions_numbers(
-        &self,
-        block_id: &HeaderId,
-    ) -> Result<HashMap<ServiceType, u64>, Error> {
-        let ledger = self
-            .ledger
-            .state(block_id)
-            .ok_or(Error::HeaderIdNotFound(*block_id))?;
-
-        Ok(ledger.active_sessions())
+    fn sdp_declarations_at(&self, block_id: &HeaderId) -> Option<Declarations> {
+        Some(self.ledger.state(block_id)?.sdp_declarations())
     }
 }
 
@@ -520,6 +503,8 @@ pub enum StartingState {
         lib_id: HeaderId,
         lib_ledger_state: Box<LedgerState>,
         genesis_id: HeaderId,
+        // TODO: remove this after persisting genesis block: https://github.com/logos-blockchain/logos-blockchain/issues/2747
+        genesis_declarations: Declarations,
     },
 }
 
@@ -583,6 +568,7 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
@@ -649,6 +635,21 @@ where
                 current_slot,
             )
             .await;
+
+        let mut sdp_snapshot = {
+            let lib = cryptarchia.lib_branch();
+            take_and_broadcast_sdp_snapshot(
+                cryptarchia.ledger.config().epoch(current_slot),
+                lib.id(),
+                &cryptarchia.genesis_declarations,
+                cryptarchia.ledger.config(),
+                relays.storage_adapter(),
+                relays.broadcast_relay(),
+            )
+            .await
+            .expect("failed to take initial SDP snapshot")
+        };
+
         // These are blocks that have been pruned by the cryptarchia engine but have not
         // yet been deleted from the storage layer.
         let mut storage_blocks_to_remove = Self::delete_stale_blocks_from_storage(
@@ -784,13 +785,16 @@ where
                                 });
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
+                                Self::process_message(&cryptarchia, &sdp_snapshot, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
                             }
                         }
                     }
 
-                    Some(lb_time_service::SlotTick { slot, .. }) = slot_timer.next() => {
-                        current_slot = slot;
+                    Some(lb_time_service::SlotTick { slot: new_slot, .. }) = slot_timer.next() => {
+                        if let Some(new_sdp_snapshot) = Self::handle_new_slot(current_slot, new_slot, &cryptarchia, &relays, chain_start_timer.is_none()).await {
+                            sdp_snapshot = new_sdp_snapshot;
+                        }
+                        current_slot = new_slot;
                     }
 
                     _ = state_recording_timer.tick() => {
@@ -835,6 +839,7 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
@@ -878,6 +883,7 @@ where
 
     async fn process_message(
         cryptarchia: &Cryptarchia,
+        sdp_snapshot: &Declarations,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
         chain_online_notifier: &ChainOnlineNotifier,
@@ -927,13 +933,14 @@ where
                 });
             }
             ConsensusMsg::GetSdpDeclarations { reply_channel } => {
-                let tip = cryptarchia.tip();
-                let declarations = cryptarchia
-                    .ledger
-                    .state(&tip)
-                    .map(LedgerState::sdp_declarations)
-                    .unwrap_or_default();
-
+                let declarations = sdp_snapshot
+                    .iter()
+                    .flat_map(|(_, declarations)| {
+                        declarations
+                            .iter()
+                            .map(|(id, declaration)| (*id, declaration.clone()))
+                    })
+                    .collect();
                 reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!("Could not send SDP declarations through channel");
                 });
@@ -1071,14 +1078,6 @@ where
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
-        let previous_session_numbers = match cryptarchia.active_sessions_numbers(&prev_lib) {
-            Ok(session_numbers) => session_numbers,
-            Err(e) => {
-                warn!("Error getting previous session numbers: {e}");
-                ServiceType::iter().map(|s| (s, 0)).collect()
-            }
-        };
-
         let (pruned_blocks, reorged_blocks, events) =
             cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
@@ -1088,7 +1087,15 @@ where
 
         relays
             .storage_adapter()
-            .store_block(header.id(), header.parent(), block.clone(), events)
+            .store_block(
+                header.id(),
+                header.parent(),
+                block.clone(),
+                cryptarchia
+                    .sdp_declarations_at(&header.id())
+                    .expect("sdp_declarations for the block just processed must exist"),
+                events,
+            )
             .await
             .map_err(|e| Error::Storage(format!("Failed to store block: {e}")))?;
 
@@ -1150,14 +1157,6 @@ where
             if let Err(e) = lib_broadcaster.send(lib_update) {
                 warn!("No LIB-update subscribers to notify: {e}");
             }
-
-            Self::broadcast_session_updates_for_block(
-                cryptarchia,
-                &new_lib,
-                relays,
-                Some(&previous_session_numbers),
-            )
-            .await;
         }
 
         let reorged_txs: Vec<_> = join_all(
@@ -1317,6 +1316,7 @@ where
             lib_id,
             self.state.lib_ledger_state.clone(),
             genesis_id,
+            self.state.genesis_declarations.clone(),
             ledger_config,
             state,
             self.state.lib_block_slot,
@@ -1338,7 +1338,6 @@ where
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
             warn!("No new-block subscribers to notify: {e}");
         }
-        Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
 
         // Phase 1: Collect only block IDs in (LIB, tip].
         info!(
@@ -1586,72 +1585,43 @@ where
         (cryptarchia, storage_blocks_to_remove)
     }
 
-    async fn broadcast_session_updates_for_block(
+    /// Should be called on every new slot.
+    ///
+    /// This takes/broadcasts a new SDP snapshot, if the epoch has advanced,
+    /// and if the chain start time passed.
+    async fn handle_new_slot(
+        current_slot: Slot,
+        new_slot: Slot,
         cryptarchia: &Cryptarchia,
-        block_id: &HeaderId,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        previous_sessions: Option<&HashMap<ServiceType, u64>>,
-    ) {
-        let Ok(new_sessions) = cryptarchia.active_sessions_numbers(block_id) else {
-            error!("Could not get active session numbers for block {block_id:?}");
-            return;
-        };
-
-        for (service, new_session_number) in &new_sessions {
-            Self::handle_service_update(
-                cryptarchia,
-                block_id,
-                relays,
-                previous_sessions,
-                service,
-                new_session_number,
-            )
-            .await;
-        }
-    }
-
-    async fn handle_service_update(
-        cryptarchia: &Cryptarchia,
-        block_id: &HeaderId,
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        previous_sessions: Option<&HashMap<ServiceType, u64>>,
-        service: &ServiceType,
-        new_session_number: &u64,
-    ) {
-        // If `previous_sessions` is provided, check if the session number has changed.
-        // Otherwise, always broadcast (for initialization).
-        if previous_sessions.is_some_and(|prev| {
-            prev.get(service)
-                .copied()
-                .expect("previous session number is set")
-                == *new_session_number
-        }) {
-            return;
+        chain_start_time_passed: bool,
+    ) -> Option<Declarations> {
+        if !chain_start_time_passed {
+            return None;
         }
 
-        match cryptarchia.active_session_providers(block_id, *service) {
-            Ok(providers) => {
-                let update = SessionUpdate {
-                    session_number: *new_session_number,
-                    providers,
-                };
-
-                let broadcast_relay = relays.broadcast_relay();
-
-                let broadcast_future = match service {
-                    ServiceType::BlendNetwork => {
-                        broadcast_blend_session(broadcast_relay, update).boxed()
-                    }
-                };
-
-                if let Err(e) = broadcast_future.await {
-                    error!("Failed to broadcast session update for {service:?}: {e}");
-                }
-            }
-            Err(e) => {
-                error!("Could not get session providers for service {service:?}: {e}");
-            }
+        let config = cryptarchia.ledger.config();
+        let current_epoch = config.epoch(current_slot);
+        let new_epoch = config.epoch(new_slot);
+        assert!(new_epoch >= current_epoch, "epoch shouldn't go backwards");
+        if new_epoch == current_epoch {
+            // if epoch hasn't advanced, do nothing.
+            return None;
         }
+
+        info!(target: LOG_TARGET, ?current_epoch, ?new_epoch, ?current_slot, ?new_slot, "epoch advanced");
+        let lib = cryptarchia.lib_branch();
+        let snapshot = take_and_broadcast_sdp_snapshot(
+            new_epoch,
+            lib.id(),
+            &cryptarchia.genesis_declarations,
+            cryptarchia.ledger.config(),
+            relays.storage_adapter(),
+            relays.broadcast_relay(),
+        )
+        .await
+        .expect("failed to take SDP snapshot");
+        Some(snapshot)
     }
 }
 
@@ -1661,16 +1631,6 @@ async fn broadcast_finalized_block(
 ) -> Result<(), DynError> {
     broadcast_relay
         .send(BlockBroadcastMsg::BroadcastFinalizedBlock(block_info))
-        .await
-        .map_err(|(error, _)| Box::new(error) as DynError)
-}
-
-async fn broadcast_blend_session(
-    broadcast_relay: &BroadcastRelay,
-    session: SessionUpdate,
-) -> Result<(), DynError> {
-    broadcast_relay
-        .send(BlockBroadcastMsg::BroadcastBlendSession(session))
         .await
         .map_err(|(error, _)| Box::new(error) as DynError)
 }

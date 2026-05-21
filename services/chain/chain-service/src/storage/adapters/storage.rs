@@ -5,13 +5,14 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _};
+use futures::{Stream, StreamExt as _, stream};
 use lb_core::{
     block::Block,
     codec::{DeserializeOp as _, SerializeOp as _},
     events::Events,
     header::HeaderId,
     mantle::{Transaction, TxHash},
+    sdp::Declarations,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_storage_service::{
@@ -50,6 +51,7 @@ impl<Storage, Tx, RuntimeServiceId> StorageAdapterTrait<RuntimeServiceId>
 where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
+    <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     Tx: Clone
@@ -60,9 +62,11 @@ where
         + Sync
         + 'static
         + Transaction<Hash = TxHash>,
+    RuntimeServiceId: 'static,
 {
     type Backend = Storage;
     type Block = Block<Tx>;
+    type SdpDeclarations = Declarations;
     type Tx = Tx;
     type Events = Events;
 
@@ -99,18 +103,26 @@ where
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
+        sdp_declarations: Self::SdpDeclarations,
         events: Self::Events,
     ) -> Result<(), overwatch::DynError> {
         let block = block
             .try_into()
             .map_err(|_| "Failed to convert block to storage format")?;
+        let sdp_declarations = sdp_declarations
+            .try_into()
+            .map_err(|_| "Failed to convert sdp_declarations to storage format")?;
         let events = events
             .try_into()
             .map_err(|_| "Failed to convert events to storage format")?;
 
         self.storage_relay
             .send(StorageMsg::store_block_request(
-                header_id, parent_id, block, events,
+                header_id,
+                parent_id,
+                block,
+                sdp_declarations,
+                events,
             ))
             .await
             .map_err(|_| "Failed to send store block request to storage relay")?;
@@ -130,6 +142,46 @@ where
             tracing::error!("Failed to receive block parent from storage relay: {e}");
             None
         })
+    }
+
+    async fn sdp_declarations_at(
+        &self,
+        header_id: HeaderId,
+    ) -> Result<Option<Self::SdpDeclarations>, overwatch::DynError> {
+        let (sender, receiver) = oneshot::channel();
+        self.storage_relay
+            .send(StorageMsg::get_sdp_declarations_request(header_id, sender))
+            .await
+            .unwrap();
+
+        let Some(declarations) = receiver
+            .await
+            .map_err(|_| "Failed to receive SDP declarations from storage")?
+        else {
+            return Ok(None);
+        };
+
+        Ok(declarations
+            .try_into()
+            .map(Some)
+            .map_err(|_| "Failed to deserialize SDP declarations from storage")?)
+    }
+
+    /// Returns a stream of [`Self::Block`]s starting from the block with
+    /// `from_descendant` (inclusive) until no parent block is found.
+    async fn blocks(
+        &self,
+        from_descendant: HeaderId,
+    ) -> Pin<Box<dyn Stream<Item = Self::Block> + Send>> {
+        let this = self.clone();
+        Box::pin(stream::unfold(
+            (this, from_descendant),
+            async move |(this, id)| {
+                let block = this.get_block(&id).await?;
+                let parent_id = block.header().parent();
+                Some((block, (this, parent_id)))
+            },
+        ))
     }
 
     async fn get_block_events(&self, header_id: &HeaderId) -> Option<Self::Events> {
@@ -239,5 +291,164 @@ where
             .map_err(|_| "Failed to send remove transactions batch request")?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{num::NonZero, str::FromStr as _};
+
+    use lb_core::{
+        mantle::SignedMantleTx,
+        sdp::{Declaration, DeclarationMessage, Locator, ServiceType},
+    };
+    use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_ledger::LedgerState;
+    use lb_storage_service::backends::rocksdb::RocksBackend;
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::{
+        Cryptarchia,
+        tests::{
+            TestRuntimeServiceId, ledger_config, spawn_storage_service, try_build_block, utxo,
+        },
+    };
+
+    type Adapter = StorageAdapter<RocksBackend, SignedMantleTx, TestRuntimeServiceId>;
+    type StorageHandle = (tokio::task::JoinHandle<()>, tempfile::TempDir);
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_block_stream() {
+        let (blocks, storage, _storage_svc) = build_chain(3).await;
+
+        for block in &blocks {
+            storage
+                .store_block(
+                    block.header().id(),
+                    block.header().parent(),
+                    block.clone(),
+                    Declarations::from(HashMap::new()),
+                    Events::default(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let mut stream = storage.blocks(blocks.last().unwrap().header().id()).await;
+        for expected in blocks.iter().rev() {
+            assert_eq!(
+                stream.next().await.unwrap().header().id(),
+                expected.header().id(),
+            );
+        }
+        assert!(stream.next().await.is_none());
+
+        // Unknown starting id terminates the stream immediately.
+        let unknown: HeaderId = [99; 32].into();
+        assert!(storage.blocks(unknown).await.next().await.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_sdp_declarations_at_block() {
+        let (blocks, storage, _storage_svc) = build_chain(2).await;
+
+        let decl = DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            locators: Locator::from_str("/ip4/1.1.1.1/udp/7777").unwrap().into(),
+            provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
+            zk_id: ZkKey::zero().to_public_key(),
+            locked_note_id: Fr::ZERO.into(),
+        };
+        let decls_a = Declarations::from(HashMap::new());
+        let decls_b = Declarations::from_iter([(
+            decl.service_type,
+            HashMap::from_iter([(decl.id(), Declaration::new(0.into(), &decl))]),
+        )]);
+        storage
+            .store_block(
+                blocks[0].header().id(),
+                blocks[0].header().parent(),
+                blocks[0].clone(),
+                decls_a.clone(),
+                Events::default(),
+            )
+            .await
+            .unwrap();
+        storage
+            .store_block(
+                blocks[1].header().id(),
+                blocks[1].header().parent(),
+                blocks[1].clone(),
+                decls_b.clone(),
+                Events::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage
+                .sdp_declarations_at(blocks[0].header().id())
+                .await
+                .unwrap(),
+            Some(decls_a)
+        );
+        assert_eq!(
+            storage
+                .sdp_declarations_at(blocks[1].header().id())
+                .await
+                .unwrap(),
+            Some(decls_b)
+        );
+
+        // Unknown block id yields None
+        let unknown: HeaderId = [99; 32].into();
+        assert!(
+            storage
+                .sdp_declarations_at(unknown)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    async fn build_chain(
+        num_blocks: usize,
+    ) -> (Vec<Block<SignedMantleTx>>, Adapter, StorageHandle) {
+        let k = NonZero::<u32>::new(1).unwrap();
+        let config = ledger_config(k);
+        let (zk_key, utxo) = utxo();
+        let genesis_id: HeaderId = [0; 32].into();
+        let mut cryptarchia = Cryptarchia::from_lib(
+            genesis_id,
+            LedgerState::from_utxos([utxo], &config),
+            genesis_id,
+            Declarations::default(),
+            config,
+            lb_cryptarchia_engine::State::Online,
+            Slot::genesis(),
+            0,
+        );
+
+        let mut blocks = Vec::with_capacity(num_blocks);
+        let mut slot = Slot::genesis() + 1;
+        for _ in 0..num_blocks {
+            let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot)
+                .expect("should find a winning slot");
+            cryptarchia
+                .try_apply_block(&block, block.header().slot())
+                .unwrap();
+            slot = block.header().slot() + 1;
+            blocks.push(block);
+        }
+
+        let (storage_tx, storage_rx) = mpsc::channel(32);
+        let storage_svc = spawn_storage_service(storage_rx);
+        let storage_adapter = <Adapter as StorageAdapterTrait<TestRuntimeServiceId>>::new(
+            OutboundRelay::new(storage_tx),
+        )
+        .await;
+        (blocks, storage_adapter, storage_svc)
     }
 }

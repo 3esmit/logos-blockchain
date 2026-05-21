@@ -6,6 +6,7 @@ use lb_core::{
     block::Block,
     events::Events,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},
+    sdp::Declarations,
 };
 use lb_storage_service::{
     StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
@@ -53,8 +54,10 @@ where
         + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    RuntimeServiceId: 'static,
 {
     pub async fn new(
         broadcast_relay: BroadcastRelay,

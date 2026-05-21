@@ -29,6 +29,7 @@ use lb_core::{
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
+    sdp::Declarations,
 };
 use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
@@ -239,6 +240,7 @@ where
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
+    <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: AsServiceId<Self>
@@ -393,10 +395,15 @@ where
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
+    <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
+    RuntimeServiceId: AsServiceId<Cryptarchia>
+        + AsServiceId<Kms>
+        + std::fmt::Debug
+        + std::fmt::Display
+        + Sync
+        + 'static,
 {
     async fn msg_tip_or_latest(
         msg_tip: Option<HeaderId>,

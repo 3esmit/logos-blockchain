@@ -14,7 +14,7 @@ use overwatch::{DynError, overwatch::OverwatchHandle};
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
-use crate::storage::{MempoolStorageAdapter, StorageRelay};
+use crate::storage::MempoolStorageAdapter;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MempoolError {
@@ -23,7 +23,7 @@ pub enum MempoolError {
     #[error("Storage operation failed: {0}")]
     StorageError(String),
     #[error(transparent)]
-    DynamicPoolError(#[from] overwatch::DynError),
+    DynamicPoolError(#[from] DynError),
 }
 
 #[async_trait::async_trait]

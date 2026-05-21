@@ -174,10 +174,12 @@ impl<Cryptarchia, Storage, RuntimeServiceId> MempoolAdapter<Cryptarchia::Tx, Run
 where
     Cryptarchia::Tx: Transaction + Clone + Send + Sync,
     <Cryptarchia::Tx as Transaction>::Hash: Sync,
-    Storage: MempoolStorageAdapterNew<RuntimeServiceId, Tx = Cryptarchia::Tx>,
+    Storage: MempoolStorageAdapterNew<RuntimeServiceId, Tx = Cryptarchia::Tx>
+        + MempoolStorageAdapter<RuntimeServiceId, Tx = Cryptarchia::Tx>
+        + Send
+        + Sync,
     Cryptarchia: CryptarchiaServiceData + Send + Sync,
     Cryptarchia::Tx: Send + Sync,
-    Storage: MempoolStorageAdapter<RuntimeServiceId, Tx = Cryptarchia::Tx> + Send + Sync,
     Storage::Error: Debug,
     RuntimeServiceId: Debug
         + Display

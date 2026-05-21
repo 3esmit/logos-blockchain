@@ -6,7 +6,7 @@ use lb_ledger::LedgerState;
 pub struct LedgerStateInspector(LedgerState);
 
 impl LedgerStateInspector {
-    pub fn new(ledger_state: LedgerState) -> Self {
+    pub const fn new(ledger_state: LedgerState) -> Self {
         Self(ledger_state)
     }
     pub fn dependencies(&self) -> HashSet<DependencyId> {

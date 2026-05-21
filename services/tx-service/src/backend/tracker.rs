@@ -3,9 +3,6 @@ use std::{collections::HashSet, hash::Hash};
 use lb_core::mantle::{DependencyId, TxDependencies};
 use rpds::{HashTrieMapSync as HashTrieMap, HashTrieSetSync as HashTrieSet};
 
-pub trait LedgerStateReadyDeps {
-    fn frontier_deps(&self) -> &HashSet<DependencyId>;
-}
 
 #[derive(Clone, Debug)]
 pub struct TxTrackerState<Tx, TxId>
@@ -112,10 +109,12 @@ where
         self.orphan_txs.contains_key(id)
     }
 
+    #[expect(dead_code, reason = "available for future test assertions")]
     pub fn ready_count(&self) -> usize {
         self.ready_txs.size()
     }
 
+    #[expect(dead_code, reason = "available for future test assertions")]
     pub fn orphan_count(&self) -> usize {
         self.orphan_txs.size()
     }
@@ -212,6 +211,7 @@ mod tests {
     ///                  └── tx_combine (token_a + coin_y → nft_1 + coin_w) ─┤
     ///                         └── tx_settle (coin_z + coin_w → coin_final) ┘
     /// ```
+    #[expect(clippy::too_many_lines, reason = "comprehensive integration test for dependency graph")]
     #[test]
     fn test_diamond_dependency_graph() {
         let mut tracker: TxTrackerState<TestTx, TestTxId> = TxTrackerState::new();
@@ -233,10 +233,10 @@ mod tests {
 
         // Submit in reverse topological order
         for t in [
-            tx_settle.clone(),
+            tx_settle,
             tx_combine.clone(),
             tx_chain.clone(),
-            tx_mint_b.clone(),
+            tx_mint_b,
             tx_mint_a.clone(),
             tx_fund.clone(),
             tx_genesis.clone(),

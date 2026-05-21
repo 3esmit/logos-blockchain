@@ -1,6 +1,4 @@
 use std::{
-    collections::BTreeSet,
-    error::Error,
     fmt::Debug,
     hash::Hash,
     marker::PhantomData,
@@ -10,13 +8,13 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, stream};
-use lb_chain_service::{LibUpdate, ProcessedBlockEvent, storage::StorageAdapter};
+use lb_chain_service::{LibUpdate, ProcessedBlockEvent};
 use lb_core::{
     header::HeaderId,
     mantle::{Transaction, TxDependencies, TxRewardsRatio},
 };
 use serde::{Deserialize, Serialize};
-use tracing::{error, warn};
+use tracing::error;
 
 use super::Status;
 use crate::{
@@ -24,11 +22,8 @@ use crate::{
         MemPool, MempoolError, RecoverableMempool,
         forks::{BlockInfoGetter, ForksTracker, LedgerStateGetter},
     },
-    metrics,
     storage::MempoolStorageAdapter,
 };
-
-const REMOVED_ITEM_GRACE_PERIOD: Duration = Duration::from_mins(10);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoolRecoveryState<Key>
@@ -46,22 +41,20 @@ where
     TxHash: Eq + Hash,
 {
     last_item_timestamp: u64,
-    adapter: Adapter,
     forks_tracker: ForksTracker<Tx, TxHash, Adapter>,
-    _phantom: PhantomData<RuntimeServiceId>,
+    _phantom: PhantomData<(Adapter, RuntimeServiceId)>,
 }
 
 impl<Tx, TxHash, Adapter, RuntimeServiceId> Debug for Mempool<Tx, TxHash, Adapter, RuntimeServiceId>
 where
-    TxHash: Eq + Hash,
+    TxHash: Eq + Hash + Debug,
     Tx: Debug,
-    TxHash: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mempool")
             .field("last_item_timestamp", &self.last_item_timestamp)
             .field("storage_adapter", &"<StorageAdapter>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -91,8 +84,7 @@ where
     fn new(_settings: Self::Settings, adapter: Self::Adapter) -> Self {
         Self {
             last_item_timestamp: 0,
-            forks_tracker: ForksTracker::new(adapter.clone()),
-            adapter,
+            forks_tracker: ForksTracker::new(adapter),
             _phantom: PhantomData,
         }
     }
@@ -166,9 +158,13 @@ where
         + 'static
         + Serialize
         + for<'de> Deserialize<'de>,
-    Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx> + Clone + Send + Sync + 'static,
-    Adapter: BlockInfoGetter<Tx>,
-    Adapter: LedgerStateGetter,
+    Adapter: MempoolStorageAdapter<RuntimeServiceId, Tx = Tx>
+        + BlockInfoGetter<Tx>
+        + LedgerStateGetter
+        + Clone
+        + Send
+        + Sync
+        + 'static,
     <Adapter as MempoolStorageAdapter<RuntimeServiceId>>::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {

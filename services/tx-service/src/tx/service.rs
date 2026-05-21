@@ -14,10 +14,10 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_chain_service::{
-    Cryptarchia, CryptarchiaConsensus, LibUpdate, ProcessedBlockEvent,
+    LibUpdate, ProcessedBlockEvent,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
-use lb_core::mantle::{AuthenticatedMantleTx, Transaction};
+use lb_core::mantle::Transaction;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
     overwatch::{
@@ -33,7 +33,7 @@ use overwatch::{
 };
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
@@ -309,6 +309,7 @@ where
     RecoveryBackend: RecoveryBackendTrait + Send + Sync,
     RuntimeServiceId: 'static,
 {
+    #[expect(clippy::cognitive_complexity, reason = "event loop handles many message types by design")]
     async fn run_event_loop(
         &mut self,
         pool: &mut Pool,
@@ -467,7 +468,7 @@ where
     async fn handle_view_message(
         pool: &Pool,
         ancestor_hint: Pool::BlockId,
-        reply_channel: oneshot::Sender<Pin<Box<dyn futures::Stream<Item = Pool::Tx> + Send>>>,
+        reply_channel: oneshot::Sender<Pin<Box<dyn Stream<Item = Pool::Tx> + Send>>>,
     ) {
         tracing::trace!("Handling mempool View message");
 

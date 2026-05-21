@@ -597,7 +597,6 @@ where
         >,
         MempoolAdapter,
         SignedMantleTx,
-        <SignedMantleTx as Transaction>::Hash,
         Cryptarchia<RuntimeServiceId>,
         RuntimeServiceId,
     >(&handle, tx, Transaction::hash))
@@ -706,7 +705,6 @@ where
             >,
             MempoolAdapter,
             SignedMantleTx,
-            <SignedMantleTx as Transaction>::Hash,
             Cryptarchia<RuntimeServiceId>,
             RuntimeServiceId,
         >(&handle, signed_tx, Transaction::hash)
@@ -1219,7 +1217,6 @@ pub mod wallet {
                     >,
                     MempoolAdapter,
                     SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
                     Cryptarchia<RuntimeServiceId>,
                     RuntimeServiceId,
                 >(&handle, transaction.clone(), Transaction::hash)

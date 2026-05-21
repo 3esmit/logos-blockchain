@@ -2,7 +2,7 @@ use core::{fmt::Debug, hash::Hash};
 use std::fmt::Display;
 
 use lb_chain_service::api::CryptarchiaServiceData;
-use lb_core::mantle::{Transaction, TxDependencies};
+use lb_core::mantle::{Transaction, TxDependencies, TxRewardsRatio};
 use lb_network_service::backends::NetworkBackend;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
@@ -18,18 +18,21 @@ pub async fn add_tx<
     MempoolNetworkAdapter,
     MempoolAdapter,
     Item,
-    Key,
     CryptarchiaService,
     RuntimeServiceId,
 >(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     item: Item,
-    converter: impl Fn(&Item) -> Key,
+    converter: impl Fn(&Item) -> <Item as Transaction>::Hash,
 ) -> Result<(), DynError>
 where
     MempoolNetworkBackend: NetworkBackend<RuntimeServiceId>,
-    MempoolNetworkAdapter: NetworkAdapter<RuntimeServiceId, Backend = MempoolNetworkBackend, Payload = Item, Key = Key>
-        + Send
+    MempoolNetworkAdapter: NetworkAdapter<
+            RuntimeServiceId,
+            Backend = MempoolNetworkBackend,
+            Payload = Item,
+            Key = <Item as Transaction>::Hash,
+        > + Send
         + Sync
         + 'static,
     MempoolNetworkAdapter::Settings: Send + Sync,
@@ -37,7 +40,8 @@ where
     MempoolAdapter::Error: Debug,
     CryptarchiaService: CryptarchiaServiceData<Tx = Item> + Sync,
     Item: TxDependencies
-        + Transaction<Hash = Key>
+        + TxRewardsRatio
+        + Transaction
         + Clone
         + Debug
         + Send
@@ -45,7 +49,8 @@ where
         + Serialize
         + DeserializeOwned
         + 'static,
-    Key: Clone + Debug + Eq + Ord + Hash + Send + Sync + Serialize + DeserializeOwned + 'static,
+    <Item as Transaction>::Hash:
+        Clone + Debug + Eq + Ord + Hash + Send + Sync + Serialize + DeserializeOwned + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -54,7 +59,7 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter,
-                Mempool<Item, Key, MempoolAdapter, RuntimeServiceId>,
+                Mempool<Item, <Item as Transaction>::Hash, MempoolAdapter, RuntimeServiceId>,
                 MempoolAdapter,
                 CryptarchiaService,
                 RuntimeServiceId,

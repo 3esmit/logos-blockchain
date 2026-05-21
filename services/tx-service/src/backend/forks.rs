@@ -44,6 +44,8 @@ pub enum ForksTrackerError {
     BlockNotFound,
     #[error("Parent {0} not found in current_tips or states")]
     ParentNotFound(HeaderId),
+    #[error("Ledger state not found for {0:?}")]
+    LedgerStateNotFound(HeaderId),
     #[error(transparent)]
     CryptarchiaApi(#[from] ApiError),
 }
@@ -59,7 +61,7 @@ where
 
 impl<Tx, Adapter> ForksTracker<Tx, Tx::Hash, Adapter>
 where
-    Tx: TxDependencies + TxRewardsRatio + Clone,
+    Tx: TxDependencies + Clone,
     Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send,
 {
     pub fn new(adapter: Adapter) -> Self {
@@ -73,7 +75,10 @@ where
     pub async fn get_frontier_txs(
         &self,
         parent_hint: HeaderId,
-    ) -> Result<Vec<Tx>, ForksTrackerError> {
+    ) -> Result<Vec<Tx>, ForksTrackerError>
+    where
+        Tx: TxRewardsRatio,
+    {
         let mut txs: Vec<Tx> = self
             .current_tips
             .get(&parent_hint)

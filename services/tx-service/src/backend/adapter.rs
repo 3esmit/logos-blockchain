@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{FutureExt, Stream};
+use futures::Stream;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::Block,
@@ -15,7 +15,6 @@ use lb_core::{
 use lb_ledger::LedgerState;
 use lb_storage_service::StorageService;
 use overwatch::{DynError, overwatch::OverwatchHandle, services::AsServiceId};
-use tokio_stream::StreamExt;
 use tracing::error;
 
 use crate::{
@@ -113,7 +112,7 @@ where
             .get_ledger_state(header_id)
             .await
             .map_err(|_| ForksTrackerError::ParentNotFound(header_id))?
-            .ok_or_else(|| ForksTrackerError::ParentNotFound(header_id))
+            .ok_or(ForksTrackerError::ParentNotFound(header_id))
     }
 
     async fn get_ledger_deps(

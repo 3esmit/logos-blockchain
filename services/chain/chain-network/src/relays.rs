@@ -84,6 +84,7 @@ where
     }
 
     #[expect(clippy::allow_attributes_without_reason)]
+    #[expect(clippy::type_complexity)]
     pub async fn from_service_resources_handle<TimeBackend, MempoolAdapter>(
         service_resources_handle: &OpaqueServiceResourcesHandle<
             ChainNetwork<

@@ -51,7 +51,7 @@ use crate::{
     blend::BlendAdapter,
     kms::PreloadKmsService,
     leadership::{PotentialWinningPoLSlotNotifier, build_proof_for},
-    mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
+    mempool::MempoolAdapter as _,
     relays::CryptarchiaConsensusRelays,
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
 };

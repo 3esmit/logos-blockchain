@@ -116,7 +116,6 @@ impl LedgerState {
         Self { channels, ..self }
     }
 
-    #[must_use]
     pub fn inscriptions_tips(&self) -> impl Iterator<Item = MsgId> {
         self.channels
             .channels

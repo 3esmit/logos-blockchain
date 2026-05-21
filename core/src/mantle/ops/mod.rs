@@ -55,7 +55,7 @@ pub trait OpId {
 
 impl<T: OpId> OpId for &T {
     fn op_bytes(&self) -> Vec<u8> {
-        OpId::op_bytes(self)
+        T::op_bytes(self)
     }
 }
 

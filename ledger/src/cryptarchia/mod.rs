@@ -656,7 +656,7 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            AuthenticatedMantleTx, GasCalculator, MantleTx, Note, Op,
+            GasCalculator, MantleTx, Note, Op,
             OpProof::ZkSig,
             SignedMantleTx, Transaction as _,
             gas::MainnetGasConstants,

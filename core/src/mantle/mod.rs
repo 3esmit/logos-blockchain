@@ -23,7 +23,7 @@ use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
 pub use tx::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 
 use crate::mantle::{
-    gas::{GasOverflow, GasPrice},
+    gas::GasOverflow,
     ledger::Utxos,
     ops::transfer::{TransferError, TransferOp},
     tx::{GasPrices, OperationVerificationHelper},

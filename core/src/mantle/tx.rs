@@ -5,14 +5,11 @@ use std::{
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use futures::TryStreamExt;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use nom::number::{f64, i128};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    codec::SerializeOp,
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
         AuthenticatedMantleTx, DependencyId, StorageSize, Transaction, TransactionHasher,
@@ -25,7 +22,7 @@ use crate::{
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
-            transfer::{TransferError, TransferOp},
+            transfer::TransferOp,
         },
     },
     proofs::{
@@ -646,10 +643,10 @@ impl TxRewardsRatio for SignedMantleTx {
                 });
         // Update the total of fee burned and tipped in the block
         let tx_fee_burned = GasCost::calculate(
-            GasCalculator::execution_gas_consumption::<Constants>(self, &gas_prices)?,
+            GasCalculator::execution_gas_consumption::<Constants>(self, gas_prices)?,
             gas_prices.execution_base_gas_price,
         )?
-        .checked_add(GasCalculator::storage_gas_cost(self, &gas_prices)?)?;
+        .checked_add(GasCalculator::storage_gas_cost(self, gas_prices)?)?;
 
         Ok(GasCost::from(balance? as Value)
             .checked_sub(tx_fee_burned)?

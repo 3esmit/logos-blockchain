@@ -374,17 +374,17 @@ impl Cryptarchia {
 
         // Clone/update consensus state first to get the new LIB height
         // before updating ledger.
-        let consensus = self.consensus.clone();
-        let (pruned_blocks, reorged_blocks) = self
-            .consensus
-            .receive_block(id, parent, slot)
-            .map_err(|err| match err {
-                lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
-                    parent,
-                    info: Box::new(self.info()),
-                },
-                err => Error::Consensus(err),
-            })?;
+        let mut consensus = self.consensus.clone();
+        let (pruned_blocks, reorged_blocks) =
+            consensus
+                .receive_block(id, parent, slot)
+                .map_err(|err| match err {
+                    lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
+                        parent,
+                        info: Box::new(self.info()),
+                    },
+                    err => Error::Consensus(err),
+                })?;
         let new_lib_height = consensus.lib_branch().length();
 
         let (_, events) = self

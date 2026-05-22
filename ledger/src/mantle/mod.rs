@@ -134,7 +134,7 @@ impl LedgerState {
         self.channels
             .channels
             .values()
-            .map(|state: &ChannelState| state.tip)
+            .map(|state: &ChannelState| state.tip_message)
     }
 
     #[must_use]

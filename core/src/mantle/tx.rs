@@ -1111,6 +1111,7 @@ mod tests {
 
         use crate::mantle::{
             DependencyId, MantleTx, TxDependencies as _,
+            encoding::Ops,
             ops::{
                 Op,
                 channel::{MsgId, inscribe::InscriptionOp},
@@ -1122,7 +1123,7 @@ mod tests {
         fn inscribe_op(channel: [u8; 32], parent: MsgId, content: &[u8]) -> InscriptionOp {
             InscriptionOp {
                 channel_id: channel.into(),
-                inscription: content.to_vec(),
+                inscription: content.to_vec().try_into().expect("content fits"),
                 parent,
                 signer: Ed25519Key::from_bytes(&[1; 32]).public_key(),
             }
@@ -1148,7 +1149,7 @@ mod tests {
 
         #[test]
         fn empty_tx_has_no_deps() {
-            let tx = MantleTx(vec![]);
+            let tx = MantleTx(Ops::new());
             assert!(tx_consumes(&tx).is_empty());
             assert!(tx_produces(&tx).is_empty());
         }
@@ -1161,7 +1162,7 @@ mod tests {
             let parent_dep = dep(MsgId::root());
             let self_dep = op_dep(&op);
 
-            let tx = MantleTx(vec![Op::ChannelInscribe(op)]);
+            let tx = MantleTx([Op::ChannelInscribe(op)].into());
 
             assert_eq!(tx_consumes(&tx), HashSet::from([parent_dep]));
             assert_eq!(tx_produces(&tx), HashSet::from([self_dep]));
@@ -1176,7 +1177,7 @@ mod tests {
             let op2 = inscribe_op([1; 32], op1_id, b"second");
 
             let internal_dep = dep(op1_id);
-            let tx = MantleTx(vec![Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)]);
+            let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
             assert!(!tx_consumes(&tx).contains(&internal_dep));
         }
@@ -1190,7 +1191,7 @@ mod tests {
             let op2 = inscribe_op([1; 32], op1_id, b"second");
 
             let internal_dep = dep(op1_id);
-            let tx = MantleTx(vec![Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)]);
+            let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
             assert!(!tx_produces(&tx).contains(&internal_dep));
         }
@@ -1204,7 +1205,7 @@ mod tests {
             let op2 = inscribe_op([1; 32], op1_id, b"second");
             let op2_dep = op_dep(&op2);
 
-            let tx = MantleTx(vec![Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)]);
+            let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
             assert_eq!(tx_consumes(&tx), HashSet::from([dep(MsgId::root())]));
             assert_eq!(tx_produces(&tx), HashSet::from([op2_dep]));
@@ -1221,7 +1222,7 @@ mod tests {
             let op1_dep = op_dep(&op1);
             let op2_dep = op_dep(&op2);
 
-            let tx = MantleTx(vec![Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)]);
+            let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
             assert_eq!(tx_consumes(&tx), HashSet::from([dep(root_a), dep(root_b)]));
             assert_eq!(tx_produces(&tx), HashSet::from([op1_dep, op2_dep]));
@@ -1242,11 +1243,14 @@ mod tests {
             let op3 = inscribe_op([3; 32], root_b, b"b1");
             let op3_id = op3.id();
 
-            let tx = MantleTx(vec![
-                Op::ChannelInscribe(op1),
-                Op::ChannelInscribe(op2),
-                Op::ChannelInscribe(op3),
-            ]);
+            let tx = MantleTx(
+                [
+                    Op::ChannelInscribe(op1),
+                    Op::ChannelInscribe(op2),
+                    Op::ChannelInscribe(op3),
+                ]
+                .into(),
+            );
 
             let consumes = tx_consumes(&tx);
             let produces = tx_produces(&tx);

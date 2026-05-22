@@ -5145,8 +5145,11 @@ name = "logos-blockchain-tx-service"
 version = "0.1.2"
 dependencies = [
  "async-trait",
+ "bytes",
  "futures",
+ "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-ledger",
  "logos-blockchain-log-targets",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
@@ -5158,6 +5161,7 @@ dependencies = [
  "overwatch",
  "overwatch-derive",
  "rand 0.8.6",
+ "rpds",
  "serde",
  "serde_json",
  "tempfile",

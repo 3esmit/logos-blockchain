@@ -416,10 +416,7 @@ impl NodeDiagnostic {
 
     fn format_mempool(&self) -> String {
         match &self.mempool {
-            Ok(info) => format!(
-                "ok last_item_timestamp={}",
-                info.last_item_timestamp
-            ),
+            Ok(info) => format!("ok last_item_timestamp={}", info.last_item_timestamp),
             Err(error) => format!("error={error}"),
         }
     }
@@ -550,7 +547,6 @@ struct ClusterSummary {
 }
 
 impl ClusterSummary {
-    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn build(
         cluster_control_profile: &str,
         node_count: usize,

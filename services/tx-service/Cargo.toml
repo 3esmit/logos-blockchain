@@ -32,7 +32,6 @@ lb-services-utils  = { workspace = true }
 lb-storage-service = { workspace = true }
 lb-tracing         = { workspace = true }
 overwatch          = { workspace = true }
-rand               = { workspace = true }
 rpds               = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { optional = true, workspace = true }

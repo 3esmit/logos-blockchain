@@ -5160,7 +5160,6 @@ dependencies = [
  "logos-blockchain-utils",
  "overwatch",
  "overwatch-derive",
- "rand 0.8.6",
  "rpds",
  "serde",
  "serde_json",

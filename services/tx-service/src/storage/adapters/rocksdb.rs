@@ -16,7 +16,10 @@ use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBac
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 
-use crate::{backend::MempoolError, storage::{MempoolStorageAdapter, MempoolStorageAdapterNew}};
+use crate::{
+    backend::MempoolError,
+    storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
+};
 
 /// A `RocksDB` storage adapter that stores transactions via storage service
 /// relay

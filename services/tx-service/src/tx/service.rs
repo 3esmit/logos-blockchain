@@ -314,7 +314,10 @@ where
     RecoveryBackend: RecoveryBackendTrait + Send + Sync,
     RuntimeServiceId: 'static,
 {
-    #[expect(clippy::cognitive_complexity, reason = "event loop handles many message types by design")]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "event loop handles many message types by design"
+    )]
     async fn run_event_loop(
         &mut self,
         pool: &mut Pool,

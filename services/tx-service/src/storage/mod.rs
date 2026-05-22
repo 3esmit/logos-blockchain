@@ -2,11 +2,7 @@ use std::{collections::BTreeSet, pin::Pin};
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_core::{
-    block::Block,
-    header::HeaderId,
-    mantle::Transaction,
-};
+use lb_core::{block::Block, header::HeaderId, mantle::Transaction};
 use lb_storage_service::{StorageService, backends::StorageBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 

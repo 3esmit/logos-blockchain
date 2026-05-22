@@ -23,8 +23,7 @@ pub struct SdpMempoolAdapter<
     MempoolAdapter,
     ChainService,
     RuntimeServiceId,
->
-where
+> where
     Mempool: MemPool<BlockId = HeaderId, TxHash = TxHash>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Key = Mempool::TxHash>,
     Mempool::Tx: Clone + Eq + Debug + 'static,
@@ -33,13 +32,24 @@ where
     RuntimeServiceId: Send + Sync,
 {
     pub mempool_relay: MempoolRelay<Mempool::Tx, Mempool::TxHash>,
-    _phantom: PhantomData<(MempoolNetAdapter, MempoolAdapter, ChainService, RuntimeServiceId)>,
+    _phantom: PhantomData<(
+        MempoolNetAdapter,
+        MempoolAdapter,
+        ChainService,
+        RuntimeServiceId,
+    )>,
 }
 
 #[async_trait::async_trait]
 impl<MempoolNetAdapter, Mempool, MempoolAdapter, ChainService, RuntimeServiceId>
     SdpMempoolAdapterTrait
-    for SdpMempoolAdapter<MempoolNetAdapter, Mempool, MempoolAdapter, ChainService, RuntimeServiceId>
+    for SdpMempoolAdapter<
+        MempoolNetAdapter,
+        Mempool,
+        MempoolAdapter,
+        ChainService,
+        RuntimeServiceId,
+    >
 where
     Mempool: RecoverableMempool<BlockId = HeaderId, TxHash = TxHash, Tx = SignedMantleTx>
         + MemPool<Adapter = MempoolAdapter>

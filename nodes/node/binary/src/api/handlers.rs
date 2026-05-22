@@ -49,8 +49,7 @@ use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
 use lb_tx_service::{
-    TxMempoolService,
-    backend::Mempool,
+    TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_wallet_service::api::{WalletApi, WalletServiceData};

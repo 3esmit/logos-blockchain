@@ -229,9 +229,7 @@ where
             .route(paths::CHANNEL, routing::get(channel::<RuntimeServiceId>))
             .route(
                 paths::CHANNEL_DEPOSIT,
-                routing::post(
-                    channel_deposit::<WalletService, MempoolAdapter, RuntimeServiceId>,
-                ),
+                routing::post(channel_deposit::<WalletService, MempoolAdapter, RuntimeServiceId>),
             )
             .route(
                 paths::SDP_POST_DECLARATION,
@@ -292,11 +290,7 @@ where
             .route(
                 paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
                 routing::post(
-                    wallet::post_transactions_transfer_funds::<
-                        WalletService,
-                        MempoolAdapter,
-                        _,
-                    >,
+                    wallet::post_transactions_transfer_funds::<WalletService, MempoolAdapter, _>,
                 ),
             )
             .route(

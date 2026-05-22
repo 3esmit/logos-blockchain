@@ -91,10 +91,7 @@ where
     }
 
     pub fn get_ready_txs(&self) -> Vec<Tx> {
-        self.ready_txs
-            .values()
-            .map(|tx| Tx::clone(tx))
-            .collect()
+        self.ready_txs.values().map(|tx| Tx::clone(tx)).collect()
     }
 
     pub fn force_remove_tx(&mut self, id: &Tx::Hash) -> bool {

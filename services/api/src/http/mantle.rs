@@ -25,8 +25,7 @@ use lb_storage_service::{
     },
 };
 use lb_tx_service::{
-    MempoolMetrics, MempoolMsg, TxMempoolService,
-    backend::Mempool,
+    MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
@@ -59,12 +58,7 @@ pub struct BlockWithChainState<Tx> {
 
 pub type MempoolService<Adapter, Cryptarchia, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash, RuntimeServiceId>,
-    Mempool<
-        SignedMantleTx,
-        <SignedMantleTx as Transaction>::Hash,
-        Adapter,
-        RuntimeServiceId,
-    >,
+    Mempool<SignedMantleTx, <SignedMantleTx as Transaction>::Hash, Adapter, RuntimeServiceId>,
     Adapter,
     Cryptarchia,
     RuntimeServiceId,
@@ -91,9 +85,8 @@ pub async fn mantle_mempool_metrics<MempoolAdapter, Cryptarchia, RuntimeServiceI
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<MempoolMetrics, super::DynError>
 where
-    MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
-        + Clone
-        + 'static,
+    MempoolAdapter:
+        lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId> + Clone + 'static,
     MempoolAdapter::Error: Debug,
     Cryptarchia: CryptarchiaServiceData<Tx = SignedMantleTx> + Sync,
     RuntimeServiceId: Debug
@@ -120,9 +113,8 @@ pub async fn mantle_mempool_status<MempoolAdapter, Cryptarchia, RuntimeServiceId
     items: Vec<<SignedMantleTx as Transaction>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
 where
-    MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
-        + Clone
-        + 'static,
+    MempoolAdapter:
+        lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId> + Clone + 'static,
     MempoolAdapter::Error: Debug,
     Cryptarchia: CryptarchiaServiceData<Tx = SignedMantleTx> + Sync,
     RuntimeServiceId: Debug

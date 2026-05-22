@@ -129,8 +129,15 @@ pub struct ChainNetwork<
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, MempoolAdapter, TimeBackend, RuntimeServiceId>
-    ServiceData
+impl<
+    Cryptarchia,
+    NetAdapter,
+    Mempool,
+    MempoolNetAdapter,
+    MempoolAdapter,
+    TimeBackend,
+    RuntimeServiceId,
+> ServiceData
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
@@ -163,8 +170,15 @@ where
 }
 
 #[async_trait::async_trait]
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, MempoolAdapter, TimeBackend, RuntimeServiceId>
-    ServiceCore<RuntimeServiceId>
+impl<
+    Cryptarchia,
+    NetAdapter,
+    Mempool,
+    MempoolNetAdapter,
+    MempoolAdapter,
+    TimeBackend,
+    RuntimeServiceId,
+> ServiceCore<RuntimeServiceId>
     for ChainNetwork<
         Cryptarchia,
         NetAdapter,
@@ -393,8 +407,24 @@ where
     }
 }
 
-impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, MempoolAdapter, TimeBackend, RuntimeServiceId>
-    ChainNetwork<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, MempoolAdapter, TimeBackend, RuntimeServiceId>
+impl<
+    Cryptarchia,
+    NetAdapter,
+    Mempool,
+    MempoolNetAdapter,
+    MempoolAdapter,
+    TimeBackend,
+    RuntimeServiceId,
+>
+    ChainNetwork<
+        Cryptarchia,
+        NetAdapter,
+        Mempool,
+        MempoolNetAdapter,
+        MempoolAdapter,
+        TimeBackend,
+        RuntimeServiceId,
+    >
 where
     Cryptarchia: CryptarchiaServiceData<Tx = Mempool::Tx>,
     NetAdapter: NetworkAdapter<RuntimeServiceId, Block = Block<Mempool::Tx>, Proposal = Proposal>

@@ -21,7 +21,10 @@ use lb_chain_service::CryptarchiaConsensus;
 use lb_core::mantle::{SignedMantleTx, Transaction};
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{metrics::http_metrics_middleware, paths};
-use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
+use lb_sdp_service::{
+    mempool::SdpMempoolAdapter, state::SdpStateStorage as SdpStateStorageTrait,
+    wallet::SdpWalletAdapter,
+};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
@@ -38,18 +41,19 @@ use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
-    add_tx, blend_info, block, blocks_range_stream, blocks_stream, cryptarchia_headers,
-    cryptarchia_info, cryptarchia_lib_stream, immutable_blocks, libp2p_info, mantle_metrics,
-    mantle_status, transaction, wallet,
+    add_tx, blend_info, block, block_events, blocks_range_stream, blocks_stream,
+    cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, immutable_blocks, libp2p_info,
+    mantle_metrics, mantle_status, transaction, wallet,
 };
 use crate::{
-    BlendBroadcastSettings, BlendService, WalletService,
+    BlendBroadcastSettings, BlendService, TracingService, WalletService,
     api::{
         handlers::{
             channel, channel_deposit, leader_claim, post_activity, post_declaration,
-            post_withdrawal,
+            post_set_declaration_id, post_withdrawal,
         },
         openapi::ApiDoc,
+        tracing::reload_tracing_filter,
     },
 };
 
@@ -62,6 +66,7 @@ pub struct AxumBackend<
     MempoolAdapter,
     SdpMempool,
     SdpWallet,
+    SdpStateStorage,
     ChainLeader,
 > {
     settings: AxumBackendSettings,
@@ -71,6 +76,7 @@ pub struct AxumBackend<
         MempoolAdapter,
         SdpMempool,
         SdpWallet,
+        SdpStateStorage,
         ChainLeader,
     )>,
 }
@@ -82,6 +88,7 @@ impl<
     MempoolAdapter,
     SdpMempool,
     SdpWallet,
+    SdpStateStorage,
     ChainLeader,
     RuntimeServiceId,
 > Backend<RuntimeServiceId>
@@ -91,6 +98,7 @@ impl<
         MempoolAdapter,
         SdpMempool,
         SdpWallet,
+        SdpStateStorage,
         ChainLeader,
     >
 where
@@ -107,6 +115,7 @@ where
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
     SdpWallet: SdpWalletAdapter + Send + Sync + 'static,
     ChainLeader: ChainLeaderServiceData,
+    SdpStateStorage: SdpStateStorageTrait + Send + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -145,12 +154,14 @@ where
                 SdpMempool,
                 SdpWallet,
                 Cryptarchia<RuntimeServiceId>,
+                SdpStateStorage,
                 RuntimeServiceId,
             >,
         >
         + AsServiceId<WalletService>
         + AsServiceId<ChainLeader>
-        + AsServiceId<BlendService>,
+        + AsServiceId<BlendService>
+        + AsServiceId<TracingService>,
 {
     type Error = std::io::Error;
     type Settings = AxumBackendSettings;
@@ -229,6 +240,7 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),
@@ -240,6 +252,7 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),
@@ -251,6 +264,19 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
+                        RuntimeServiceId,
+                    >,
+                ),
+            )
+            .route(
+                paths::SDP_POST_SET_DECLARATION_ID,
+                routing::post(
+                    post_set_declaration_id::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),
@@ -280,6 +306,10 @@ where
             .route(
                 paths::wallet::SIGN_TX_ZK,
                 routing::post(wallet::sign_tx_zk::<WalletService, MempoolAdapter, _>),
+            )
+            .route(
+                paths::admin::TRACING_FILTER,
+                routing::put(reload_tracing_filter::<RuntimeServiceId>),
             );
 
         let app = app.route(
@@ -306,6 +336,10 @@ where
             .route(
                 paths::BLOCKS_DETAIL,
                 routing::get(block::<StorageAdapter, RuntimeServiceId>),
+            )
+            .route(
+                paths::BLOCK_EVENTS,
+                routing::get(block_events::<RuntimeServiceId>),
             )
             .route(
                 paths::TRANSACTION,

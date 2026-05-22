@@ -19,9 +19,10 @@ use lb_api_service::http::{
 };
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
-use lb_chain_service::{ConsensusMsg, Slot};
+use lb_chain_service::{ConsensusMsg, Slot, api::CryptarchiaServiceApi};
 use lb_core::{
     block::Block,
+    events::Events,
     header::HeaderId,
     mantle::{
         Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
@@ -37,10 +38,13 @@ use lb_http_api_common::{
         },
     },
     paths,
+    queries::BlocksStreamQuery,
 };
 use lb_libp2p::libp2p::bytes::Bytes;
 use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
-use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
+use lb_sdp_service::{
+    mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
+};
 use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
@@ -56,17 +60,20 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt as _;
+use tracing::debug;
 
 use crate::api::{
     errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
     openapi::schema,
-    queries::{BlockRangeQuery, BlocksStreamQuery, BlocksStreamRequest},
+    queries::{BlockRangeQuery, BlocksStreamRequest},
     responses::{self, overwatch::get_relay_or_500},
     serializers::{
         blocks::{ApiBlock, ApiProcessedBlockEvent},
         transactions::ApiSignedTransactionRef,
     },
 };
+
+const TARGET: &str = "node::binary::api";
 
 #[derive(Debug)]
 struct ResolvedBlocksStreamWindow {
@@ -102,18 +109,24 @@ fn resolve_blocks_stream_window(
     } else {
         chain_info.slot
     };
-    let slot_to = request.slot_to.map_or(max_slot_to, Slot::new);
+    let mut slot_to = request.slot_to.map_or(max_slot_to, Slot::new);
     if slot_to > max_slot_to {
+        slot_to = max_slot_to;
         let anchor = if request.immutable_only {
             "lib_slot"
         } else {
             "tip_slot"
         };
-        return Err(BlocksStreamWindowError::SlotToAboveAnchor {
-            anchor,
-            slot_to: slot_to.into_inner(),
-            max_slot_to: max_slot_to.into_inner(),
-        });
+        debug!(
+            target: TARGET,
+            "{}: clamping to {}",
+            BlocksStreamWindowError::SlotToAboveAnchor {
+                anchor,
+                slot_to: slot_to.into_inner(),
+                max_slot_to: max_slot_to.into_inner(),
+            }.to_string(),
+            max_slot_to.into_inner()
+        );
     }
 
     let slot_from = request.slot_from.map_or_else(
@@ -173,6 +186,7 @@ where
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -230,6 +244,7 @@ where
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -525,7 +540,7 @@ where
     get,
     path = paths::BLEND_NETWORK_INFO,
     responses(
-        (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::BlendNetworkInfo>),
+        (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::NetworkInfo<PeerId>>),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
@@ -722,7 +737,13 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_declaration<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
+pub async fn post_declaration<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration): Json<lb_core::sdp::DeclarationMessage>,
 ) -> Response
@@ -730,6 +751,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -741,6 +763,7 @@ where
                 MempoolAdapter,
                 WalletAdapter,
                 ChainService,
+                StateStorage,
                 RuntimeServiceId,
             >,
         >,
@@ -749,6 +772,7 @@ where
         MempoolAdapter,
         WalletAdapter,
         ChainService,
+        StateStorage,
         RuntimeServiceId,
     >(handle, declaration))
 }
@@ -761,7 +785,13 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_activity<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
+pub async fn post_activity<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(metadata): Json<lb_core::sdp::ActivityMetadata>,
 ) -> Response
@@ -769,6 +799,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -780,6 +811,7 @@ where
                 MempoolAdapter,
                 WalletAdapter,
                 ChainService,
+                StateStorage,
                 RuntimeServiceId,
             >,
         >,
@@ -788,6 +820,7 @@ where
         MempoolAdapter,
         WalletAdapter,
         ChainService,
+        StateStorage,
         RuntimeServiceId,
     >(handle, metadata))
 }
@@ -800,7 +833,13 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_withdrawal<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
+pub async fn post_withdrawal<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration_id): Json<lb_core::sdp::DeclarationId>,
 ) -> Response
@@ -808,6 +847,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -819,6 +859,7 @@ where
                 MempoolAdapter,
                 WalletAdapter,
                 ChainService,
+                StateStorage,
                 RuntimeServiceId,
             >,
         >,
@@ -827,8 +868,59 @@ where
         MempoolAdapter,
         WalletAdapter,
         ChainService,
+        StateStorage,
         RuntimeServiceId,
     >(handle, declaration_id))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::SDP_POST_SET_DECLARATION_ID,
+    responses(
+        (status = 200, description = "Post declaration to SDP service to be set as current", body = lb_core::sdp::DeclarationId),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn post_set_declaration_id<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(declaration): Json<Option<lb_core::sdp::DeclarationId>>,
+) -> Response
+where
+    MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
+    RuntimeServiceId: Debug
+        + Sync
+        + Send
+        + Display
+        + 'static
+        + AsServiceId<ChainService>
+        + AsServiceId<
+            lb_sdp_service::SdpService<
+                MempoolAdapter,
+                WalletAdapter,
+                ChainService,
+                StateStorage,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(
+        lb_api_service::http::sdp::post_set_declaration_id_handler::<
+            MempoolAdapter,
+            WalletAdapter,
+            ChainService,
+            StateStorage,
+            RuntimeServiceId,
+        >(handle, declaration)
+    )
 }
 
 #[utoipa::path(
@@ -868,6 +960,7 @@ where
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -917,6 +1010,37 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::BLOCK_EVENTS,
+    responses(
+        (status = 200, description = "Block events", body = Events),
+        (status = 404, description = "Block not found"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn block_events<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<HeaderId>,
+) -> Response
+where
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+
+    match chain_api.get_block_events(id).await {
+        Ok(Some(events)) => (StatusCode::OK, Json(events)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "Block not found").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
     path = paths::BLOCKS_STREAM,
     responses(
         (status = 200, description = "Stream of processed blocks with chain state"),
@@ -932,6 +1056,7 @@ where
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     ConsensusService: ServiceData<Message = ConsensusMsg<SignedMantleTx>> + 'static,
     RuntimeServiceId: Debug
         + Sync
@@ -971,6 +1096,7 @@ where
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -1420,31 +1546,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_slot_to_above_tip() {
-        let err = resolve_blocks_stream_window(
+    fn clamps_slot_to_above_tip() {
+        let window = resolve_blocks_stream_window(
             &request(None, Some(TIP_SLOT + 1), true, DEFAULT_LIMIT, false),
             &chain_info(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(
-            err,
-            BlocksStreamWindowError::SlotToAboveAnchor { .. }
-        ));
+        assert_eq!(window.slot_to, Slot::new(TIP_SLOT));
     }
 
     #[test]
-    fn rejects_slot_to_above_lib_when_immutable_only() {
-        let err = resolve_blocks_stream_window(
+    fn clamps_slot_to_above_lib_when_immutable_only() {
+        let window = resolve_blocks_stream_window(
             &request(None, Some(LIB_SLOT + 1), true, DEFAULT_LIMIT, true),
             &chain_info(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(
-            err,
-            BlocksStreamWindowError::SlotToAboveAnchor { .. }
-        ));
+        assert_eq!(window.slot_to, Slot::new(LIB_SLOT));
     }
 
     #[test]

@@ -348,6 +348,7 @@ mod cfgsync_tests {
                 network_port: 3000,
                 blend_port: 5000,
                 api_port: 8000,
+                admin_api_port: 8002,
             })
             .collect();
 
@@ -388,6 +389,7 @@ mod cfgsync_tests {
             network_port: 4000,
             blend_port: 5000,
             api_port: 9000,
+            admin_api_port: 9002,
         };
 
         let appended_config =

@@ -55,8 +55,8 @@ use crate::{
         ChainApi, EpochEvent, EpochHandler, PolEpochInfo, PolInfoProvider as PolInfoProviderTrait,
     },
     kms::PreloadKmsService,
-    membership::{self, MembershipInfo},
-    message::{NetworkMessage, ServiceMessage},
+    membership::{self, MembershipInfo, node_id},
+    message::{NetworkInfo, NetworkMessage, ServiceMessage},
     settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
@@ -152,7 +152,7 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
-    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
     BroadcastSettings: Serialize + DeserializeOwned + Send,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
@@ -225,6 +225,9 @@ where
                 .await
                 .expect("Failed to retrieve non-ephemeral signing key from KMS.")
         };
+        let local_node_id =
+            NodeId::try_from_provider_id(&non_ephemeral_signing_key.public_key().to_bytes())
+                .expect("non-ephemeral signing key should decode into a valid node id");
 
         // Initialize membership stream for session and core-related public PoQ inputs.
         let session_stream = MembershipAdapter::new(
@@ -265,8 +268,10 @@ where
                         .to_vec(),
                 ),
                 ServiceMessage::GetNetworkInfo { reply } => {
-                    // Edge nodes don't return any Blend peer info.
-                    drop(reply.send(None));
+                    drop(reply.send(Some(NetworkInfo {
+                        node_id: local_node_id.clone(),
+                        core_info: None,
+                    })));
                     None
                 }
             }
@@ -463,6 +468,20 @@ where
     let Some(zk_info) = &new_membership_info.zk else {
         return Err(Error::NetworkIsTooSmall(0));
     };
+
+    // Validate the edge node condition up front so the service shuts down on
+    // an invalid membership regardless of whether secret PoL info has arrived
+    // yet. Without this check, an invalid membership would silently update
+    // `current_membership_info` and surface later as a panic in
+    // `handle_new_secret_epoch_info`.
+    let membership_size = new_membership_info.membership.size();
+    if membership_size < settings.minimum_network_size.get() as usize {
+        return Err(Error::NetworkIsTooSmall(membership_size));
+    }
+    if new_membership_info.membership.contains_local() {
+        return Err(Error::LocalIsCoreNode);
+    }
+
     debug!(target: LOG_TARGET, "New session received, trying to create a new message handler");
 
     // Update session and core public inputs, preserving the current epoch's

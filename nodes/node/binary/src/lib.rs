@@ -1,16 +1,13 @@
 pub mod api;
+pub mod cli;
 pub mod config;
 pub mod generic_services;
 pub mod panic;
-
-#[cfg(feature = "config-gen")]
-pub mod init;
 
 pub mod global_allocators;
 
 use std::panic::set_hook;
 
-use cfg_if::cfg_if;
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::{
     core::{
@@ -31,7 +28,6 @@ pub use lb_storage_service::backends::{
 };
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
-#[cfg(feature = "tracing")]
 pub use lb_tracing_service::Tracing;
 use lb_tx_service::{backend::TrackerAdapter, storage::adapters::RocksStorageAdapter};
 pub use lb_tx_service::{
@@ -47,7 +43,6 @@ use overwatch::{
 };
 use tokio::runtime;
 
-pub use crate::config::{ApiArgs, Command, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{
@@ -57,13 +52,16 @@ use crate::{
         sdp::ServiceConfig as SdpConfig, storage::ServiceConfig as StorageConfig,
         time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
     },
-    generic_services::{SdpMempoolAdapter, SdpService, SdpWalletAdapter},
+    generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
+};
+pub use crate::{
+    cli::Command,
+    config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
 };
 
 pub const MB16: usize = 1024 * 1024 * 16;
 
-#[cfg(feature = "tracing")]
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
 pub(crate) type NetworkService =
@@ -112,6 +110,7 @@ pub type ApiService = lb_api_service::ApiService<
         >,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
+        SdpRecoveryBackend,
         CryptarchiaLeaderService,
     >,
     RuntimeServiceId,
@@ -147,7 +146,6 @@ pub struct LogosBlockchain {
     #[cfg(feature = "testing")]
     testing_http: TestingApiService<RuntimeServiceId>,
 
-    #[cfg(feature = "tracing")]
     tracing: TracingService,
 }
 
@@ -208,9 +206,8 @@ pub fn run_node_from_config(
     let sdp_config = SdpConfig {
         user: config.user.sdp,
     }
-    .into();
+    .into_sdp_service_settings(&config.user.state);
 
-    #[cfg(feature = "tracing")]
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
     }
@@ -220,13 +217,10 @@ pub fn run_node_from_config(
         user: config.user.api,
     };
 
-    cfg_if! {
-        if #[cfg(feature = "testing")] {
-            let (http_config, testing_config) = api_config.into_backend_and_testing_settings();
-        } else {
-            let http_config = api_config.into_backend_settings();
-        }
-    }
+    let http_config = api_config.backend_settings();
+
+    #[cfg(feature = "testing")]
+    let testing_config = api_config.testing_settings();
 
     set_hook(Box::new(log_and_exit_hook));
 
@@ -249,7 +243,6 @@ pub fn run_node_from_config(
             sdp: sdp_config,
             wallet: wallet_config,
 
-            #[cfg(feature = "tracing")]
             tracing: tracing_config,
 
             #[cfg(feature = "testing")]

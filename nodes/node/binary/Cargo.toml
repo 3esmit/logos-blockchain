@@ -14,14 +14,12 @@ workspace = true
 
 [dependencies]
 async-trait                      = { workspace = true }
-cfg-if                           = { workspace = true }
 clap                             = { features = ["derive", "env", "help", "std", "string"], workspace = true }
 color-eyre                       = { workspace = true }
 dhat                             = { optional = true, workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
 http                             = { workspace = true }
-humantime                        = { workspace = true }
 lb-api-service                   = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-blend-service                 = { workspace = true }
@@ -33,7 +31,7 @@ lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
-lb-key-management-system-service = { workspace = true }
+lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-network-service               = { workspace = true }
@@ -82,13 +80,13 @@ validator  = { features = ["derive"], workspace = true }
 tikv-jemallocator = { optional = true, workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
+rand             = { workspace = true }
+serde_urlencoded = { workspace = true }
 
 [features]
-config-gen = ["lb-key-management-system-service/unsafe"]
-default    = ["config-gen", "tracing"]
-dhat-heap  = ["dep:dhat"]
-jemalloc   = ["dep:tikv-jemallocator"]
-profiling  = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
-testing    = ["lb-key-management-system-service/unsafe"]
-tracing    = []
+default   = ["tracing"]
+dhat-heap = ["dep:dhat"]
+jemalloc  = ["dep:tikv-jemallocator"]
+profiling = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
+testing   = ["lb-key-management-system-service/unsafe"]
+tracing   = []

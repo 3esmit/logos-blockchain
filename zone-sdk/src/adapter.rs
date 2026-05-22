@@ -1,4 +1,4 @@
-use std::{num::NonZero, pin::Pin};
+use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::{Stream, stream};
@@ -7,8 +7,9 @@ use lb_common_http_client::{
 };
 use lb_core::{
     header::HeaderId,
-    mantle::{Op, SignedMantleTx, ops::channel::ChannelId},
+    mantle::{Op, SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
 };
+use lb_http_api_common::queries::BlocksStreamQuery;
 use reqwest::Url;
 
 use crate::{Deposit, Withdraw, ZoneBlock, ZoneMessage};
@@ -24,12 +25,7 @@ pub trait Node {
 
     async fn blocks_range_stream(
         &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksStreamQuery,
     ) -> Result<BoxStream<ProcessedBlockEvent>, Error>;
 
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error>;
@@ -56,6 +52,8 @@ pub trait Node {
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
 
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
+
+    async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error>;
 }
 
 #[derive(Clone)]
@@ -84,24 +82,11 @@ impl Node for NodeHttpClient {
 
     async fn blocks_range_stream(
         &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksStreamQuery,
     ) -> Result<BoxStream<ProcessedBlockEvent>, Error> {
         let stream = self
             .client
-            .get_blocks_range_stream(
-                self.base_url.clone(),
-                blocks_limit,
-                slot_from,
-                slot_to,
-                descending,
-                server_batch_size,
-                immutable_only,
-            )
+            .get_blocks_range_stream(self.base_url.clone(), params)
             .await?;
         Ok(Box::pin(stream))
     }
@@ -143,7 +128,7 @@ impl Node for NodeHttpClient {
         Ok(Box::pin(stream::iter(
             transactions
                 .into_iter()
-                .flat_map(|tx| tx.mantle_tx.0)
+                .flat_map(|tx| Vec::from(tx.mantle_tx.0))
                 .filter_map(move |op| op_to_zone_message(&op, channel_id)),
         )))
     }
@@ -169,7 +154,7 @@ impl Node for NodeHttpClient {
                 block
                     .transactions
                     .into_iter()
-                    .flat_map(|tx| tx.mantle_tx.0)
+                    .flat_map(|tx| Vec::from(tx.mantle_tx.0))
                     .filter_map(move |op| op_to_zone_message(&op, channel_id))
                     .map(move |msg| (msg, slot))
             },
@@ -179,6 +164,12 @@ impl Node for NodeHttpClient {
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error> {
         self.client
             .post_transaction(self.base_url.clone(), tx)
+            .await
+    }
+
+    async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error> {
+        self.client
+            .get_channel_state(self.base_url.clone(), channel_id)
             .await
     }
 }
@@ -191,7 +182,7 @@ fn op_to_zone_message(op: &Op, channel_id: ChannelId) -> Option<ZoneMessage> {
         Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
             Some(ZoneMessage::Block(ZoneBlock {
                 id: inscribe.id(),
-                data: inscribe.inscription.clone(),
+                data: inscribe.inscription.clone().into(),
             }))
         }
         Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {

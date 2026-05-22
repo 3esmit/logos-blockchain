@@ -287,7 +287,10 @@ const fn node_binary_config() -> BinaryConfig {
     BinaryConfig {
         env_var: "LOGOS_BLOCKCHAIN_NODE_BIN",
         binary_name: "logos-blockchain-node",
-        fallback_path: "target/debug/logos-blockchain-node",
+        fallback_path: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/release/logos-blockchain-node"
+        ),
     }
 }
 
@@ -301,7 +304,7 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
                     file: Some(logger::FileConfig {
                         directory: log_dir,
                         prefix: Some(prefix.into()),
-                        appender_type: AppenderType::Rolling,
+                        appender_type: AppenderType::Simple,
                     }),
                     loki: None,
                     gelf: None,
@@ -324,7 +327,7 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
         file: Some(logger::FileConfig {
             directory: base_dir.to_owned(),
             prefix: Some(prefix.into()),
-            appender_type: AppenderType::Rolling,
+            appender_type: AppenderType::Simple,
         }),
         loki: None,
         gelf: None,

@@ -18,6 +18,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::mantle::Transaction;
+use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
     overwatch::{
@@ -42,6 +43,8 @@ use crate::{
     storage::MempoolStorageAdapter,
     tx::{settings::TxMempoolSettings, state::TxMempoolState},
 };
+
+const LOG_TARGET: &str = mempool::SERVICE;
 
 type MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId> =
     overwatch::services::state::StateUpdater<
@@ -212,6 +215,7 @@ where
         initial_state: Self::State,
     ) -> Result<Self, overwatch::DynError> {
         tracing::trace!(
+            target: LOG_TARGET,
             "Initializing TxMempoolService with initial state {:#?}",
             initial_state.pool
         );
@@ -267,6 +271,7 @@ where
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -408,7 +413,7 @@ where
                 let result = Self::partition_transactions_by_availability(pool, hashes).await;
 
                 if let Err(_e) = reply_channel.send(result) {
-                    tracing::debug!("Failed to send transactions reply");
+                    tracing::debug!(target: LOG_TARGET, "Failed to send transactions reply");
                 }
             }
             MempoolMsg::Remove { ids } => {
@@ -458,7 +463,7 @@ where
                     adapter.send(item_for_broadcast).await;
                 });
                 if let Err(e) = reply_channel.send(Ok(())) {
-                    tracing::debug!("Failed to send add reply: {:?}", e);
+                    tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
                 }
             }
             Err(e) => Self::handle_add_error(e, reply_channel),
@@ -470,7 +475,7 @@ where
         ancestor_hint: Pool::BlockId,
         reply_channel: oneshot::Sender<Pin<Box<dyn Stream<Item = Pool::Tx> + Send>>>,
     ) {
-        tracing::trace!("Handling mempool View message");
+        tracing::trace!(target: LOG_TARGET, "Handling mempool View message");
 
         let items = pool
             .view(ancestor_hint)
@@ -478,7 +483,7 @@ where
             .unwrap_or_else(|_| Box::pin(futures::stream::iter(Vec::new())));
 
         if let Err(_e) = reply_channel.send(Box::pin(items)) {
-            tracing::debug!("Failed to send view reply");
+            tracing::debug!(target: LOG_TARGET, "Failed to send view reply");
         }
     }
 
@@ -488,7 +493,7 @@ where
         };
 
         if let Err(_e) = reply_channel.send(info) {
-            tracing::debug!("Failed to send metrics reply");
+            tracing::debug!(target: LOG_TARGET, "Failed to send metrics reply");
         }
     }
 
@@ -500,7 +505,7 @@ where
         let statuses = pool.status(items);
 
         if let Err(_e) = reply_channel.send(statuses) {
-            tracing::debug!("Failed to send status reply");
+            tracing::debug!(target: LOG_TARGET, "Failed to send status reply");
         }
     }
 
@@ -553,7 +558,7 @@ where
         });
 
         if let Err(e) = reply_channel.send(Ok(())) {
-            tracing::debug!("Failed to send add reply: {:?}", e);
+            tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
         }
     }
 
@@ -561,9 +566,9 @@ where
         error: MempoolError,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
     ) {
-        tracing::debug!("Could not add item to the pool: {}", error);
+        tracing::debug!(target: LOG_TARGET, "Could not add item to the pool: {}", error);
         if let Err(e) = reply_channel.send(Err(error)) {
-            tracing::debug!("Failed to send error reply: {:?}", e);
+            tracing::debug!(target: LOG_TARGET, "Failed to send error reply: {:?}", e);
         }
     }
 
@@ -576,7 +581,20 @@ where
         NetworkAdapter::Settings: Send + Sync,
     {
         if let Err(e) = pool.add_item(item).await {
-            tracing::debug!("could not add item to the pool due to: {e}");
+            match e {
+                MempoolError::ExistingItem => {
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "network item already exists in the mempool"
+                    );
+                }
+                err => {
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        "could not add item to the pool due to: {err}"
+                    );
+                }
+            }
             return;
         }
 

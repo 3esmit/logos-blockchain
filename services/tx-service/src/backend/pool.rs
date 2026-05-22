@@ -13,6 +13,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{Transaction, TxDependencies, TxRewardsRatio},
 };
+use lb_log_targets::mempool;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -25,6 +26,8 @@ use crate::{
     metrics::{mempool_transactions_added, mempool_transactions_removed},
     storage::MempoolStorageAdapter,
 };
+
+const LOG_TARGET: &str = mempool::POOL;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoolRecoveryState<Key>
@@ -127,6 +130,7 @@ where
 
     async fn remove(&mut self, keys: &[Self::TxHash]) {
         let removed_count = self.forks_tracker.force_remove_txs(keys);
+        log_removed_items(removed_count);
         mempool_transactions_removed(removed_count);
     }
 
@@ -200,4 +204,18 @@ fn current_timestamp_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
+}
+
+fn log_removed_items(removed_count: usize) {
+    if removed_count == 0 {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Removed {removed_count} items from mempool"
+        );
+    } else {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Removed {removed_count} items from mempool"
+        );
+    }
 }

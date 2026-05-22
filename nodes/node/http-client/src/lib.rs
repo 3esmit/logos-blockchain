@@ -1,4 +1,4 @@
-use std::{num::NonZero, sync::Arc};
+use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
@@ -6,8 +6,9 @@ pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, 
 use lb_core::{
     block::MAX_BLOCK_SIZE,
     header::{ContentId, HeaderId},
-    mantle::SignedMantleTx,
+    mantle::{SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
     proofs::leader_proof::Groth16LeaderProof,
+    sdp::{DeclarationId, DeclarationMessage},
 };
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::{
@@ -17,10 +18,11 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CRYPTARCHIA_INFO,
-        CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO,
+        CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
+    queries::BlocksStreamQuery,
     settings::default_max_body_size,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -84,41 +86,6 @@ impl BasicAuthCredentials {
     #[must_use]
     pub const fn new(username: String, password: Option<String>) -> Self {
         Self { username, password }
-    }
-}
-
-#[derive(Default, Clone, Debug)]
-struct BlocksStreamQueryParams {
-    blocks_limit: Option<NonZero<usize>>,
-    slot_from: Option<u64>,
-    slot_to: Option<u64>,
-    descending: Option<bool>,
-    server_batch_size: Option<NonZero<usize>>,
-    immutable_only: Option<bool>,
-}
-
-impl BlocksStreamQueryParams {
-    fn append_to_url(&self, request_url: &mut Url) {
-        let mut query = request_url.query_pairs_mut();
-
-        if let Some(blocks_limit) = self.blocks_limit {
-            query.append_pair("blocks_limit", &blocks_limit.to_string());
-        }
-        if let Some(slot_from) = self.slot_from {
-            query.append_pair("slot_from", &slot_from.to_string());
-        }
-        if let Some(slot_to) = self.slot_to {
-            query.append_pair("slot_to", &slot_to.to_string());
-        }
-        if let Some(descending) = self.descending {
-            query.append_pair("descending", &descending.to_string());
-        }
-        if let Some(server_batch_size) = self.server_batch_size {
-            query.append_pair("server_batch_size", &server_batch_size.to_string());
-        }
-        if self.immutable_only == Some(true) {
-            query.append_pair("immutable_only", "true");
-        }
     }
 }
 
@@ -266,6 +233,32 @@ impl CommonHttpClient {
         self.post(request_url, &transaction).await
     }
 
+    /// Post a service declaration to the SDP endpoint.
+    pub async fn post_declaration(
+        &self,
+        base_url: Url,
+        declaration: &DeclarationMessage,
+    ) -> Result<DeclarationId, Error> {
+        let request_url = base_url
+            .join(SDP_POST_DECLARATION.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.post(request_url, declaration).await
+    }
+
+    /// Get the on-chain state for a channel (`accredited_keys`,
+    /// `withdrawal_nonce`, balance, etc.). Returns the tip-of-chain view.
+    pub async fn get_channel_state(
+        &self,
+        base_url: Url,
+        channel_id: ChannelId,
+    ) -> Result<ChannelState, Error> {
+        let path = CHANNEL
+            .trim_start_matches('/')
+            .replace(":id", &channel_id.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+        self.get::<(), ChannelState>(request_url, None).await
+    }
+
     /// Get consensus info (tip, height, etc.)
     pub async fn consensus_info(&self, base_url: Url) -> Result<ChainServiceInfo, Error> {
         let request_url = base_url
@@ -320,9 +313,11 @@ impl CommonHttpClient {
         }
     }
 
-    fn build_blocks_range_stream_request_url(
+    /// Build the request URL for the `get_blocks_range_stream` method with the
+    /// given parameters.
+    pub fn build_blocks_range_stream_request_url(
         base_url: &Url,
-        params: &BlocksStreamQueryParams,
+        params: &BlocksStreamQuery,
     ) -> Result<Url, Error> {
         let mut request_url = base_url
             .join(BLOCKS_RANGE_STREAM.trim_start_matches('/'))
@@ -361,10 +356,10 @@ impl CommonHttpClient {
 
     // Helper function to validate inputs for block streaming methods.
     fn verify_inputs(
-        blocks_limit: Option<NonZero<usize>>,
+        blocks_limit: Option<std::num::NonZero<usize>>,
         slot_from: Option<u64>,
         slot_to: Option<u64>,
-        server_batch_size: Option<NonZero<usize>>,
+        server_batch_size: Option<std::num::NonZero<usize>>,
     ) -> Result<(), Error> {
         if let Some(blocks) = blocks_limit
             && blocks.get() > MAX_BLOCKS_STREAM_BLOCKS
@@ -395,29 +390,18 @@ impl CommonHttpClient {
     ///
     /// `server_batch_size` lets callers request smaller chunks; the server
     /// still enforces its own upper bound.
-    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     pub async fn get_blocks_range_stream(
         &self,
         base_url: Url,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksStreamQuery,
     ) -> Result<impl Stream<Item = ProcessedBlockEvent> + use<>, Error> {
-        Self::verify_inputs(blocks_limit, slot_from, slot_to, server_batch_size)?;
-
-        let params = BlocksStreamQueryParams {
-            blocks_limit,
-            slot_from,
-            slot_to,
-            descending,
-            server_batch_size,
-            immutable_only,
-        };
-
         let request_url = Self::build_blocks_range_stream_request_url(&base_url, &params)?;
+        Self::verify_inputs(
+            params.blocks_limit,
+            params.slot_from,
+            params.slot_to,
+            params.server_batch_size,
+        )?;
         let response = self.send_blocks_range_stream_request(request_url).await?;
         Ok(Self::parse_processed_blocks_range_event_stream(response))
     }

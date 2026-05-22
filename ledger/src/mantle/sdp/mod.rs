@@ -24,9 +24,11 @@ use lb_core::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use rewards::{Error as RewardsError, Rewards};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
+
+const LOG_TARGET: &str = "ledger::mantle::sdp";
 
 type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
@@ -40,6 +42,8 @@ impl Service {
         self,
         block_number: BlockNumber,
         epoch_state: &EpochState,
+        // LIB after the given block is applied to Cryptarchia
+        lib: BlockNumber,
         config: &ServiceParameters,
         rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>) {
@@ -48,6 +52,7 @@ impl Service {
                 let (new_state, utxos) = state.try_apply_header(
                     block_number,
                     epoch_state,
+                    lib,
                     config,
                     &rewards_params.blend,
                 );
@@ -212,14 +217,23 @@ impl<R: Rewards> ServiceState<R> {
         mut self,
         block_number: u64,
         epoch_state: &EpochState,
+        // LIB after the given block is applied to Cryptarchia
+        lib: BlockNumber,
         service_params: &ServiceParameters,
         rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
-        let current_session = service_params.session_for_block(block_number);
+        let current_session = service_params.current_session(lib);
         let reward_utxos;
 
-        // shift all session!
         if current_session == self.active.session_n + 1 {
+            debug!(
+                target: LOG_TARGET,
+                current_session,
+                previous_sessoin = self.active.session_n,
+                lib_height = lib,
+                "Session transition detected. Removing inactive declarations, commiting snapshot, and updating rewards for the new session",
+            );
+
             // Remove expired declarations based on retention_period
             // This essentially duplicates the declaration set so it's only triggered at
             // session boundaries
@@ -359,6 +373,8 @@ impl SdpLedger {
         &self,
         config: &Config,
         epoch_state: &EpochState,
+        // LIB after the given block is applied to Cryptarchia
+        lib: BlockNumber,
     ) -> Result<(Self, Vec<Utxo>), Error> {
         let block_number = self.block_number + 1; // overflow?
         let mut all_reward_utxos = Vec::new();
@@ -374,6 +390,7 @@ impl SdpLedger {
                 let (new_state, reward_utxos) = service_state.clone().try_apply_header(
                     block_number,
                     epoch_state,
+                    lib,
                     service_params,
                     &config.service_rewards_params,
                 );
@@ -757,6 +774,13 @@ mod tests {
         }
     }
 
+    /// Computes the new LIB height using `k`.
+    fn new_lib_height(ledger: &SdpLedger, k: NonZeroU64) -> BlockNumber {
+        (ledger.block_number + 1).saturating_sub(k.into())
+    }
+
+    const K_ONE: NonZeroU64 = NonZeroU64::new(1).unwrap();
+
     #[test]
     fn test_update_active_provider() {
         let config = setup();
@@ -789,10 +813,12 @@ mod tests {
         let declarations = sdp_ledger.get_declarations(service_a).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
-        // Apply headers to reach block 10 (session boundary)
+        // Apply headers to reach block 11 (session boundary because k=1)
         let mut sdp_ledger = sdp_ledger;
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        for _ in 1..=11 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
         // At block 10, declaration enters the next session 2
@@ -836,8 +862,10 @@ mod tests {
 
         // Move forward enough blocks to satisfy lock_period
         let mut sdp_ledger = sdp_ledger;
-        for _ in 0..11 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        for _ in 1..=11 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
         // Withdraw the declaration
@@ -883,10 +911,12 @@ mod tests {
         let sdp_ledger =
             apply_declare_with_dummies(&utxo_tree, sdp_ledger, op, &zk_key, &config).unwrap();
 
-        // Apply headers to reach block 10 (session boundary for session_duration=10)
+        // Apply headers to reach block 11 (session boundary because to k=1)
         let mut sdp_ledger = sdp_ledger;
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        for _ in 1..=11 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
         // At block 10: `active` becomes session 1 (was empty `next`),
@@ -900,9 +930,12 @@ mod tests {
         assert_eq!(next_session.session_n, 2);
         assert!(next_session.declarations.contains_key(&declaration_id));
 
-        // Continue to block 20 to see declaration become active
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Continue to block 21 to see declaration become active
+        // (session boundary because due to k=1)
+        for _ in 12..=21 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
         // At block 20: active becomes session 2 (with declaration)
@@ -921,10 +954,12 @@ mod tests {
         let mut sdp_ledger =
             SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
-        // Apply headers to reach block 9 (still in session 0, promotion happens at
-        // block 10)
-        for _ in 0..9 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Apply headers to reach block 10 (still in session 0. not session boundary
+        // because k=1)
+        for _ in 1..=10 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
         // Check active session is still session 0 with no declarations
@@ -947,9 +982,11 @@ mod tests {
         let mut sdp_ledger =
             SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
-        // Apply headers to reach block 10 (session boundary for BlendNetwork)
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Apply headers to reach block 11 (session boundary due to k=1)
+        for _ in 1..=11 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
         // Check BlendNetwork is promoted to session 1
@@ -972,8 +1009,10 @@ mod tests {
             SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // SESSION 0: Add a declaration at block 5
-        for _ in 0..5 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        for _ in 1..=5 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
         let utxo = utxo();
@@ -991,11 +1030,13 @@ mod tests {
             apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
                 .unwrap();
 
-        // Move to block 9 (last block of session 0)
-        for _ in 6..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Move to block 10 (last block of session 0 because k=1)
+        for _ in 6..=10 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
-        assert_eq!(sdp_ledger.block_number, 9);
+        assert_eq!(sdp_ledger.block_number, 10);
 
         // Declaration is not in active or next sessions yet
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();
@@ -1006,26 +1047,29 @@ mod tests {
         assert_eq!(next_session.session_n, 1);
         assert!(next_session.declarations.is_empty());
 
-        // SESSION 1: Cross session boundary to block 10
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
+        // SESSION 1: Cross session boundary to block 11
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+            .unwrap();
+        assert_eq!(sdp_ledger.block_number, 11);
 
         // Active session 1 is empty (was the empty next session 1)
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();
         assert_eq!(active_session.session_n, 1);
         assert!(active_session.declarations.is_empty());
 
-        // Next session 2 now has the declaration (snapshot from block 10)
+        // Next session 2 now has the declaration
         let next_session = sdp_ledger.get_next_session(service_a).unwrap();
         assert_eq!(next_session.session_n, 2);
         assert!(next_session.declarations.contains_key(&declaration_id));
 
-        // SESSION 2: Cross to block 20
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // SESSION 2: Cross to block 21
+        for _ in 12..=21 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 20);
+        assert_eq!(sdp_ledger.block_number, 21);
 
         // Now the declaration is active in session 2
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();
@@ -1060,17 +1104,21 @@ mod tests {
             apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
                 .unwrap();
 
-        // Move to block 9 (last block before session boundary)
-        for _ in 1..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Move to block 10 (last block before session boundary because k=1)
+        for _ in 1..=10 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
-        // Save state at block 9
-        let sdp_ledger_block_9 = sdp_ledger.clone();
+        // Save state at block 10
+        let sdp_ledger_block_10 = sdp_ledger.clone();
 
-        // Add another declaration at block 10 (after session boundary)
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
+        // Add another declaration at block 11 (after session boundary because k=1)
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+            .unwrap();
+        assert_eq!(sdp_ledger.block_number, 11);
 
         let zk_key_2 = create_zk_key(2);
         let utxo_2 = utxo();
@@ -1088,38 +1136,36 @@ mod tests {
             apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
                 .unwrap();
 
-        // Jump to session 2 (block 20)
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Jump to session 2 (block 21)
+        for _ in 12..=21 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
 
         // Active session (session 2) should contain both declarations
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();
         assert!(active_session.declarations.contains_key(&declaration_id_1));
         assert!(!active_session.declarations.contains_key(&declaration_id_2));
 
-        // Now test from the block 9 state - jumping directly to block 20
-        let mut sdp_ledger_from_9 = sdp_ledger_block_9;
-        for _ in 10..20 {
-            (sdp_ledger_from_9, _) = sdp_ledger_from_9
-                .try_apply_header(&config, &epoch_state)
+        // Now test from the block 10 state - jumping directly to block 21
+        let mut sdp_ledger = sdp_ledger_block_10;
+        for _ in 11..=21 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
                 .unwrap();
         }
-        (sdp_ledger_from_9, _) = sdp_ledger_from_9
-            .try_apply_header(&config, &epoch_state)
-            .unwrap();
 
         // Active session should only contain declaration_id_1
         // because declaration_id_2 was never added in this timeline
-        let active_session_from_9 = sdp_ledger_from_9.get_active_session(service_a).unwrap();
+        let active_session_from_10 = sdp_ledger.get_active_session(service_a).unwrap();
         assert!(
-            active_session_from_9
+            active_session_from_10
                 .declarations
                 .contains_key(&declaration_id_1)
         );
         assert!(
-            !active_session_from_9
+            !active_session_from_10
                 .declarations
                 .contains_key(&declaration_id_2)
         );
@@ -1137,8 +1183,10 @@ mod tests {
             SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Add declaration at block 3
-        for _ in 0..3 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        for _ in 1..=3 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
 
         let utxo = utxo();
@@ -1157,14 +1205,15 @@ mod tests {
                 .unwrap();
 
         // Jump directly from block 3 to block 25 (skipping session 1 entirely)
-        for _ in 4..25 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        for _ in 4..=25 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
         assert_eq!(sdp_ledger.block_number, 25);
 
         // Declaration snapshots should be taken from the last known state
-        // Active session (session 2, which started at block 20) should contain the
+        // Active session (session 2, which started at block 21) should contain the
         // declaration
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();
         assert_eq!(active_session.session_n, 2);
@@ -1190,11 +1239,13 @@ mod tests {
         let mut sdp_ledger =
             SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
-        // Move to block 9 (last block of session 0)
-        for _ in 0..9 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Move to block 10 (last block of session 0 because k=1)
+        for _ in 1..=10 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
-        assert_eq!(sdp_ledger.block_number, 9);
+        assert_eq!(sdp_ledger.block_number, 10);
 
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();
         assert_eq!(active_session.session_n, 0);
@@ -1204,7 +1255,7 @@ mod tests {
         assert_eq!(next_session.session_n, 1);
         assert!(next_session.declarations.is_empty());
 
-        // Create first declaration at block 9
+        // Create first declaration at block 10
         let utxo_1 = utxo();
         let declare_op_1 = &SDPDeclareOp {
             service_type: service_a,
@@ -1220,21 +1271,23 @@ mod tests {
             apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
                 .unwrap();
 
-        // Cross to block 10 (session boundary - start of session 1)
+        // Cross to block 11 (session boundary because k=1 - start of session 1)
         // At this point, the snapshot for next session 2 is taken
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+            .unwrap();
+        assert_eq!(sdp_ledger.block_number, 11);
 
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();
         assert_eq!(active_session.session_n, 1);
         assert!(active_session.declarations.is_empty());
 
-        // Next session 2 should contain declaration_1 (made at block 9)
+        // Next session 2 should contain declaration_1 (made at block 10)
         let next_session = sdp_ledger.get_next_session(service_a).unwrap();
         assert_eq!(next_session.session_n, 2);
         assert!(next_session.declarations.contains_key(&declaration_id_1));
 
-        // Create second declaration at block 10 (first block of session 1)
+        // Create second declaration at block 11
         let zk_key_2 = create_zk_key(2);
         let utxo_2 = utxo();
         let declare_op_2 = &SDPDeclareOp {
@@ -1251,38 +1304,39 @@ mod tests {
             apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
                 .unwrap();
 
-        // Next session 2 still only has declaration_1 (snapshot was already taken at
-        // block 10)
+        // Next session 2 still only has declaration_1 (snapshot was already taken)
         let next_session = sdp_ledger.get_next_session(service_a).unwrap();
         assert_eq!(next_session.session_n, 2);
         assert!(next_session.declarations.contains_key(&declaration_id_1));
         assert!(!next_session.declarations.contains_key(&declaration_id_2));
 
-        // Jump to block 20 (start of session 2)
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Jump to block 21 (start of session 2 because k=1)
+        for _ in 12..=21 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 20);
+        assert_eq!(sdp_ledger.block_number, 21);
 
-        // Active session 2 has declaration_1 (from block 9)
+        // Active session 2 has declaration_1 (from block 10)
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();
         assert_eq!(active_session.session_n, 2);
         assert!(active_session.declarations.contains_key(&declaration_id_1));
         assert!(!active_session.declarations.contains_key(&declaration_id_2));
 
-        // Next session 3 has both declarations (snapshot from block 20)
+        // Next session 3 has both declarations
         let next_session = sdp_ledger.get_next_session(service_a).unwrap();
         assert_eq!(next_session.session_n, 3);
         assert!(next_session.declarations.contains_key(&declaration_id_1));
         assert!(next_session.declarations.contains_key(&declaration_id_2));
 
-        // Jump to block 30 (start of session 3)
-        for _ in 21..30 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Jump to block 31 (start of session 3 because k=1)
+        for _ in 22..=31 {
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &epoch_state, new_lib_height(&sdp_ledger, K_ONE))
+                .unwrap();
         }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 30);
+        assert_eq!(sdp_ledger.block_number, 31);
 
         // Active session 3 now has both declarations
         let active_session = sdp_ledger.get_active_session(service_a).unwrap();

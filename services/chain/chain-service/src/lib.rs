@@ -197,6 +197,7 @@ pub struct ChainServiceInfo {
 pub struct CryptarchiaInfo {
     pub lib: HeaderId,
     pub lib_slot: Slot,
+    pub lib_height: u64,
     pub tip: HeaderId,
     pub slot: Slot,
     pub height: u64,
@@ -322,6 +323,7 @@ impl Cryptarchia {
         CryptarchiaInfo {
             lib: lib_branch.id(),
             lib_slot: lib_branch.slot(),
+            lib_height: lib_branch.length(),
             tip: tip_branch.id(),
             slot: tip_branch.slot(),
             height: tip_branch.length(),
@@ -370,24 +372,9 @@ impl Cryptarchia {
             });
         }
 
-        // A block number of this block if it's applied to the chain.
-        let (_, state, events) = self
-            .ledger
-            .prepare_update::<_, MainnetGasConstants>(
-                id,
-                parent,
-                slot,
-                header.leader_proof(),
-                block.transactions(),
-            )
-            .map_err(|err| match err {
-                lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
-                    parent,
-                    info: Box::new(self.info()),
-                },
-                err => Error::Ledger(err),
-            })?;
-
+        // Clone/update consensus state first to get the new LIB height
+        // before updating ledger.
+        let consensus = self.consensus.clone();
         let (pruned_blocks, reorged_blocks) = self
             .consensus
             .receive_block(id, parent, slot)
@@ -398,12 +385,31 @@ impl Cryptarchia {
                 },
                 err => Error::Consensus(err),
             })?;
+        let new_lib_height = consensus.lib_branch().length();
 
-        self.ledger.commit_update(id, state);
+        let (_, events) = self
+            .ledger
+            .try_update::<_, MainnetGasConstants>(
+                id,
+                parent,
+                slot,
+                header.leader_proof(),
+                block.transactions(),
+                new_lib_height,
+            )
+            .map_err(|err| match err {
+                lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
+                    parent,
+                    info: Box::new(self.info()),
+                },
+                err => Error::Ledger(err),
+            })?;
 
         // Prune the ledger states of all the pruned blocks.
         self.prune_ledger_states(pruned_blocks.all());
 
+        // All operations have succeeded. Commit the new consensus state.
+        self.consensus = consensus;
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
         Ok((pruned_blocks, reorged_blocks, events))

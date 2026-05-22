@@ -133,19 +133,17 @@ where
         }
     }
 
-    /// Prepare adding a new [`LedgerState`] by applying the given proof and
-    /// transactions on top of the parent state.
-    ///
-    /// On success, a new [`LedgerState`] is returned, which can then be
-    /// committed by calling [`Self::commit_update`].
-    pub fn prepare_update<LeaderProof, Constants>(
-        &self,
+    /// Apply the given proof and transactions on top of the parent state.
+    pub fn try_update<LeaderProof, Constants>(
+        &mut self,
         id: Id,
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx<Context = GasPrices>>,
-    ) -> Result<(Id, LedgerState, Events), LedgerError<Id>>
+        // LIB after the given block is applied to Cryptarchia
+        lib: BlockNumber,
+    ) -> Result<(Id, Events), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
@@ -155,17 +153,16 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let (new_state, events) =
-            parent_state
-                .clone()
-                .try_update::<_, _, Constants>(slot, proof, txs, &self.config)?;
+        let (new_state, events) = parent_state.clone().try_update::<_, _, Constants>(
+            slot,
+            proof,
+            txs,
+            lib,
+            &self.config,
+        )?;
+        self.states.insert(id, new_state);
 
-        Ok((id, new_state, events))
-    }
-
-    /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
-    pub fn commit_update(&mut self, id: Id, state: LedgerState) {
-        self.states.insert(id, state);
+        Ok((id, events))
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -220,13 +217,15 @@ impl LedgerState {
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx<Context = GasPrices>>,
+        // LIB after the given block is applied to Cryptarchia
+        lib: BlockNumber,
         config: &Config,
     ) -> Result<(Self, Events), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
     {
-        self.try_apply_header(slot, proof, config)?
+        self.try_apply_header(slot, proof, lib, config)?
             .try_apply_contents::<_, Constants>(config, txs)
     }
 
@@ -237,6 +236,8 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
+        // LIB after the given block is applied to Cryptarchia
+        lib: BlockNumber,
         config: &Config,
     ) -> Result<Self, LedgerError<Id>>
     where
@@ -248,6 +249,7 @@ impl LedgerState {
         let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
+            lib,
             config,
         )?;
 
@@ -889,17 +891,17 @@ mod tests {
         );
 
         let new_id = [1; 32];
-        let (_, state, events) = ledger
-            .prepare_update::<_, MainnetGasConstants>(
+        let (_, events) = ledger
+            .try_update::<_, MainnetGasConstants>(
                 new_id,
                 genesis_id,
                 Slot::from(1u64),
                 &proof,
                 std::iter::once(&tx),
+                0,
             )
             .unwrap();
         assert!(events.is_empty());
-        ledger.commit_update(new_id, state);
 
         // Verify the transaction was applied
         let new_state = ledger.state(&new_id).unwrap();

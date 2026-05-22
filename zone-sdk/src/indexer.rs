@@ -374,6 +374,7 @@ mod tests {
                 cryptarchia_info: CryptarchiaInfo {
                     lib: HeaderId::from([0; 32]),
                     lib_slot: self.lib_slot,
+                    lib_height: 0,
                     tip: HeaderId::from([0; 32]),
                     slot: self.lib_slot,
                     height: 0,

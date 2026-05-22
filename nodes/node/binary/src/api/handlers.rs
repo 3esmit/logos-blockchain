@@ -1501,6 +1501,7 @@ mod tests {
     const TIP_SLOT: u64 = 100_000;
     const LIB_SLOT: u64 = 80_000;
     const HEIGHT: u64 = 500;
+    const LIB_HEIGHT: u64 = 450;
     const DEFAULT_LIMIT: usize = 100;
     const DEFAULT_BATCH_SIZE: usize = 100;
 
@@ -1509,6 +1510,7 @@ mod tests {
             lib: HeaderId::from([2; 32]),
             slot: Slot::new(TIP_SLOT),
             lib_slot: Slot::new(LIB_SLOT),
+            lib_height: LIB_HEIGHT,
             height: HEIGHT,
             tip: HeaderId::from([3; 32]),
         }
@@ -1519,6 +1521,7 @@ mod tests {
             lib: HeaderId::from([2; 32]),
             slot: Slot::new(100),
             lib_slot: Slot::new(0),
+            lib_height: 0,
             height: 1,
             tip: HeaderId::from([3; 32]),
         }

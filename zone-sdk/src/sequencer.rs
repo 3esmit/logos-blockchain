@@ -2154,6 +2154,7 @@ mod tests {
                 cryptarchia_info: CryptarchiaInfo {
                     lib: HeaderId::from([0; 32]),
                     lib_slot: Slot::genesis(),
+                    lib_height: 0,
                     tip: HeaderId::from([0; 32]),
                     slot: Slot::genesis(),
                     height: 0,

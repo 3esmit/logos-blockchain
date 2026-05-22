@@ -17,7 +17,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, Error as BlockError, MAX_BLOCK_TRANSACTIONS},
+    block::{Block, BlockNumber, Error as BlockError, MAX_BLOCK_TRANSACTIONS},
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, Transaction, TxHash, TxSelect,
@@ -404,7 +404,7 @@ where
                 tokio::select! {
                     Some(SlotTick { slot, epoch }) = slot_timer.next() => {
                         trace!("Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
-                        let (tip, tip_state) = match Self::get_tip_ledger_state(&cryptarchia_api).await {
+                        let (tip, tip_state, lib_height) = match Self::get_tip_and_lib(&cryptarchia_api).await {
                             Ok(output) => output,
                             Err(e) => {
                                 error!("Failed to get tip ledger state: {e:?}");
@@ -445,6 +445,9 @@ where
                         winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, &kms_api).await;
 
                        if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
+                            // Simulate the new LIB height by +1, because we already propose a block on top of the tip,
+                            // which always advances LIB by 1.
+                            let new_lib_height = lib_height + 1;
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 parent,
@@ -454,6 +457,7 @@ where
                                 tx_selector.clone(),
                                 &relays,
                                 tip_state,
+                                new_lib_height,
                                 &ledger_config,
                             )
                             .await
@@ -577,6 +581,7 @@ where
             RuntimeServiceId,
         >,
         mut ledger_state: LedgerState,
+        new_lib_height: BlockNumber,
         ledger_config: &lb_ledger::Config,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs_stream = relays
@@ -589,7 +594,12 @@ where
 
         ledger_state = ledger_state
             .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
+            .try_apply_header::<Groth16LeaderProof, HeaderId>(
+                slot,
+                &proof,
+                new_lib_height,
+                ledger_config,
+            )?;
 
         let mut valid_txs = Vec::new();
         let mut invalid_tx_hashes = Vec::new();
@@ -703,7 +713,7 @@ where
         mempool: &MempoolAdapter<Mempool::Item>,
         config: &LeaderWalletConfig,
     ) -> Result<TxHash, Error> {
-        let (tip, ledger_state) = Self::get_tip_ledger_state(cryptarchia).await?;
+        let (tip, ledger_state, _) = Self::get_tip_and_lib(cryptarchia).await?;
 
         let voucher_nullifier = wallet
             .get_claimable_voucher(Some(tip))
@@ -733,14 +743,15 @@ where
         Ok(tx_hash)
     }
 
-    async fn get_tip_ledger_state(
+    async fn get_tip_and_lib(
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
-    ) -> Result<(HeaderId, LedgerState), Error> {
-        let tip = cryptarchia.info().await?.cryptarchia_info.tip;
+    ) -> Result<(HeaderId, LedgerState, BlockNumber), Error> {
+        let info = cryptarchia.info().await?.cryptarchia_info;
+        let (tip, lib_height) = (info.tip, info.lib_height);
         let ledger_state = cryptarchia
             .get_ledger_state(tip)
             .await?
             .ok_or(Error::LedgerStateNotFound(tip))?;
-        Ok((tip, ledger_state))
+        Ok((tip, ledger_state, lib_height))
     }
 }

@@ -6,6 +6,7 @@ pub mod sdp;
 use std::collections::HashMap;
 
 use lb_core::{
+    block::BlockNumber,
     crypto::ZkHasher,
     events::Events,
     mantle::{
@@ -167,10 +168,14 @@ impl LedgerState {
         mut self,
         epoch_state: &EpochState,
         voucher: VoucherCm,
+        // LIB after the given block is applied to Cryptarchia
+        lib: BlockNumber,
         config: &Config,
     ) -> Result<(Self, Vec<Utxo>), Error> {
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
-        let (new_sdp, reward_utxos) = self.sdp.try_apply_header(&config.sdp_config, epoch_state)?;
+        let (new_sdp, reward_utxos) =
+            self.sdp
+                .try_apply_header(&config.sdp_config, epoch_state, lib)?;
         self.sdp = new_sdp;
         Ok((self, reward_utxos))
     }

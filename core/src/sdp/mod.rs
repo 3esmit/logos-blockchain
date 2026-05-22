@@ -42,9 +42,12 @@ pub struct ServiceParameters {
 }
 
 impl ServiceParameters {
+    /// Calculates the current session number based on the current LIB.
+    ///
+    /// We advance sessions only when the new LIB enters a new session.
     #[must_use]
-    pub const fn session_for_block(&self, block_number: BlockNumber) -> SessionNumber {
-        block_number / self.session_duration
+    pub const fn current_session(&self, lib: BlockNumber) -> SessionNumber {
+        lib / self.session_duration
     }
 }
 

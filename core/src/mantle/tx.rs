@@ -1149,7 +1149,7 @@ mod tests {
 
         #[test]
         fn empty_tx_has_no_deps() {
-            let tx = MantleTx(Ops::new());
+            let tx = MantleTx(Ops::new_unchecked(vec![]));
             assert!(tx_consumes(&tx).is_empty());
             assert!(tx_produces(&tx).is_empty());
         }

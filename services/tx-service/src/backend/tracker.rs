@@ -120,16 +120,6 @@ where
     pub fn is_orphan(&self, id: &TxId) -> bool {
         self.orphan_txs.contains_key(id)
     }
-
-    #[expect(dead_code, reason = "available for future test assertions")]
-    pub fn ready_count(&self) -> usize {
-        self.ready_txs.size()
-    }
-
-    #[expect(dead_code, reason = "available for future test assertions")]
-    pub fn orphan_count(&self) -> usize {
-        self.orphan_txs.size()
-    }
 }
 
 pub fn pop<K, V>(map: &mut HashTrieMap<K, V>, key: &K) -> Option<V>

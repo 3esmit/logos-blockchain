@@ -1,5 +1,6 @@
 pub mod adapter;
 mod forks;
+mod history;
 mod inspector;
 pub mod pool;
 mod tracker;

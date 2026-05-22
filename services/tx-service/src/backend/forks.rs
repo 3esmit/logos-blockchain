@@ -4,16 +4,19 @@ use std::{
     pin::pin,
 };
 
-use futures::StreamExt as _;
+use futures::StreamExt;
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, api::ApiError};
 use lb_core::{
     header::HeaderId,
-    mantle::{DependencyId, TxDependencies, TxRewardsRatio, gas::MainnetGasConstants},
+    mantle::{
+        DependencyId, GenesisTx, SignedMantleTx, Transaction, TxDependencies, TxRewardsRatio,
+        gas::MainnetGasConstants,
+    },
 };
 use lb_ledger::LedgerState;
 use tracing::error;
 
-use super::tracker::TxTrackerState;
+use super::{history::TxHistory, tracker::TxTrackerState};
 
 pub struct BlockInfo<Tx> {
     pub parent: HeaderId,
@@ -47,25 +50,34 @@ pub enum ForksTrackerError {
     CryptarchiaApi(#[from] ApiError),
 }
 
+struct BlockState<Tx, TxId>
+where
+    TxId: Eq + Hash,
+{
+    state: TxTrackerState<Tx, TxId>,
+    version: u64,
+}
+
 pub struct ForksTracker<Tx, TxId, Adapter>
 where
     TxId: Eq + Hash,
 {
-    states: HashMap<HeaderId, TxTrackerState<Tx, TxId>>,
-    current_tips: HashMap<HeaderId, TxTrackerState<Tx, TxId>>,
+    block_states: HashMap<HeaderId, BlockState<Tx, TxId>>,
+    tips: HashSet<HeaderId>,
+    mempool_log: TxHistory<Tx, TxId>,
     adapter: Adapter,
 }
 
 impl<Tx, Adapter> ForksTracker<Tx, Tx::Hash, Adapter>
 where
-    Tx: TxDependencies + Clone + Send + Sync,
-    Tx::Hash: Send + Sync,
-    Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send + Sync,
+    Tx: TxDependencies + Clone,
+    Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send,
 {
     pub fn new(adapter: Adapter) -> Self {
         Self {
-            states: HashMap::new(),
-            current_tips: HashMap::new(),
+            block_states: HashMap::new(),
+            tips: HashSet::new(),
+            mempool_log: TxHistory::new(),
             adapter,
         }
     }
@@ -77,11 +89,14 @@ where
     where
         Tx: TxRewardsRatio,
     {
+        if !self.tips.contains(&parent_hint) {
+            return Err(ForksTrackerError::ParentNotFound(parent_hint));
+        }
         let mut txs: Vec<Tx> = self
-            .current_tips
+            .block_states
             .get(&parent_hint)
-            .map(TxTrackerState::get_ready_txs)
-            .ok_or(ForksTrackerError::ParentNotFound(parent_hint))?;
+            .map(|fork| fork.state.get_ready_txs())
+            .ok_or_else(|| ForksTrackerError::ParentNotFound(parent_hint))?;
         let ledger_state: LedgerState = self.adapter.get_ledger_state(parent_hint).await?;
         let utxos = &ledger_state.epoch_state().utxos;
         let gas_prices = ledger_state.get_gas_prices();
@@ -104,29 +119,15 @@ where
         Ok(txs)
     }
 
-    pub fn force_remove_txs(&mut self, txs: &[Tx::Hash]) -> usize {
-        let mut removed = 0;
-        for state in self
-            .states
-            .values_mut()
-            .chain(self.current_tips.values_mut())
-        {
+    pub fn force_remove_txs(&mut self, txs: &[Tx::Hash]) {
+        for fork in self.block_states.values_mut() {
             for tx in txs {
-                if state.force_remove_tx(tx) {
-                    removed += 1;
-                }
+                fork.state.force_remove_tx(tx);
             }
         }
-        removed
-    }
-
-    pub fn get_txs(&self) -> HashMap<Tx::Hash, Tx> {
-        self.current_tips
-            .values()
-            .flat_map(TxTrackerState::<Tx, Tx::Hash>::get_txs)
-            .cloned()
-            .map(|tx| (tx.hash(), tx))
-            .collect()
+        for tx in txs {
+            self.mempool_log.forget_tx(tx);
+        }
     }
 
     pub fn process_lib(&mut self, event: &LibUpdate) {
@@ -140,9 +141,9 @@ where
         } = event;
 
         for block in stale_blocks.iter().chain(immutable_blocks.values()) {
-            // remove lib state
-            drop(self.states.remove(block));
-            drop(self.current_tips.remove(block));
+            self.block_states.remove(block);
+            self.tips.remove(block);
+            self.mempool_log.confirm_block(block);
         }
     }
 
@@ -155,41 +156,76 @@ where
             parent,
             transactions,
         } = self.adapter.get_block(block_id).await?;
-        // Check current_tips first, then states: a fork sibling may have already
-        // moved the shared parent out of current_tips into states.
-        let parent_state = self
-            .current_tips
+
+        let parent_fork = self
+            .block_states
             .get(&parent)
-            .or_else(|| self.states.get(&parent))
             .ok_or(ForksTrackerError::ParentNotFound(parent))?;
-        let mut block_state: TxTrackerState<_, _> = parent_state.clone();
+        let mut block_state: TxTrackerState<_, _> = parent_fork.state.clone();
+        let parent_version = parent_fork.version;
+
+        // Stale-ancestor catch-up: when the parent's snapshot predates some
+        // mempool arrivals, replay the missing suffix against the parent's
+        // frontier deps so the new fork inherits the live mempool view rather
+        // than the frozen one. Current-tip parents already have
+        // parent_version == log.version(), so this is a no-op in the common
+        // chain-extension case.
+        if parent_version < self.mempool_log.version() {
+            let replay_txs = self.mempool_log.txs_since(parent_version);
+            if !replay_txs.is_empty() {
+                let deps = self.adapter.get_ledger_deps(&parent).await?;
+                for tx in replay_txs {
+                    block_state.process_tx(tx, &deps);
+                }
+            }
+        }
+
+        let mut block_tx_hashes = Vec::with_capacity(transactions.len());
         for tx in transactions {
-            block_state.tx_in_block(&tx.hash());
+            let h = tx.hash();
+            block_state.tx_in_block(&h);
+            block_tx_hashes.push(h);
         }
-        // Move parent from tip frontier to historical states, preserving its own
-        // accumulated state (not the child block's). No-op if it was already
-        // moved by a sibling block.
-        if let Some(tip_state) = self.current_tips.remove(&parent) {
-            self.states.insert(parent, tip_state);
-        }
-        self.current_tips.insert(*block_id, block_state);
+        self.mempool_log.record_block(*block_id, block_tx_hashes);
+
+        self.insert_new_tip(block_id, &parent, block_state);
         Ok(())
     }
 
-    #[expect(
-        clippy::needless_collect,
-        reason = "collect releases borrow before mutable access below"
-    )]
-    pub async fn process_new_tx(&mut self, tx: Tx) {
-        let Self { current_tips, .. } = self;
-        let tips_len = current_tips.len();
+    fn insert_new_tip(
+        &mut self,
+        block_id: &HeaderId,
+        parent: &HeaderId,
+        block_state: TxTrackerState<Tx, Tx::Hash>,
+    ) {
+        // Demote the parent off the frontier and promote the new block.
+        // tips.remove is a no-op if a sibling already demoted the parent.
+        self.tips.remove(&parent);
+        self.block_states.insert(
+            *block_id,
+            BlockState {
+                state: block_state,
+                version: self.mempool_log.version(),
+            },
+        );
+        self.tips.insert(*block_id);
+    }
+
+    pub async fn process_new_tx(&mut self, tx: &Tx) {
+        // Record the arrival in the versioned log first so any fork that
+        // emerges later can replay it onto its stale ancestor snapshot.
+        self.mempool_log.record_tx(tx);
+        let new_version = self.mempool_log.version();
+
+        if self.tips.is_empty() {
+            return;
+        }
+        let tips_len = self.tips.len();
+        let tip_ids: Vec<HeaderId> = self.tips.iter().copied().collect();
         let ledger_getter: Adapter = self.adapter.clone();
-        // Collect needed to release the immutable borrow of `current_tips` before
-        // the mutable borrow in the loop below.
-        let header_ids: Vec<_> = current_tips.keys().copied().collect();
         let mut ledger_states = pin!(
             tokio_stream::iter(
-                header_ids
+                tip_ids
                     .into_iter()
                     .zip(std::iter::repeat_with(|| ledger_getter.clone()))
             )
@@ -200,18 +236,26 @@ where
             .buffer_unordered(tips_len)
         );
         while let Some((header_id, ledger_state)) = ledger_states.next().await {
-            let state = current_tips
+            let fork = self
+                .block_states
                 .get_mut(&header_id)
                 .expect("This header at this point is always present");
             match ledger_state {
                 Ok(ledger_state_deps) => {
-                    state.process_tx(tx.clone(), &ledger_state_deps);
+                    fork.state.process_tx(tx.clone(), &ledger_state_deps);
                 }
                 Err(e) => {
                     error!("Error getting ledger state for block {header_id}: {e:?}");
                 }
             }
+            fork.version = new_version;
         }
+    }
+
+    pub fn get_block_state(&self, header_id: &HeaderId) -> Option<TxTrackerState<Tx, Tx::Hash>> {
+        self.block_states
+            .get(header_id)
+            .map(|fork| fork.state.clone())
     }
 }
 
@@ -221,11 +265,16 @@ where
     Tx: TxDependencies + Clone,
     Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send,
 {
-    pub fn get_block_state(&self, header_id: &HeaderId) -> Option<TxTrackerState<Tx, Tx::Hash>> {
-        self.states
-            .get(header_id)
-            .cloned()
-            .or_else(|| self.current_tips.get(header_id).cloned())
+    fn is_tip(&self, id: &HeaderId) -> bool {
+        self.tips.contains(id)
+    }
+
+    fn is_historical(&self, id: &HeaderId) -> bool {
+        self.block_states.contains_key(id) && !self.tips.contains(id)
+    }
+
+    fn tip_count(&self) -> usize {
+        self.tips.len()
     }
 }
 
@@ -245,7 +294,9 @@ mod tests {
     };
     use lb_ledger::LedgerState;
 
-    use super::{BlockInfo, BlockInfoGetter, ForksTracker, ForksTrackerError, LedgerStateGetter};
+    use super::{
+        BlockInfo, BlockInfoGetter, BlockState, ForksTracker, ForksTrackerError, LedgerStateGetter,
+    };
     use crate::backend::tracker::TxTrackerState;
 
     // ── mock transaction ─────────────────────────────────────────────────────
@@ -290,7 +341,6 @@ mod tests {
     /// inside `ForksTracker`.
     #[derive(Clone, Default)]
     struct MockAdapter {
-        #[expect(clippy::type_complexity, reason = "test-only mock type")]
         blocks: Arc<Mutex<HashMap<HeaderId, (HeaderId, Vec<TestTx>)>>>,
     }
 
@@ -379,7 +429,15 @@ mod tests {
         genesis: HeaderId,
     ) {
         let root = id(255);
-        tracker.current_tips.insert(root, TxTrackerState::new());
+        let version = tracker.mempool_log.version();
+        tracker.block_states.insert(
+            root,
+            BlockState {
+                state: TxTrackerState::new(),
+                version,
+            },
+        );
+        tracker.tips.insert(root);
         tracker.adapter.add_block(genesis, root, vec![]);
         tracker
             .process_new_block(&processed_event(genesis))
@@ -389,7 +447,7 @@ mod tests {
 
     /// Apply `tx` to all current tips via the async API.
     async fn broadcast_tx(tracker: &mut ForksTracker<TestTx, TestTxId, MockAdapter>, t: &TestTx) {
-        tracker.process_new_tx(t.clone()).await;
+        tracker.process_new_tx(t).await;
     }
 
     // ── tests ────────────────────────────────────────────────────────────────
@@ -407,33 +465,33 @@ mod tests {
         let mut tracker = ForksTracker::new(adapter);
         seed_genesis(&mut tracker, genesis).await;
 
-        assert_eq!(tracker.current_tips.len(), 1);
-        assert!(tracker.current_tips.contains_key(&genesis));
+        assert_eq!(tracker.tip_count(), 1);
+        assert!(tracker.is_tip(&genesis));
 
         tracker.adapter.add_block(a, genesis, vec![]);
         tracker
             .process_new_block(&processed_event(a))
             .await
             .unwrap();
-        assert_eq!(tracker.current_tips.len(), 1);
-        assert!(tracker.current_tips.contains_key(&a));
-        assert!(tracker.states.contains_key(&genesis));
+        assert_eq!(tracker.tip_count(), 1);
+        assert!(tracker.is_tip(&a));
+        assert!(tracker.is_historical(&genesis));
 
         tracker.adapter.add_block(b, a, vec![]);
         tracker
             .process_new_block(&processed_event(b))
             .await
             .unwrap();
-        assert!(tracker.current_tips.contains_key(&b));
-        assert!(tracker.states.contains_key(&a));
+        assert!(tracker.is_tip(&b));
+        assert!(tracker.is_historical(&a));
 
         tracker.adapter.add_block(c, b, vec![]);
         tracker
             .process_new_block(&processed_event(c))
             .await
             .unwrap();
-        assert!(tracker.current_tips.contains_key(&c));
-        assert!(tracker.states.contains_key(&b));
+        assert!(tracker.is_tip(&c));
+        assert!(tracker.is_historical(&b));
 
         assert!(tracker.get_block_state(&genesis).is_some());
         assert!(tracker.get_block_state(&a).is_some());
@@ -470,12 +528,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(tracker.current_tips.len(), 2);
+        assert_eq!(tracker.tip_count(), 2);
 
         broadcast_tx(&mut tracker, &tx("mempool_tx", vec![], vec!["dep_x"])).await;
 
-        for state in tracker.current_tips.values() {
-            assert!(state.is_ready(&TestTxId("mempool_tx")));
+        for tip in &tracker.tips {
+            let fork = tracker.block_states.get(tip).expect("tip is tracked");
+            assert!(fork.state.is_ready(&TestTxId("mempool_tx")));
         }
     }
 
@@ -581,6 +640,71 @@ mod tests {
         assert!(state_c.is_orphan(&TestTxId("tx_consumer")));
     }
 
+    /// Regression test for the stale-mempool re-org bug.
+    ///
+    /// Scenario:
+    ///     genesis → A → B
+    ///                ↘ C   (sibling fork branching from A)
+    ///
+    /// Timeline:
+    ///   1. A is processed (becomes the current tip).
+    ///   2. Block B (parent A) is processed → A is demoted into `states`.
+    ///   3. A mempool tx arrives while A sits in `states`. `process_new_tx`
+    ///      only updates `current_tips`, so B receives it but A's snapshot does
+    ///      not.
+    ///   4. Block C (parent A, sibling of B) is processed. C clones A's
+    ///      snapshot, which never saw the mempool tx.
+    ///
+    /// Expected: the mempool tx must be ready on C as well — it is still a
+    /// valid pending tx and the fork it lands on is an implementation
+    /// detail. The fork tracker must keep historical states current with the
+    /// mempool so newly-emerging branches inherit them.
+    #[tokio::test]
+    async fn test_mempool_tx_visible_on_fork_branching_from_historical_parent() {
+        let genesis = id(0);
+        let a = id(1);
+        let b = id(2);
+        let c = id(3);
+
+        let adapter = MockAdapter::new();
+        let mut tracker = ForksTracker::new(adapter);
+        seed_genesis(&mut tracker, genesis).await;
+
+        tracker.adapter.add_block(a, genesis, vec![]);
+        tracker
+            .process_new_block(&processed_event(a))
+            .await
+            .unwrap();
+
+        // B becomes the tip; A is demoted into `states`.
+        tracker.adapter.add_block(b, a, vec![]);
+        tracker
+            .process_new_block(&processed_event(b))
+            .await
+            .unwrap();
+        assert!(tracker.is_historical(&a));
+        assert!(tracker.is_tip(&b));
+
+        // Mempool tx arrives while A is no longer on the frontier.
+        let late_tx = tx("late_tx", vec![], vec!["late_dep"]);
+        broadcast_tx(&mut tracker, &late_tx).await;
+
+        // C branches off A — it clones A's (currently stale) snapshot.
+        tracker.adapter.add_block(c, a, vec![]);
+        tracker
+            .process_new_block(&processed_event(c))
+            .await
+            .unwrap();
+
+        let state_b = tracker.get_block_state(&b).unwrap();
+        let state_c = tracker.get_block_state(&c).unwrap();
+
+        // B picked it up directly via process_new_tx.
+        assert!(state_b.is_ready(&TestTxId("late_tx")));
+        // C must also see it — it's still a valid pending mempool tx.
+        assert!(state_c.is_ready(&TestTxId("late_tx")));
+    }
+
     /// LIB update removes pruned block ids from both `states` and
     /// `current_tips`.
     #[tokio::test]
@@ -612,13 +736,13 @@ mod tests {
         // genesis and A are now pruned
         tracker.process_lib(&lib_event(vec![genesis, a]));
 
-        assert!(!tracker.states.contains_key(&genesis));
-        assert!(!tracker.current_tips.contains_key(&genesis));
-        assert!(!tracker.states.contains_key(&a));
-        assert!(!tracker.current_tips.contains_key(&a));
+        assert!(!tracker.is_historical(&genesis));
+        assert!(!tracker.is_tip(&genesis));
+        assert!(!tracker.is_historical(&a));
+        assert!(!tracker.is_tip(&a));
 
-        assert!(tracker.states.contains_key(&b));
-        assert!(tracker.current_tips.contains_key(&c));
+        assert!(tracker.is_historical(&b));
+        assert!(tracker.is_tip(&c));
     }
 
     /// LIB update with a stale fork tip removes that tip from `current_tips`
@@ -649,12 +773,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(tracker.current_tips.len(), 2);
+        assert_eq!(tracker.tip_count(), 2);
 
         tracker.process_lib(&lib_event(vec![d]));
 
-        assert!(!tracker.current_tips.contains_key(&d));
-        assert!(tracker.current_tips.contains_key(&b));
+        assert!(!tracker.is_tip(&d));
+        assert!(tracker.is_tip(&b));
     }
 
     /// Processing a block whose parent is not known returns `ParentNotFound`.
@@ -673,7 +797,7 @@ mod tests {
     #[tokio::test]
     async fn test_block_getter_failure_propagates() {
         let unknown = id(99);
-        let _getter = MockAdapter::new(); // empty — will return BlockNotFound
+        let getter = MockAdapter::new(); // empty — will return BlockNotFound
 
         let mut tracker = ForksTracker::new(MockAdapter::new());
 

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, hash::Hash};
+use std::{collections::HashSet, hash::Hash, sync::Arc};
 
 use lb_core::mantle::{DependencyId, TxDependencies};
 use rpds::{HashTrieMapSync as HashTrieMap, HashTrieSetSync as HashTrieSet};
@@ -8,8 +8,8 @@ pub struct TxTrackerState<Tx, TxId>
 where
     TxId: Eq + Hash,
 {
-    ready_txs: HashTrieMap<TxId, Tx>,
-    orphan_txs: HashTrieMap<TxId, Tx>,
+    ready_txs: HashTrieMap<TxId, Arc<Tx>>,
+    orphan_txs: HashTrieMap<TxId, Arc<Tx>>,
     dep_to_tx: HashTrieMap<DependencyId, HashTrieSet<TxId>>,
     tx_pending_count: HashTrieMap<TxId, usize>,
 }
@@ -37,7 +37,10 @@ where
     }
 
     pub fn get_txs(&self) -> impl Iterator<Item = &Tx> + '_ {
-        self.ready_txs.values().chain(self.orphan_txs.values())
+        self.ready_txs
+            .values()
+            .chain(self.orphan_txs.values())
+            .map(Arc::as_ref)
     }
 }
 
@@ -45,7 +48,7 @@ impl<Tx> TxTrackerState<Tx, Tx::Hash>
 where
     Tx: TxDependencies + Clone,
 {
-    pub fn process_tx(&mut self, tx: Tx, frontier_deps: &HashSet<DependencyId>) {
+    pub fn process_tx(&mut self, tx: Arc<Tx>, frontier_deps: &HashSet<DependencyId>) {
         let consumes: HashSet<DependencyId> = tx.consumes().collect();
         let missing_deps: HashSet<DependencyId> =
             consumes.difference(frontier_deps).cloned().collect();
@@ -88,7 +91,10 @@ where
     }
 
     pub fn get_ready_txs(&self) -> Vec<Tx> {
-        self.ready_txs.values().cloned().collect()
+        self.ready_txs
+            .values()
+            .map(|tx| Tx::clone(tx))
+            .collect()
     }
 
     pub fn force_remove_tx(&mut self, id: &Tx::Hash) -> bool {
@@ -134,7 +140,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, sync::Arc};
 
     use bytes::Bytes;
     use lb_core::mantle::{DependencyId, Transaction, TransactionHasher, TxDependencies};
@@ -246,7 +252,7 @@ mod tests {
             tx_fund.clone(),
             tx_genesis.clone(),
         ] {
-            tracker.process_tx(t, &frontier);
+            tracker.process_tx(Arc::new(t), &frontier);
         }
 
         assert_eq!(ready_names(&tracker), vec!["tx_genesis"]);

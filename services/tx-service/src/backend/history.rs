@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     hash::Hash,
+    sync::Arc,
 };
 
 use lb_core::{header::HeaderId, mantle::Transaction};
@@ -16,7 +17,7 @@ pub struct TxHistory<Tx, TxId>
 where
     TxId: Eq + Hash,
 {
-    arrivals: BTreeMap<u64, Tx>,
+    arrivals: BTreeMap<u64, Arc<Tx>>,
     tx_index: HashMap<TxId, u64>,
     block_txs: HashMap<HeaderId, Vec<TxId>>,
     next_version: u64,
@@ -55,20 +56,23 @@ impl<Tx> TxHistory<Tx, Tx::Hash>
 where
     Tx: Transaction + Clone,
 {
-    /// Append `tx` and return the version assigned to it.
-    pub fn record_tx(&mut self, tx: &Tx) -> u64 {
+    /// Append `tx` and return the version assigned to it. The caller retains
+    /// its own `Arc<Tx>` for broadcasting; the history just shares the body
+    /// via reference counting.
+    pub fn record_tx(&mut self, tx: Arc<Tx>) -> u64 {
         let version = self.next_version;
         self.next_version += 1;
         self.tx_index.insert(tx.hash(), version);
-        self.arrivals.insert(version, tx.clone());
+        self.arrivals.insert(version, tx);
         version
     }
 
-    /// Arrivals with version `>= from`, in arrival order.
-    pub fn txs_since(&self, from: u64) -> Vec<Tx> {
+    /// Arrivals with version `>= from`, in arrival order. Returns `Arc<Tx>`
+    /// so replay callers pay only refcount bumps, not body clones.
+    pub fn txs_since(&self, from: u64) -> Vec<Arc<Tx>> {
         self.arrivals
             .range(from..)
-            .map(|(_, tx)| tx.clone())
+            .map(|(_, tx)| Arc::clone(tx))
             .collect()
     }
 

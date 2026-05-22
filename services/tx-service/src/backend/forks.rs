@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
     pin::pin,
+    sync::Arc,
 };
 
 use futures::StreamExt as _;
@@ -232,9 +233,12 @@ where
     }
 
     pub async fn process_new_tx(&mut self, tx: &Tx) {
-        // Record the arrival in the versioned log first so any fork that
-        // emerges later can replay it onto its stale ancestor snapshot.
-        self.mempool_log.record_tx(tx);
+        // One full Tx clone at the boundary; everything downstream shares
+        // the body via Arc::clone.
+        let tx: Arc<Tx> = Arc::new(tx.clone());
+        // Record in the versioned log so forks that emerge later can replay
+        // it onto their stale ancestor snapshot.
+        self.mempool_log.record_tx(Arc::clone(&tx));
         let new_version = self.mempool_log.version();
 
         if self.tips.is_empty() {
@@ -263,7 +267,7 @@ where
                 .expect("This header at this point is always present");
             match ledger_state {
                 Ok(ledger_state_deps) => {
-                    fork.state.process_tx(tx.clone(), &ledger_state_deps);
+                    fork.state.process_tx(Arc::clone(&tx), &ledger_state_deps);
                 }
                 Err(e) => {
                     error!("Error getting ledger state for block {header_id}: {e:?}");

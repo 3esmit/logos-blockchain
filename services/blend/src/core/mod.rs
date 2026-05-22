@@ -98,14 +98,12 @@ use crate::{
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
     epoch_info::{
-        ChainApi, EpochEvent, EpochHandler, LeaderInputsMinusQuota, PolEpochInfo,
-        PolInfoProvider as PolInfoProviderTrait,
+        ChainApi, EpochEvent, EpochHandler, PolEpochInfo, PolInfoProvider as PolInfoProviderTrait,
     },
     kms::PreloadKmsService,
     membership::{self, MembershipInfo, ZkInfo},
     message::{NetworkMessage, ProcessedMessage, ServiceMessage},
     session::{CoreSessionInfo, CoreSessionPublicInfo, MaybeEmptyCoreSessionInfo},
-    settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
 pub mod backends;
@@ -230,7 +228,7 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
-    NodeId: Clone + Debug + Send + Eq + Hash + Sync + 'static,
+    NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
@@ -359,17 +357,14 @@ where
                 .expect("Failed to retrieve non-ephemeral signing key from KMS.")
         };
 
-        let membership_stream = MembershipAdapter::new(
-            overwatch_handle
-                .relay::<<MembershipAdapter as membership::Adapter>::Service>()
-                .await
-                .expect("Failed to get relay channel with membership service."),
-            non_ephemeral_signing_key.public_key(),
-            Some(zk_public_key),
-        )
-        .subscribe()
-        .await
-        .expect("Failed to get membership stream from membership service.");
+        let membership_stream =
+            membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
+                overwatch_handle,
+                non_ephemeral_signing_key.public_key(),
+                Some(zk_public_key),
+                blend_config.time.epoch_transition_period_in_slots,
+            )
+            .await;
 
         let sdp_relay = overwatch_handle
             .relay::<SdpService>()
@@ -621,7 +616,6 @@ where
     let (current_membership_info, remaining_session_stream) = Box::pin(
         UninitializedSessionEventStream::new(
             session_stream,
-            FIRST_STREAM_ITEM_READY_TIMEOUT,
             blend_config.time.session_transition_period(),
         )
         .await_first_ready(),
@@ -635,23 +629,11 @@ where
     })
     .expect("The current session info must be available.");
 
-    let (
-        (
-            LeaderInputsMinusQuota {
-                pol_epoch_nonce,
-                pol_ledger_aged,
-                lottery_0,
-                lottery_1,
-            },
-            current_epoch,
-        ),
-        remaining_clock_stream,
-    ) = async {
-        let (clock_tick, remaining_clock_stream) =
-            UninitializedFirstReadyStream::new(clock_stream, Duration::from_secs(5))
-                .first()
-                .await
-                .expect("The clock system must be available.");
+    let ((epoch_state, current_epoch), remaining_clock_stream) = async {
+        let (clock_tick, remaining_clock_stream) = UninitializedFirstReadyStream::new(clock_stream)
+            .first()
+            .await
+            .expect("The clock system must be available.");
         let Some(EpochEvent::NewEpoch(new_epoch_info)) = epoch_handler.tick(clock_tick).await
         else {
             panic!("First poll result of epoch stream should be a `NewEpoch` event.");
@@ -668,11 +650,11 @@ where
 
     let current_public_info = PublicInfo {
         epoch: LeaderInputs {
-            pol_ledger_aged,
-            pol_epoch_nonce,
+            pol_ledger_aged: epoch_state.utxos.root(),
+            pol_epoch_nonce: epoch_state.nonce,
             message_quota: blend_config.session_leadership_quota(),
-            lottery_0,
-            lottery_1,
+            lottery_0: epoch_state.lottery_0,
+            lottery_1: epoch_state.lottery_1,
         },
         session: SessionInfo {
             membership: current_membership_info.public.membership.clone(),
@@ -726,7 +708,7 @@ where
             SessionBlendingTokenCollector::new(
                 &reward::SessionInfo::new(
                     current_membership_info.public.session,
-                    &pol_epoch_nonce,
+                    &epoch_state.nonce,
                     current_membership_info.public.membership.size() as u64,
                     current_membership_info.public.poq_core_public_inputs.quota,
                     blend_config.activity_threshold_sensitivity,
@@ -2105,16 +2087,8 @@ where
     };
 
     match epoch_event {
-        EpochEvent::NewEpoch((
-            LeaderInputsMinusQuota {
-                pol_epoch_nonce,
-                pol_ledger_aged,
-                lottery_0,
-                lottery_1,
-            },
-            new_epoch,
-        )) => {
-            tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {pol_epoch_nonce:?} started");
+        EpochEvent::NewEpoch((epoch_state, new_epoch)) => {
+            tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {:?} started", epoch_state.nonce);
             if new_epoch <= current_epoch {
                 return (current_public_info, current_epoch);
             }
@@ -2123,10 +2097,10 @@ where
             // the crypto processor and backend verifier to this epoch.
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
-                pol_epoch_nonce,
-                pol_ledger_aged,
-                lottery_0,
-                lottery_1,
+                pol_epoch_nonce: epoch_state.nonce,
+                pol_ledger_aged: epoch_state.utxos.root(),
+                lottery_0: epoch_state.lottery_0,
+                lottery_1: epoch_state.lottery_1,
             };
             let new_public_info = PublicInfo {
                 epoch: new_leader_inputs,
@@ -2145,26 +2119,18 @@ where
 
             (current_public_info, current_epoch)
         }
-        EpochEvent::NewEpochAndOldEpochTransitionExpired((
-            LeaderInputsMinusQuota {
-                pol_epoch_nonce,
-                pol_ledger_aged,
-                lottery_0,
-                lottery_1,
-            },
-            new_epoch,
-        )) => {
-            tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {pol_epoch_nonce:?} started and old epoch transition period expired.");
+        EpochEvent::NewEpochAndOldEpochTransitionExpired((epoch_state, new_epoch)) => {
+            tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {:?} started and old epoch transition period expired.", epoch_state.nonce);
             if new_epoch <= current_epoch {
                 return (current_public_info, current_epoch);
             }
 
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
-                pol_epoch_nonce,
-                pol_ledger_aged,
-                lottery_0,
-                lottery_1,
+                pol_epoch_nonce: epoch_state.nonce,
+                pol_ledger_aged: epoch_state.utxos.root(),
+                lottery_0: epoch_state.lottery_0,
+                lottery_1: epoch_state.lottery_1,
             };
             let new_public_inputs = PublicInfo {
                 epoch: new_leader_inputs,

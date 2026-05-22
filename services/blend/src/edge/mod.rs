@@ -57,7 +57,6 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, MembershipInfo, node_id},
     message::{NetworkInfo, NetworkMessage, ServiceMessage},
-    settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -230,18 +229,15 @@ where
                 .expect("non-ephemeral signing key should decode into a valid node id");
 
         // Initialize membership stream for session and core-related public PoQ inputs.
-        let session_stream = MembershipAdapter::new(
-            overwatch_handle
-                .relay::<<MembershipAdapter as membership::Adapter>::Service>()
-                .await
-                .expect("Failed to get relay channel with membership service."),
-            non_ephemeral_signing_key.public_key(),
-            // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
-            None,
-        )
-        .subscribe()
-        .await
-        .expect("Failed to get membership stream from membership service.");
+        let session_stream =
+            membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
+                &overwatch_handle,
+                non_ephemeral_signing_key.public_key(),
+                // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
+                None,
+                settings.time.epoch_transition_period_in_slots,
+            )
+            .await;
 
         // Initialize clock stream for detecting epoch transitions.
         let clock_stream = async {
@@ -294,7 +290,6 @@ where
         run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
             UninitializedSessionEventStream::new(
                 session_stream,
-                FIRST_STREAM_ITEM_READY_TIMEOUT,
                 settings.time.session_transition_period(),
             ),
             clock_stream,

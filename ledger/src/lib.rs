@@ -244,7 +244,15 @@ impl LedgerState {
     {
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
-            .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
+            .try_apply_header::<LeaderProof, Id>(
+                slot,
+                proof,
+                // TODO: threading SDP here because EpochState is currently embedded in
+                // CryptarchiaLedger.
+                // In the future, we will pull EpochState up into LedgerState.
+                &self.mantle_ledger.sdp,
+                config,
+            )?;
         let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
@@ -418,6 +426,9 @@ impl LedgerState {
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
         let cryptarchia_ledger = CryptarchiaLedger::from_utxos(utxos, config, Fr::ZERO);
         let mantle_ledger = MantleLedger::new(config, cryptarchia_ledger.epoch_state());
+        // Seed the genesis epoch-state membership snapshots from the genesis SDP
+        // ledger, which only exists after the mantle ledger is built.
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(mantle_ledger.sdp.clone());
         Self {
             block_number: 0,
             cryptarchia_ledger,
@@ -437,6 +448,9 @@ impl LedgerState {
             cryptarchia_ledger.latest_utxos(),
             cryptarchia_ledger.epoch_state(),
         )?;
+        // Seed the genesis epoch-state membership snapshots from the genesis SDP
+        // ledger (which carries the genesis declarations applied above).
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(mantle_ledger.sdp.clone());
         Ok((
             Self {
                 block_number: 0,
@@ -474,7 +488,8 @@ impl LedgerState {
         slot: Slot,
         config: &Config,
     ) -> Result<EpochState, LedgerError<Id>> {
-        self.cryptarchia_ledger.epoch_state_for_slot(slot, config)
+        self.cryptarchia_ledger
+            .epoch_state_for_slot(slot, &self.mantle_ledger.sdp, config)
     }
 
     #[must_use]
@@ -764,6 +779,18 @@ mod tests {
         let genesis_state = LedgerState::from_utxos([utxo], &config);
         let ledger = Ledger::new([0; 32], genesis_state, config);
         (ledger, [0; 32], utxo)
+    }
+
+    /// The genesis epoch-state membership snapshots must be seeded from the
+    /// genesis SDP ledger, not left as the empty `SdpLedger::new` placeholder
+    /// the cryptarchia genesis constructor initializes them with.
+    #[test]
+    fn genesis_seeds_epoch_state_sdp_from_mantle() {
+        let config = config();
+        let ledger = LedgerState::from_utxos([utxo()], &config);
+
+        assert_eq!(ledger.epoch_state().sdp, ledger.mantle_ledger.sdp);
+        assert_eq!(ledger.next_epoch_state().sdp, ledger.mantle_ledger.sdp);
     }
 
     fn create_test_keys_with_seed(seed: u8) -> (Ed25519Key, Ed25519PublicKey) {

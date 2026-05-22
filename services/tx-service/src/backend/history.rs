@@ -96,9 +96,11 @@ where
     }
 
     /// Remove a tx from the log (used for force-remove).
-    pub fn forget_tx(&mut self, tx_id: &Tx::Hash) {
+    pub fn forget_tx(&mut self, tx_id: &Tx::Hash) -> bool {
         if let Some(version) = self.tx_index.remove(tx_id) {
             self.arrivals.remove(&version);
+            return true;
         }
+        false
     }
 }

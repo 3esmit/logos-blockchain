@@ -4,14 +4,11 @@ use std::{
     pin::pin,
 };
 
-use futures::StreamExt;
+use futures::StreamExt as _;
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, api::ApiError};
 use lb_core::{
     header::HeaderId,
-    mantle::{
-        DependencyId, GenesisTx, SignedMantleTx, Transaction, TxDependencies, TxRewardsRatio,
-        gas::MainnetGasConstants,
-    },
+    mantle::{DependencyId, TxDependencies, TxRewardsRatio, gas::MainnetGasConstants},
 };
 use lb_ledger::LedgerState;
 use tracing::error;
@@ -70,8 +67,9 @@ where
 
 impl<Tx, Adapter> ForksTracker<Tx, Tx::Hash, Adapter>
 where
-    Tx: TxDependencies + Clone,
-    Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send,
+    Tx: TxDependencies + Clone + Send + Sync,
+    Tx::Hash: Send + Sync,
+    Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send + Sync,
 {
     pub fn new(adapter: Adapter) -> Self {
         Self {
@@ -96,7 +94,7 @@ where
             .block_states
             .get(&parent_hint)
             .map(|fork| fork.state.get_ready_txs())
-            .ok_or_else(|| ForksTrackerError::ParentNotFound(parent_hint))?;
+            .ok_or(ForksTrackerError::ParentNotFound(parent_hint))?;
         let ledger_state: LedgerState = self.adapter.get_ledger_state(parent_hint).await?;
         let utxos = &ledger_state.epoch_state().utxos;
         let gas_prices = ledger_state.get_gas_prices();
@@ -119,15 +117,36 @@ where
         Ok(txs)
     }
 
-    pub fn force_remove_txs(&mut self, txs: &[Tx::Hash]) {
+    pub fn force_remove_txs(&mut self, txs: &[Tx::Hash]) -> usize {
+        let mut removed = 0;
         for fork in self.block_states.values_mut() {
             for tx in txs {
                 fork.state.force_remove_tx(tx);
             }
         }
         for tx in txs {
-            self.mempool_log.forget_tx(tx);
+            if self.mempool_log.forget_tx(tx) {
+                removed += 1;
+            }
         }
+        removed
+    }
+
+    pub fn get_txs(&self) -> HashMap<Tx::Hash, Tx> {
+        self.tips
+            .iter()
+            .flat_map(|header_id| {
+                TxTrackerState::<Tx, Tx::Hash>::get_txs(
+                    &self
+                        .block_states
+                        .get(header_id)
+                        .expect("Tip state should always be present")
+                        .state,
+                )
+            })
+            .cloned()
+            .map(|tx| (tx.hash(), tx))
+            .collect()
     }
 
     pub fn process_lib(&mut self, event: &LibUpdate) {
@@ -144,6 +163,7 @@ where
             self.block_states.remove(block);
             self.tips.remove(block);
             self.mempool_log.confirm_block(block);
+            self.mempool_log.forget_block(block);
         }
     }
 
@@ -200,7 +220,7 @@ where
     ) {
         // Demote the parent off the frontier and promote the new block.
         // tips.remove is a no-op if a sibling already demoted the parent.
-        self.tips.remove(&parent);
+        self.tips.remove(parent);
         self.block_states.insert(
             *block_id,
             BlockState {
@@ -221,12 +241,13 @@ where
             return;
         }
         let tips_len = self.tips.len();
-        let tip_ids: Vec<HeaderId> = self.tips.iter().copied().collect();
+
         let ledger_getter: Adapter = self.adapter.clone();
         let mut ledger_states = pin!(
             tokio_stream::iter(
-                tip_ids
-                    .into_iter()
+                self.tips
+                    .iter()
+                    .copied()
                     .zip(std::iter::repeat_with(|| ledger_getter.clone()))
             )
             .map(async |(header_id, ledger_getter)| {
@@ -251,12 +272,6 @@ where
             fork.version = new_version;
         }
     }
-
-    pub fn get_block_state(&self, header_id: &HeaderId) -> Option<TxTrackerState<Tx, Tx::Hash>> {
-        self.block_states
-            .get(header_id)
-            .map(|fork| fork.state.clone())
-    }
 }
 
 #[cfg(test)]
@@ -275,6 +290,12 @@ where
 
     fn tip_count(&self) -> usize {
         self.tips.len()
+    }
+
+    pub fn get_block_state(&self, header_id: &HeaderId) -> Option<TxTrackerState<Tx, Tx::Hash>> {
+        self.block_states
+            .get(header_id)
+            .map(|fork| fork.state.clone())
     }
 }
 
@@ -339,6 +360,7 @@ mod tests {
     /// Adapter backed by a shared block store. Cloning shares the same store,
     /// so blocks registered on the original are visible through the clone held
     /// inside `ForksTracker`.
+    #[expect(clippy::type_complexity, reason = "Just for testing purposes")]
     #[derive(Clone, Default)]
     struct MockAdapter {
         blocks: Arc<Mutex<HashMap<HeaderId, (HeaderId, Vec<TestTx>)>>>,
@@ -797,7 +819,7 @@ mod tests {
     #[tokio::test]
     async fn test_block_getter_failure_propagates() {
         let unknown = id(99);
-        let getter = MockAdapter::new(); // empty — will return BlockNotFound
+        let _getter = MockAdapter::new(); // empty — will return BlockNotFound
 
         let mut tracker = ForksTracker::new(MockAdapter::new());
 

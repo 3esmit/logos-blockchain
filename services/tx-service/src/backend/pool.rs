@@ -92,7 +92,7 @@ where
 
     async fn add_item<I: Into<Self::Tx> + Send>(&mut self, item: I) -> Result<(), MempoolError> {
         self.last_item_timestamp = current_timestamp_millis();
-        self.forks_tracker.process_new_tx(item.into()).await;
+        self.forks_tracker.process_new_tx(&item.into()).await;
         mempool_transactions_added();
         Ok(())
     }

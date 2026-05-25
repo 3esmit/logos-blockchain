@@ -10,6 +10,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt as _, stream};
 use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
+use lb_log_targets::storage;
 use rocksdb::WriteBatch;
 
 use crate::{
@@ -27,6 +28,7 @@ const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
 const BLOCK_PARENT_PREFIX: &str = "block_parent/";
 const BLOCK_SDP_DECLARATIONS_PREFIX: &str = "block_sdp/";
 const BLOCK_EVENTS_PREFIX: &str = "block_events/";
+const LOG_TARGET: &str = storage::rocksdb::CHAIN;
 
 #[async_trait]
 impl StorageChainApi for RocksBackend {
@@ -237,11 +239,12 @@ impl StorageChainApi for RocksBackend {
                     match backend.load(&key).await {
                         Ok(Some(tx)) => Some(tx),
                         Ok(None) => {
-                            tracing::debug!("Transaction not found: {tx_hash:?}");
+                            tracing::debug!(target: LOG_TARGET, "Transaction not found: {tx_hash:?}");
                             None
                         }
                         Err(e) => {
                             tracing::error!(
+                                target: LOG_TARGET,
                                 "Database error loading transaction {tx_hash:?}: {e:?}",
                             );
                             None

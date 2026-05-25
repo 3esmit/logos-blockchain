@@ -29,10 +29,7 @@ use lb_blend::{
             SessionBlendingTokenCollector,
         },
     },
-    proofs::quota::inputs::prove::{
-        private::ProofOfLeadershipQuotaInputs,
-        public::{CoreInputs, LeaderInputs},
-    },
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
     scheduling::{
         SessionMessageScheduler,
         message_blend::{
@@ -888,7 +885,8 @@ where
     let mut old_session_message_scheduler: Option<
         OldSessionMessageScheduler<Rng, ProcessedMessage<NetAdapter::BroadcastSettings>>,
     > = None;
-    let mut current_secret_pol_info: Option<ProofOfLeadershipQuotaInputs> = None;
+    let mut current_pol_info: Option<PolEpochInfo> = None;
+    let mut current_membership_epoch: Option<Epoch> = Some(epoch);
 
     loop {
         tokio::select! {
@@ -929,14 +927,18 @@ where
                 (public_info, epoch) = handle_clock_event(clock_tick, blend_config, epoch_handler, &mut crypto_processor, public_info, epoch).await;
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
-                if let Some(new_leader_inputs) = handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor, epoch) {
-                    epoch = pol_info.epoch;
-                    public_info.epoch = new_leader_inputs;
-                }
-                current_secret_pol_info = Some(pol_info.poq_private_inputs);
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    current_epoch = ?epoch,
+                    pol_epoch = ?pol_info.epoch,
+                    slot = ?pol_info.poq_public_inputs.slot,
+                    "Received new secret PoL info",
+                );
+                current_pol_info = Some(pol_info);
+                try_rebuild_leader_gen(blend_config, &mut crypto_processor, current_pol_info.as_ref(), current_membership_epoch);
             }
             Some(session_event) = remaining_session_stream.next() => {
-                match handle_session_event(session_event, blend_config, crypto_processor, message_scheduler, public_info, recovery_checkpoint, backend, sdp_relay, epoch, current_secret_pol_info.as_ref()).await {
+                match handle_session_event(session_event, blend_config, crypto_processor, message_scheduler, public_info, recovery_checkpoint, backend, sdp_relay, epoch).await {
                     HandleSessionEventOutput::Transitioning { new_crypto_processor, old_crypto_processor, new_scheduler, old_scheduler, new_public_info, new_recovery_checkpoint } => {
                         crypto_processor = new_crypto_processor;
                         old_session_crypto_processor = Some(old_crypto_processor);
@@ -944,6 +946,8 @@ where
                         old_session_message_scheduler = Some(old_scheduler);
                         public_info = new_public_info;
                         recovery_checkpoint = new_recovery_checkpoint;
+                        current_membership_epoch = Some(epoch);
+                        try_rebuild_leader_gen(blend_config, &mut crypto_processor, current_pol_info.as_ref(), current_membership_epoch);
                     },
                     HandleSessionEventOutput::TransitionCompleted { current_crypto_processor, current_scheduler, current_public_info, new_recovery_checkpoint } => {
                         crypto_processor = current_crypto_processor;
@@ -952,6 +956,8 @@ where
                         old_session_message_scheduler = None;
                         public_info = current_public_info;
                         recovery_checkpoint = new_recovery_checkpoint;
+                        current_membership_epoch = Some(epoch);
+                        try_rebuild_leader_gen(blend_config, &mut crypto_processor, current_pol_info.as_ref(), current_membership_epoch);
                     },
                     HandleSessionEventOutput::Retiring { old_crypto_processor, old_scheduler, old_token_collector, old_public_info } => {
                         tracing::info!(target: LOG_TARGET, "Exiting from the main event loop");
@@ -1093,7 +1099,6 @@ async fn handle_session_event<
     backend: &mut Backend,
     sdp_relay: &OutboundRelay<SdpMessage>,
     current_epoch: Epoch,
-    current_secret_info: Option<&ProofOfLeadershipQuotaInputs>,
 ) -> HandleSessionEventOutput<
     NodeId,
     Rng,
@@ -1176,16 +1181,7 @@ where
                 core_poq_generator,
                 current_epoch,
             ) {
-                Ok(mut new_processor) => {
-                    if let Some(current_secret_info) = current_secret_info {
-                        new_processor.set_epoch_private(
-                            current_secret_info.clone(),
-                            current_public_info.epoch,
-                            current_epoch,
-                        );
-                    }
-                    new_processor
-                }
+                Ok(new_processor) => new_processor,
                 Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
                     tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
                     return HandleSessionEventOutput::Retiring {
@@ -2093,8 +2089,7 @@ where
                 return (current_public_info, current_epoch);
             }
 
-            // Only rotate if the PoL info handler hasn't already advanced
-            // the crypto processor and backend verifier to this epoch.
+            // Advance the event-loop's public state for the new epoch.
             let new_leader_inputs = LeaderInputs {
                 message_quota: settings.session_leadership_quota(),
                 pol_epoch_nonce: epoch_state.nonce,
@@ -2106,10 +2101,6 @@ where
                 epoch: new_leader_inputs,
                 ..current_public_info
             };
-
-            // Only rotate if the PoL info handler hasn't already advanced
-            // the crypto processor and backend verifier to this epoch.
-            cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
 
             (new_public_info, new_epoch)
         }
@@ -2137,25 +2128,16 @@ where
                 ..current_public_info
             };
 
-            // Complete the previous epoch's transition first, then rotate to
-            // the new epoch (only if the PoL info handler hasn't already
-            // advanced the crypto processor and backend verifier to this epoch).
+            // Complete the previous epoch's old-session transition cleanup.
             cryptographic_processor.complete_epoch_transition();
-            cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
 
             (new_public_inputs, new_epoch)
         }
     }
 }
 
-/// Handle the availability of new secret `PoL` info by updating the
-/// cryptographic processor.
-///
-/// If the secret info is for a new epoch that the clock handler hasn't
-/// processed yet, the core proof generator and verifier are updated first
-/// via [`CoreCryptographicProcessor::rotate_epoch`]. Then the leadership
-/// proof generator is set with the received private inputs.
-fn handle_new_secret_epoch_info<
+/// Rebuilds the leadership `PoQ` generator on the cryptographic processor
+fn try_rebuild_leader_gen<
     NodeId,
     ProofsGenerator,
     BackendSettings,
@@ -2163,50 +2145,47 @@ fn handle_new_secret_epoch_info<
     CorePoQGenerator,
 >(
     settings: &RunningBlendConfig<BackendSettings>,
-    new_pol_info: &PolEpochInfo,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
         ProofsVerifier,
     >,
-    current_epoch: Epoch,
-) -> Option<LeaderInputs>
-where
+    current_pol_info: Option<&PolEpochInfo>,
+    current_membership_epoch: Option<Epoch>,
+) where
     BackendSettings: Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    tracing::debug!(
-        target: LOG_TARGET,
-        current_epoch = ?current_epoch,
-        slot = ?new_pol_info.poq_public_inputs.slot,
-        "Received new secret PoL info; updating cryptographic processor"
-    );
-    let new_leader_inputs = LeaderInputs {
-        pol_ledger_aged: new_pol_info.poq_public_inputs.aged_root,
-        pol_epoch_nonce: new_pol_info.poq_public_inputs.epoch_nonce,
-        message_quota: settings.session_leadership_quota(),
-        lottery_0: new_pol_info.poq_public_inputs.lottery_0,
-        lottery_1: new_pol_info.poq_public_inputs.lottery_1,
+    let Some(pol_info) = current_pol_info else {
+        tracing::warn!(
+            target: LOG_TARGET,
+            ?current_membership_epoch,
+            "Skipping leader gen rebuild: no buffered PoL info yet"
+        );
+        return;
     };
-
-    cryptographic_processor.set_epoch_private(
-        new_pol_info.poq_private_inputs.clone(),
-        new_leader_inputs,
-        new_pol_info.epoch,
-    );
-
-    // If we've already processed the public epoch inputs, do not return anything.
-    if new_pol_info.epoch <= current_epoch {
-        return None;
+    if current_membership_epoch != Some(pol_info.epoch) {
+        tracing::warn!(
+            target: LOG_TARGET,
+            ?current_membership_epoch,
+            pol_epoch = ?pol_info.epoch,
+            "Skipping leader gen rebuild: membership and PoL epochs misaligned"
+        );
+        return;
     }
-
-    // If the secret info is for a new epoch not yet seen via the clock
-    // handler, update the core proof generator and proof verifier first.
-    cryptographic_processor.rotate_epoch(new_leader_inputs, new_pol_info.epoch);
-
-    Some(new_leader_inputs)
+    cryptographic_processor.set_epoch_private(
+        pol_info.poq_private_inputs.clone(),
+        LeaderInputs {
+            pol_ledger_aged: pol_info.poq_public_inputs.aged_root,
+            pol_epoch_nonce: pol_info.poq_public_inputs.epoch_nonce,
+            message_quota: settings.session_leadership_quota(),
+            lottery_0: pol_info.poq_public_inputs.lottery_0,
+            lottery_1: pol_info.poq_public_inputs.lottery_1,
+        },
+        pol_info.epoch,
+    );
 }
 
 /// Submits an activity proof to the SDP service.

@@ -21,11 +21,14 @@ use lb_core::{
     sdp::{Declaration, DeclarationMessage, Locator, NumberOfEpochs, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
-use lb_node::config::RunConfig;
+use lb_node::config::{
+    RunConfig, blend::deployment::MinimumNetworkSize, cryptarchia::deployment::EpochConfig,
+};
 use lb_testing_framework::{
     DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
 };
+use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::common::{
     chain::wait_for_transactions_inclusion,
     manual_cluster::{
@@ -462,15 +465,22 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
         .service
         .bootstrap
         .prolonged_bootstrap_period = Duration::ZERO;
-    config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
-    config
+    config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
+    config.deployment.cryptarchia.epoch_config = EpochConfig {
+        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+        epoch_period_nonce_buffer: 1.try_into().unwrap(),
+        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+    };
+    config.deployment.cryptarchia.slot_activation_coeff =
+        NonNegativeRatio::new(1, 2.try_into().unwrap());
+    let blend_params = config
         .deployment
         .cryptarchia
         .sdp_config
         .service_params
         .get_mut(&ServiceType::BlendNetwork)
-        .expect("blend network params should exist")
-        .lock_period = LOCK_PERIOD;
+        .expect("blend network params should exist");
+    blend_params.lock_period = LOCK_PERIOD;
     config
 }
 

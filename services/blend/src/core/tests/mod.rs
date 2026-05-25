@@ -22,8 +22,8 @@ use crate::{
     core::{
         HandleSessionEventOutput,
         backends::BlendBackend,
-        handle_clock_event, handle_incoming_blend_message, handle_new_secret_epoch_info,
-        handle_session_event, handle_session_transition_expired, initialize, post_initialize,
+        handle_clock_event, handle_incoming_blend_message, handle_session_event,
+        handle_session_transition_expired, initialize, post_initialize,
         retire, run_event_loop,
         state::ServiceState,
         tests::utils::{
@@ -33,7 +33,7 @@ use crate::{
             scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
         },
     },
-    epoch_info::{EpochHandler, PolEpochInfo},
+    epoch_info::EpochHandler,
     membership::{MembershipInfo, ZkInfo},
     message::NetworkMessage,
     session::{CoreSessionInfo, CoreSessionPublicInfo},
@@ -481,7 +481,6 @@ async fn test_handle_session_event() {
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
-        None,
     )
     .await;
     let HandleSessionEventOutput::Transitioning {
@@ -528,7 +527,6 @@ async fn test_handle_session_event() {
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
-        None,
     )
     .await;
     let HandleSessionEventOutput::TransitionCompleted {
@@ -580,7 +578,6 @@ async fn test_handle_session_event() {
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
-        None,
     )
     .await;
     let HandleSessionEventOutput::Retiring {
@@ -650,7 +647,6 @@ async fn test_handle_session_event_empty_session_retires() {
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
-        None,
     )
     .await;
     let HandleSessionEventOutput::Retiring {
@@ -727,7 +723,6 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
-        None,
     )
     .await;
 
@@ -1501,84 +1496,6 @@ async fn test_handle_clock_event_new_epoch() {
     // this triggers NewEpochAndOldEpochTransitionExpired which both completes the
     // old transition and rotates to epoch 2.
     assert_eq!(final_info.session.session_number, session);
-}
-
-/// Verify that `handle_new_secret_epoch_info` returns updated leader inputs
-/// when the `PoL` info epoch is newer than the current epoch, and returns
-/// `None` when the epoch has already been processed.
-#[test_log::test(tokio::test)]
-async fn test_handle_new_secret_epoch_info() {
-    let minimal_network_size = 1;
-    let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
-        local_private_key,
-        u64::from(minimal_network_size).try_into().unwrap(),
-        (),
-        0,
-    );
-    let session = 0;
-    let public_info = new_public_info(session, membership, &settings);
-    let mut processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
-        },
-        &public_info,
-        (),
-    );
-
-    let current_epoch = Epoch::new(0);
-
-    // PoL info for a new epoch (epoch 1 > current 0): should return Some.
-    let pol_info = PolEpochInfo {
-        epoch: Epoch::new(1),
-        poq_public_inputs: lb_core::proofs::leader_proof::LeaderPublic {
-            slot: 1,
-            latest_root: lb_groth16::Fr::ZERO,
-            lottery_0: lb_groth16::Fr::ONE,
-            lottery_1: lb_groth16::Fr::ONE,
-            epoch_nonce: ZkHash::ONE,
-            aged_root: ZkHash::ONE,
-        },
-        poq_private_inputs:
-            lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs {
-                slot: 1,
-                note_value: 1,
-                transaction_hash: ZkHash::ZERO,
-                output_number: 1,
-                aged_path_and_selectors: [(ZkHash::ZERO, false); _],
-                secret_key: ZkHash::ZERO,
-            },
-    };
-    let result = handle_new_secret_epoch_info(&settings, &pol_info, &mut processor, current_epoch);
-    assert!(
-        result.is_some(),
-        "Should return Some(LeaderInputs) when PoL epoch > current epoch"
-    );
-    let new_leader = result.unwrap();
-    assert_eq!(new_leader.pol_epoch_nonce, ZkHash::ONE);
-    assert_eq!(new_leader.pol_ledger_aged, ZkHash::ONE);
-
-    // PoL info for the same epoch (epoch 1 == current 1): should return None.
-    let already_processed_epoch = Epoch::new(1);
-    let result = handle_new_secret_epoch_info(
-        &settings,
-        &pol_info,
-        &mut processor,
-        already_processed_epoch,
-    );
-    assert!(
-        result.is_none(),
-        "Should return None when PoL epoch <= current epoch"
-    );
-
-    // PoL info for an older epoch: should return None.
-    let future_epoch = Epoch::new(5);
-    let result = handle_new_secret_epoch_info(&settings, &pol_info, &mut processor, future_epoch);
-    assert!(
-        result.is_none(),
-        "Should return None when PoL epoch < current epoch"
-    );
 }
 
 /// When `initialize` receives a `last_saved_state` whose session matches the

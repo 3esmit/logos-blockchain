@@ -905,21 +905,10 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(ConsensusMsg::GetSdpDeclarations {
-            reply_channel: sender,
-        })
-        .await
-        .map_err(|(e, _)| e)?;
-
-    let declarations = receiver
-        .await?
-        .into_iter()
-        .map(|(_, declaration)| declaration)
-        .collect();
-
-    Ok(declarations)
+    let ledger_state = cryptarchia_ledger_state(handle).await?;
+    Ok(ledger_state
+        .sdp_declarations()
+        .iter()
+        .flat_map(|(_, inner)| inner.values().cloned())
+        .collect())
 }

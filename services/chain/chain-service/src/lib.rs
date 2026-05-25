@@ -31,7 +31,7 @@ use lb_core::{
         AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
         tx::GasPrices,
     },
-    sdp::{Declaration, DeclarationId, Declarations, ServiceType},
+    sdp::{Declarations, ServiceType},
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
@@ -130,9 +130,6 @@ pub enum ConsensusMsg<Tx> {
     GetLedgerState {
         block_id: HeaderId,
         reply_channel: oneshot::Sender<Option<LedgerState>>,
-    },
-    GetSdpDeclarations {
-        reply_channel: oneshot::Sender<Vec<(DeclarationId, Declaration)>>,
     },
     GetEpochState {
         slot: Slot,
@@ -785,7 +782,7 @@ where
                                 });
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &sdp_snapshot, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
+                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
                             }
                         }
                     }
@@ -883,7 +880,6 @@ where
 
     async fn process_message(
         cryptarchia: &Cryptarchia,
-        sdp_snapshot: &Declarations,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
         chain_online_notifier: &ChainOnlineNotifier,
@@ -930,19 +926,6 @@ where
                 let ledger_state = cryptarchia.ledger.state(&block_id).cloned();
                 reply_channel.send(ledger_state).unwrap_or_else(|_| {
                     error!("Could not send ledger state through channel");
-                });
-            }
-            ConsensusMsg::GetSdpDeclarations { reply_channel } => {
-                let declarations = sdp_snapshot
-                    .iter()
-                    .flat_map(|(_, declarations)| {
-                        declarations
-                            .iter()
-                            .map(|(id, declaration)| (*id, declaration.clone()))
-                    })
-                    .collect();
-                reply_channel.send(declarations).unwrap_or_else(|_| {
-                    error!("Could not send SDP declarations through channel");
                 });
             }
             ConsensusMsg::GetEpochState {

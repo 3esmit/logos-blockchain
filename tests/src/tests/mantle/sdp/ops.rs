@@ -21,9 +21,7 @@ use lb_core::{
     sdp::{Declaration, DeclarationMessage, Locator, NumberOfEpochs, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
-use lb_node::config::{
-    RunConfig, blend::deployment::MinimumNetworkSize, cryptarchia::deployment::EpochConfig,
-};
+use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{
     DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
@@ -32,13 +30,12 @@ use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::common::{
     chain::wait_for_transactions_inclusion,
     manual_cluster::{
-        build_local_manual_cluster, read_manual_node_logs,
+        ManualNodeLayout, read_manual_node_logs, start_local_manual_cluster_with_layout,
         wait_for_height as wait_for_manual_cluster_height, wait_for_tip_slot,
     },
     wallet::{current_wallet_funding_source, fund_builder_from_wallet_source},
 };
-use num_bigint::BigUint;
-use testing_framework_core::scenario::{DynError, StartNodeOptions};
+use testing_framework_core::scenario::DynError;
 use tokio::time::{sleep, timeout};
 
 const LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(3));
@@ -74,6 +71,9 @@ async fn sdp_ops_e2e() {
         spare_note_id,
         lock_period,
         slots_per_epoch,
+        provider_signing_key,
+        provider_zk_key,
+        locator,
     ) = start_sdp_manual_cluster("sdp-ops").await;
 
     let inclusion_timeout = Duration::from_mins(1);
@@ -89,12 +89,7 @@ async fn sdp_ops_e2e() {
         "manual-cluster wallet note must be unused before submitting declare"
     );
 
-    let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
-    let provider_zk_key = ZkKey::from(BigUint::from(7u64));
     let zk_id = provider_zk_key.to_public_key();
-    let locator: Locator = "/ip4/127.0.0.1/tcp/9100"
-        .parse()
-        .expect("Valid locator multiaddr");
 
     let declaration = DeclarationMessage {
         service_type: ServiceType::BlendNetwork,
@@ -366,6 +361,9 @@ async fn start_sdp_manual_cluster(
     NoteId,
     NumberOfEpochs,
     u64,
+    Ed25519Key,
+    ZkKey,
+    Locator,
 ) {
     let slots_per_epoch = Arc::new(AtomicU64::new(0));
     let funding_wallet =
@@ -374,44 +372,33 @@ async fn start_sdp_manual_cluster(
     let spare_wallet =
         WalletAccount::deterministic(1, 100, false).expect("spare locked-note wallet should build");
 
-    let base = build_local_manual_cluster(
+    let (base, mut nodes) = start_local_manual_cluster_with_layout(
         test_name,
         "tf-sdp",
-        DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(1))
+        DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(2).with_blend_core_nodes(1))
             .with_wallet_config(WalletConfig::new(vec![
                 funding_wallet.clone(),
                 spare_wallet.clone(),
             ]))
             .with_test_context(test_name),
-    );
+        2,
+        ManualNodeLayout::SelectNodeSeed(0),
+        {
+            let slots_per_epoch = Arc::clone(&slots_per_epoch);
+            move |config| {
+                let config = patch_sdp_manual_cluster_config(config);
+                slots_per_epoch.store(
+                    config.deployment.cryptarchia.slots_per_epoch(),
+                    Ordering::Relaxed,
+                );
+                Ok::<_, DynError>(config)
+            }
+        },
+    )
+    .await;
 
     let cluster = base.cluster;
-    let node0_persist_dir = base.scenario_base_dir.join("node-0");
-
-    let node0 = cluster
-        .start_node_with(
-            "0",
-            StartNodeOptions::default()
-                .with_persist_dir(node0_persist_dir)
-                .create_patch({
-                    let slots_per_epoch = Arc::clone(&slots_per_epoch);
-                    move |config| {
-                        let config = patch_sdp_manual_cluster_config(config);
-                        slots_per_epoch.store(
-                            config.deployment.cryptarchia.slots_per_epoch(),
-                            Ordering::Relaxed,
-                        );
-                        Ok::<_, DynError>(config)
-                    }
-                }),
-        )
-        .await
-        .expect("starting node-0 should succeed");
-
-    cluster
-        .wait_network_ready()
-        .await
-        .expect("manual cluster should become ready");
+    let node0 = nodes.remove(0);
 
     wait_for_manual_cluster_height(&node0.client, 1, Duration::from_mins(2))
         .await
@@ -430,6 +417,7 @@ async fn start_sdp_manual_cluster(
             base.deployment
                 .config
                 .genesis_block
+                .clone()
                 .expect("manual-cluster deployment should include genesis tx")
                 .genesis_tx()
                 .genesis_transfer(),
@@ -443,6 +431,14 @@ async fn start_sdp_manual_cluster(
         .expect("wallet-backed spare note should exist at genesis")
         .id();
 
+    // Extract node-1's blend signing key, zk key, and listening address.
+    // Node-1 is *not* in genesis as a blend provider (blend_core_nodes=1), so
+    // the test will declare it post-genesis.
+    let (node1_blend_config, node1_signing_key, node1_zk_key) =
+        base.deployment.nodes()[1].general.blend_config.clone();
+    let node1_locator =
+        Locator::new_unchecked(node1_blend_config.core.backend.listening_address.clone());
+
     (
         base.scenario_base_dir,
         cluster,
@@ -454,6 +450,9 @@ async fn start_sdp_manual_cluster(
         spare_note_id,
         LOCK_PERIOD,
         slots_per_epoch.load(Ordering::Relaxed),
+        node1_signing_key,
+        node1_zk_key,
+        node1_locator,
     )
 }
 

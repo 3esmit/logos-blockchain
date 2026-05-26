@@ -23,8 +23,7 @@ use crate::{
         HandleSessionEventOutput,
         backends::BlendBackend,
         handle_clock_event, handle_incoming_blend_message, handle_session_event,
-        handle_session_transition_expired, initialize, post_initialize,
-        retire, run_event_loop,
+        handle_session_transition_expired, initialize, post_initialize, retire, run_event_loop,
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,

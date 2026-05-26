@@ -44,7 +44,6 @@ lb-wallet                        = { workspace = true }
 lb-zksign                        = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 libp2p                           = { workspace = true }
-num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
 rpds                             = { workspace = true }

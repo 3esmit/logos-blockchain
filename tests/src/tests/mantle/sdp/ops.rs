@@ -459,14 +459,14 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
     };
     config.deployment.cryptarchia.slot_activation_coeff =
         NonNegativeRatio::new(1, 2.try_into().unwrap());
-    let blend_params = config
+    config
         .deployment
         .cryptarchia
         .sdp_config
         .service_params
         .get_mut(&ServiceType::BlendNetwork)
-        .expect("blend network params should exist");
-    blend_params.lock_period = LOCK_PERIOD;
+        .expect("blend network params should exist")
+        .lock_period = LOCK_PERIOD;
     config
 }
 

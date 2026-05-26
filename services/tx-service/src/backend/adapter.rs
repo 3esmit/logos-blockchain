@@ -149,11 +149,11 @@ where
         self.storage.store_tx(tx).await
     }
 
-    async fn get_tx(
+    async fn get_txs(
         &self,
         keys: &BTreeSet<<Self::Tx as Transaction>::Hash>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, Self::Error> {
-        self.storage.get_tx(keys).await
+        self.storage.get_txs(keys).await
     }
 
     async fn remove_txs(

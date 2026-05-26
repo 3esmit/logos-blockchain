@@ -59,7 +59,7 @@ where
             })
     }
 
-    async fn get_tx(
+    async fn get_txs(
         &self,
         keys: &BTreeSet<<Self::Tx as Transaction>::Hash>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, Self::Error> {

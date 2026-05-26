@@ -1,13 +1,15 @@
 use std::{
+    collections::HashMap,
     fmt::Debug,
     hash::Hash,
     marker::PhantomData,
     pin::Pin,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
-use futures::{Stream, stream};
+use futures::{Stream, StreamExt as _, stream};
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent};
 use lb_core::{
     header::HeaderId,
@@ -21,7 +23,7 @@ use super::Status;
 use crate::{
     backend::{
         MemPool, MempoolError, RecoverableMempool,
-        forks::{BlockInfoGetter, ForksTracker, LedgerStateGetter},
+        forks::{BlockInfoGetter, ForksTracker, ForksTrackerState, LedgerStateGetter},
     },
     metrics::{mempool_transactions_added, mempool_transactions_removed},
     storage::MempoolStorageAdapter,
@@ -34,10 +36,8 @@ pub struct PoolRecoveryState<Key>
 where
     Key: Hash + Eq + Ord,
 {
-    // pub pending_items: BTreeSet<Key>,
-    // pub removed_items: BTreeMap<Key, u64>,
+    pub forks_state: ForksTrackerState<Key>,
     pub last_item_timestamp: u64,
-    _phantom: PhantomData<Key>,
 }
 
 pub struct Mempool<Tx, TxHash, Adapter, RuntimeServiceId>
@@ -46,7 +46,8 @@ where
 {
     last_item_timestamp: u64,
     forks_tracker: ForksTracker<Tx, TxHash, Adapter>,
-    _phantom: PhantomData<(Adapter, RuntimeServiceId)>,
+    adapter: Adapter,
+    _phantom: PhantomData<RuntimeServiceId>,
 }
 
 impl<Tx, TxHash, Adapter, RuntimeServiceId> Debug for Mempool<Tx, TxHash, Adapter, RuntimeServiceId>
@@ -88,14 +89,20 @@ where
     fn new(_settings: Self::Settings, adapter: Self::Adapter) -> Self {
         Self {
             last_item_timestamp: 0,
+            adapter: adapter.clone(),
             forks_tracker: ForksTracker::new(adapter),
             _phantom: PhantomData,
         }
     }
 
     async fn add_item<I: Into<Self::Tx> + Send>(&mut self, item: I) -> Result<(), MempoolError> {
+        let tx = item.into();
+        self.adapter
+            .store_tx(tx.clone())
+            .await
+            .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
+        self.forks_tracker.process_new_tx(&tx).await;
         self.last_item_timestamp = current_timestamp_millis();
-        self.forks_tracker.process_new_tx(&item.into()).await;
         mempool_transactions_added();
         Ok(())
     }
@@ -181,8 +188,8 @@ where
 
     fn save(&self) -> Self::RecoveryState {
         PoolRecoveryState {
+            forks_state: self.forks_tracker.to_state(),
             last_item_timestamp: self.last_item_timestamp,
-            _phantom: PhantomData,
         }
     }
 
@@ -191,9 +198,22 @@ where
         state: Self::RecoveryState,
         adapter: <Self as MemPool>::Adapter,
     ) -> Self {
+        let recover_txs = state.forks_state.recover_txs();
+        let fetch_adapter = adapter.clone();
+        // not beautiful but we need to collect the txs from storage and the interface
+        // is async
+        let txs: HashMap<Tx::Hash, Arc<Tx>> =
+            tokio::runtime::Handle::current().block_on(async move {
+                let stream = fetch_adapter
+                    .get_txs(&recover_txs)
+                    .await
+                    .unwrap_or_else(|e| panic!("Could not recover txs from storage: {e:?}"));
+                stream.map(|tx| (tx.hash(), Arc::new(tx))).collect().await
+            });
         Self {
             last_item_timestamp: state.last_item_timestamp,
-            forks_tracker: ForksTracker::new(adapter),
+            adapter: adapter.clone(),
+            forks_tracker: ForksTracker::from_state_and_adapter(state.forks_state, &txs, adapter),
             _phantom: PhantomData,
         }
     }

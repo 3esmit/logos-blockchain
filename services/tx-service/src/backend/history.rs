@@ -5,6 +5,18 @@ use std::{
 };
 
 use lb_core::{header::HeaderId, mantle::Transaction};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TxHistoryState<TxId>
+where
+    TxId: Eq + Hash,
+{
+    pub arrivals: BTreeMap<u64, TxId>,
+    tx_index: HashMap<TxId, u64>,
+    block_txs: HashMap<HeaderId, Vec<TxId>>,
+    next_version: u64,
+}
 
 /// Versioned record of mempool arrivals plus the per-block tx-id cache used
 /// to prune them.
@@ -56,6 +68,48 @@ impl<Tx> TxHistory<Tx, Tx::Hash>
 where
     Tx: Transaction + Clone,
 {
+    pub fn to_state(&self) -> TxHistoryState<Tx::Hash> {
+        TxHistoryState {
+            arrivals: self
+                .arrivals
+                .iter()
+                .map(|(&idx, tx)| (idx, tx.hash()))
+                .collect(),
+            tx_index: self.tx_index.clone(),
+            block_txs: self.block_txs.clone(),
+            next_version: self.next_version,
+        }
+    }
+
+    pub fn from_state_and_txs(
+        TxHistoryState {
+            arrivals,
+            tx_index,
+            block_txs,
+            next_version,
+        }: TxHistoryState<Tx::Hash>,
+        txs: &HashMap<Tx::Hash, Arc<Tx>>,
+    ) -> Self {
+        let arrivals: BTreeMap<u64, Arc<Tx>> = arrivals
+            .iter()
+            .map(|(&idx, tx_hash)| {
+                (
+                    idx,
+                    Arc::clone(
+                        txs.get(tx_hash)
+                            .expect("Tx should be present in saved state"),
+                    ),
+                )
+            })
+            .collect();
+        Self {
+            arrivals,
+            tx_index,
+            block_txs,
+            next_version,
+        }
+    }
+
     /// Append `tx` and return the version assigned to it. The caller retains
     /// its own `Arc<Tx>` for broadcasting; the history just shares the body
     /// via reference counting.

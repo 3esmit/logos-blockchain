@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     hash::Hash,
     pin::pin,
     sync::Arc,
@@ -12,9 +12,11 @@ use lb_core::{
     mantle::{DependencyId, TxDependencies, TxRewardsRatio, gas::MainnetGasConstants},
 };
 use lb_ledger::LedgerState;
+use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use super::{history::TxHistory, tracker::TxTrackerState};
+use super::{history::TxHistory, tracker::TxTracker};
+use crate::backend::{history::TxHistoryState, tracker::TxTrackerState};
 
 pub struct BlockInfo<Tx> {
     pub parent: HeaderId,
@@ -48,19 +50,67 @@ pub enum ForksTrackerError {
     CryptarchiaApi(#[from] ApiError),
 }
 
-struct BlockState<Tx, TxId>
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BlockTrackerState<TxId>
 where
     TxId: Eq + Hash,
 {
-    state: TxTrackerState<Tx, TxId>,
+    pub state: TxTrackerState<TxId>,
+    pub version: u64,
+}
+
+struct BlockTracker<Tx, TxId>
+where
+    TxId: Eq + Hash,
+{
+    state: TxTracker<Tx, TxId>,
     version: u64,
+}
+
+impl<Tx, TxId> BlockTracker<Tx, TxId>
+where
+    TxId: Eq + Hash + Clone,
+{
+    pub fn to_state(&self) -> BlockTrackerState<TxId> {
+        BlockTrackerState {
+            state: self.state.to_state(),
+            version: self.version,
+        }
+    }
+
+    pub fn from_state_and_txs(
+        BlockTrackerState { state, version }: BlockTrackerState<TxId>,
+        txs: &HashMap<TxId, Arc<Tx>>,
+    ) -> Self {
+        let state = TxTracker::from_state_and_txs(state, txs);
+        Self { state, version }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ForksTrackerState<TxId>
+where
+    TxId: Eq + Hash,
+{
+    block_states: HashMap<HeaderId, BlockTrackerState<TxId>>,
+    tips: HashSet<HeaderId>,
+    mempool_log: TxHistoryState<TxId>,
+}
+
+impl<TxId> ForksTrackerState<TxId>
+where
+    TxId: Copy + Ord + Eq + Hash,
+{
+    pub fn recover_txs(&self) -> BTreeSet<TxId> {
+        self.mempool_log.arrivals.values().copied().collect()
+    }
 }
 
 pub struct ForksTracker<Tx, TxId, Adapter>
 where
     TxId: Eq + Hash,
 {
-    block_states: HashMap<HeaderId, BlockState<Tx, TxId>>,
+    block_states: HashMap<HeaderId, BlockTracker<Tx, TxId>>,
     tips: HashSet<HeaderId>,
     mempool_log: TxHistory<Tx, TxId>,
     adapter: Adapter,
@@ -69,7 +119,7 @@ where
 impl<Tx, Adapter> ForksTracker<Tx, Tx::Hash, Adapter>
 where
     Tx: TxDependencies + Clone + Send + Sync,
-    Tx::Hash: Send + Sync,
+    Tx::Hash: Clone + Send + Sync,
     Adapter: BlockInfoGetter<Tx> + LedgerStateGetter + Clone + Send + Sync,
 {
     pub fn new(adapter: Adapter) -> Self {
@@ -77,6 +127,40 @@ where
             block_states: HashMap::new(),
             tips: HashSet::new(),
             mempool_log: TxHistory::new(),
+            adapter,
+        }
+    }
+
+    pub fn to_state(&self) -> ForksTrackerState<Tx::Hash> {
+        ForksTrackerState {
+            block_states: self
+                .block_states
+                .iter()
+                .map(|(&header_id, fork)| (header_id, fork.to_state()))
+                .collect(),
+            tips: self.tips.clone(),
+            mempool_log: self.mempool_log.to_state(),
+        }
+    }
+
+    pub fn from_state_and_adapter(
+        ForksTrackerState {
+            block_states,
+            tips,
+            mempool_log,
+        }: ForksTrackerState<Tx::Hash>,
+        txs: &HashMap<Tx::Hash, Arc<Tx>>,
+        adapter: Adapter,
+    ) -> Self {
+        let mempool_log = TxHistory::from_state_and_txs(mempool_log, txs);
+        let block_states = block_states
+            .into_iter()
+            .map(|(header_id, state)| (header_id, BlockTracker::from_state_and_txs(state, txs)))
+            .collect();
+        Self {
+            block_states,
+            tips,
+            mempool_log,
             adapter,
         }
     }
@@ -137,7 +221,7 @@ where
         self.tips
             .iter()
             .flat_map(|header_id| {
-                TxTrackerState::<Tx, Tx::Hash>::get_txs(
+                TxTracker::<Tx, Tx::Hash>::get_txs(
                     &self
                         .block_states
                         .get(header_id)
@@ -182,7 +266,7 @@ where
             .block_states
             .get(&parent)
             .ok_or(ForksTrackerError::ParentNotFound(parent))?;
-        let mut block_state: TxTrackerState<_, _> = parent_fork.state.clone();
+        let mut block_state: TxTracker<_, _> = parent_fork.state.clone();
         let parent_version = parent_fork.version;
 
         // Stale-ancestor catch-up: when the parent's snapshot predates some
@@ -217,14 +301,14 @@ where
         &mut self,
         block_id: &HeaderId,
         parent: &HeaderId,
-        block_state: TxTrackerState<Tx, Tx::Hash>,
+        block_state: TxTracker<Tx, Tx::Hash>,
     ) {
         // Demote the parent off the frontier and promote the new block.
         // tips.remove is a no-op if a sibling already demoted the parent.
         self.tips.remove(parent);
         self.block_states.insert(
             *block_id,
-            BlockState {
+            BlockTracker {
                 state: block_state,
                 version: self.mempool_log.version(),
             },
@@ -296,7 +380,7 @@ where
         self.tips.len()
     }
 
-    pub fn get_block_state(&self, header_id: &HeaderId) -> Option<TxTrackerState<Tx, Tx::Hash>> {
+    pub fn get_block_state(&self, header_id: &HeaderId) -> Option<TxTracker<Tx, Tx::Hash>> {
         self.block_states
             .get(header_id)
             .map(|fork| fork.state.clone())
@@ -320,9 +404,10 @@ mod tests {
     use lb_ledger::LedgerState;
 
     use super::{
-        BlockInfo, BlockInfoGetter, BlockState, ForksTracker, ForksTrackerError, LedgerStateGetter,
+        BlockInfo, BlockInfoGetter, BlockTracker, ForksTracker, ForksTrackerError,
+        LedgerStateGetter,
     };
-    use crate::backend::tracker::TxTrackerState;
+    use crate::backend::tracker::TxTracker;
 
     // ── mock transaction ─────────────────────────────────────────────────────
 
@@ -458,8 +543,8 @@ mod tests {
         let version = tracker.mempool_log.version();
         tracker.block_states.insert(
             root,
-            BlockState {
-                state: TxTrackerState::new(),
+            BlockTracker {
+                state: TxTracker::new(),
                 version,
             },
         );

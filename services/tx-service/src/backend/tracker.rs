@@ -1,10 +1,26 @@
-use std::{collections::HashSet, hash::Hash, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    sync::Arc,
+};
 
 use lb_core::mantle::{DependencyId, TxDependencies};
 use rpds::{HashTrieMapSync as HashTrieMap, HashTrieSetSync as HashTrieSet};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TxTrackerState<TxId>
+where
+    TxId: Eq + Hash,
+{
+    pub ready_txs: HashSet<TxId>,
+    pub orphan_txs: HashSet<TxId>,
+    pub dep_to_tx: HashMap<DependencyId, HashSet<TxId>>,
+    pub tx_pending_count: HashMap<TxId, usize>,
+}
 
 #[derive(Clone, Debug)]
-pub struct TxTrackerState<Tx, TxId>
+pub struct TxTracker<Tx, TxId>
 where
     TxId: Eq + Hash,
 {
@@ -14,18 +30,18 @@ where
     tx_pending_count: HashTrieMap<TxId, usize>,
 }
 
-impl<Tx, TxId> Default for TxTrackerState<Tx, TxId>
+impl<Tx, TxId> Default for TxTracker<Tx, TxId>
 where
-    TxId: Eq + Hash,
+    TxId: Eq + Hash + Clone,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Tx, TxId> TxTrackerState<Tx, TxId>
+impl<Tx, TxId> TxTracker<Tx, TxId>
 where
-    TxId: Eq + Hash,
+    TxId: Eq + Hash + Clone,
 {
     pub fn new() -> Self {
         Self {
@@ -42,9 +58,70 @@ where
             .chain(self.orphan_txs.values())
             .map(Arc::as_ref)
     }
+
+    pub fn to_state(&self) -> TxTrackerState<TxId> {
+        TxTrackerState {
+            ready_txs: self.ready_txs.keys().cloned().collect(),
+            orphan_txs: self.orphan_txs.keys().cloned().collect(),
+            dep_to_tx: self
+                .dep_to_tx
+                .iter()
+                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+                .collect(),
+            tx_pending_count: self
+                .tx_pending_count
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
+        }
+    }
+
+    pub fn from_state_and_txs(
+        TxTrackerState {
+            ready_txs,
+            orphan_txs,
+            dep_to_tx,
+            tx_pending_count,
+        }: TxTrackerState<TxId>,
+        txs: &HashMap<TxId, Arc<Tx>>,
+    ) -> Self {
+        let ready_txs = ready_txs
+            .into_iter()
+            .map(|id| {
+                (
+                    id.clone(),
+                    Arc::clone(txs.get(&id).expect("Tx should be recovered from state")),
+                )
+            })
+            .collect();
+
+        let orphan_txs = orphan_txs
+            .into_iter()
+            .map(|id| {
+                (
+                    id.clone(),
+                    Arc::clone(txs.get(&id).expect("Tx should be recovered from state")),
+                )
+            })
+            .collect();
+
+        let dep_to_tx = dep_to_tx
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().collect()))
+            .collect();
+
+        let tx_pending_count = tx_pending_count.into_iter().collect();
+
+        Self {
+            ready_txs,
+            orphan_txs,
+            dep_to_tx,
+            tx_pending_count,
+        }
+    }
 }
 
-impl<Tx> TxTrackerState<Tx, Tx::Hash>
+impl<Tx> TxTracker<Tx, Tx::Hash>
 where
     Tx: TxDependencies + Clone,
 {
@@ -112,7 +189,7 @@ where
 }
 
 #[cfg(test)]
-impl<Tx, TxId> TxTrackerState<Tx, TxId>
+impl<Tx, TxId> TxTracker<Tx, TxId>
 where
     TxId: Eq + Hash + Clone,
 {
@@ -142,7 +219,7 @@ mod tests {
     use bytes::Bytes;
     use lb_core::mantle::{DependencyId, Transaction, TransactionHasher, TxDependencies};
 
-    use super::TxTrackerState;
+    use super::TxTracker;
 
     // ── mock transaction type ────────────────────────────────────────────────
 
@@ -193,13 +270,13 @@ mod tests {
         Bytes::from_static(s.as_bytes())
     }
 
-    fn ready_names(tracker: &TxTrackerState<TestTx, TestTxId>) -> Vec<&'static str> {
+    fn ready_names(tracker: &TxTracker<TestTx, TestTxId>) -> Vec<&'static str> {
         let mut names: Vec<&'static str> = tracker.ready_txs.keys().map(|k| k.0).collect();
         names.sort_unstable();
         names
     }
 
-    fn orphan_names(tracker: &TxTrackerState<TestTx, TestTxId>) -> HashSet<&'static str> {
+    fn orphan_names(tracker: &TxTracker<TestTx, TestTxId>) -> HashSet<&'static str> {
         tracker.orphan_txs.keys().map(|k| k.0).collect()
     }
 
@@ -222,7 +299,7 @@ mod tests {
     )]
     #[test]
     fn test_diamond_dependency_graph() {
-        let mut tracker: TxTrackerState<TestTx, TestTxId> = TxTrackerState::new();
+        let mut tracker: TxTracker<TestTx, TestTxId> = TxTracker::new();
         let mut frontier: HashSet<DependencyId> = HashSet::new();
         frontier.insert(dep("root"));
 

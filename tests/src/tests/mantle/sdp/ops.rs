@@ -424,8 +424,7 @@ async fn start_sdp_manual_cluster(
     // the test will declare it post-genesis.
     let (node1_blend_config, node1_signing_key, node1_zk_key) =
         base.deployment.nodes()[1].general.blend_config.clone();
-    let node1_locator =
-        Locator::new_unchecked(node1_blend_config.core.backend.listening_address);
+    let node1_locator = Locator::new_unchecked(node1_blend_config.core.backend.listening_address);
 
     (
         base.scenario_base_dir,

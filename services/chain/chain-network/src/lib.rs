@@ -8,6 +8,7 @@ mod sync;
 
 use core::fmt::Debug;
 use std::{
+    collections::HashSet,
     fmt::Display,
     hash::Hash,
     time::{Duration, Instant},
@@ -759,12 +760,18 @@ where
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
     let reorged_tx_count = reorged_txs.len();
-    let included_tx_count = block.transactions().len();
+    let included_tx_hashes = block
+        .transactions()
+        .map(Transaction::hash)
+        .collect::<Vec<_>>();
+
+    let included_tx_count = included_tx_hashes.len();
+    let is_canonical_tip = tip == block.header().id();
 
     // Remove included content from mempool if the block was applied to the honest
     // chain. Otherwise, we keep them in mempool, so they can be included to the
     // honest chain later when this node proposes blocks.
-    if tip == block.header().id() {
+    if is_canonical_tip {
         debug!(
             "Applied block {:?} to the canonical chain; included {} transactions and will reinsert {} reorged transactions",
             block.header().id(),
@@ -772,12 +779,7 @@ where
             reorged_tx_count
         );
         mempool_adapter
-            .remove_transactions(
-                &block
-                    .transactions()
-                    .map(Transaction::hash)
-                    .collect::<Vec<_>>(),
-            )
+            .remove_transactions(&included_tx_hashes)
             .await
             .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
     } else {
@@ -788,6 +790,27 @@ where
             tip
         );
     }
+
+    let reorged_txs = if is_canonical_tip {
+        let included_tx_hashes = included_tx_hashes.into_iter().collect::<HashSet<_>>();
+        let reinserted_txs = reorged_txs
+            .into_iter()
+            .filter(|tx| !included_tx_hashes.contains(&Transaction::hash(tx)))
+            .collect::<Vec<_>>();
+
+        let skipped_tx_count = reorged_tx_count.saturating_sub(reinserted_txs.len());
+        if skipped_tx_count > 0 {
+            debug!(
+                "Skipped {} reorged transactions already included in canonical block {:?}",
+                skipped_tx_count,
+                block.header().id()
+            );
+        }
+
+        reinserted_txs
+    } else {
+        reorged_txs
+    };
 
     // Re-insert reorged txs back into the mempool.
     join_all(reorged_txs.into_iter().map(|tx| {

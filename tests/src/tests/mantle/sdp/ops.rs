@@ -52,10 +52,6 @@ const LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(3));
 /// proofs.
 #[tokio::test]
 #[expect(
-    clippy::large_futures,
-    reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
-)]
-#[expect(
     clippy::too_many_lines,
     reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
 )]
@@ -218,10 +214,6 @@ async fn sdp_ops_e2e() {
 /// This test verifies that after restart, the validator fetches its declaration
 /// from the ledger and the SDP service correctly loads declaration state.
 #[tokio::test]
-#[expect(
-    clippy::large_futures,
-    reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
-)]
 async fn sdp_declaration_restoration_e2e() {
     let (scenario_base_dir, cluster, node0_name, node0, ..) =
         start_sdp_manual_cluster("sdp-declaration-restoration").await;
@@ -344,10 +336,6 @@ async fn wait_for_sdp_declarations(
     .ok()
 }
 
-#[expect(
-    clippy::large_futures,
-    reason = "Manual-cluster startup futures are large in this integration-test helper; boxing would not improve readability"
-)]
 async fn start_sdp_manual_cluster(
     test_name: &str,
 ) -> (
@@ -437,7 +425,7 @@ async fn start_sdp_manual_cluster(
     let (node1_blend_config, node1_signing_key, node1_zk_key) =
         base.deployment.nodes()[1].general.blend_config.clone();
     let node1_locator =
-        Locator::new_unchecked(node1_blend_config.core.backend.listening_address.clone());
+        Locator::new_unchecked(node1_blend_config.core.backend.listening_address);
 
     (
         base.scenario_base_dir,

@@ -2038,18 +2038,8 @@ where
     }
 }
 
-/// Handle a clock event by calling into the epoch handler and process the
-/// resulting epoch event, if any.
-///
-/// On a new epoch, it updates the public info and conditionally rotates both
-/// the cryptographic processor and the backend verifier. Both rotations are
-/// guarded by `new_epoch > current_epoch` to avoid duplicates when the `PoL`
-/// info handler in the event loop has already advanced to this epoch (and
-/// already called `backend.rotate_epoch`). At the end of an epoch transition
-/// period, it notifies the Blend components that the old epoch transition is
-/// complete.
-///
-/// Returns the updated public info and the new tracked epoch.
+/// Handle a clock event by ticking the epoch handler and reacting to any
+/// resulting epoch event.
 async fn handle_clock_event<
     NodeId,
     ProofsGenerator,

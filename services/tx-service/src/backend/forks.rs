@@ -262,6 +262,14 @@ where
             transactions,
         } = self.adapter.get_block(block_id).await?;
 
+        // Bootstrap: the very first block event seeds its parent as an empty
+        // frontier so subsequent events have somewhere to extend from. The
+        // parent here is the genesis HeaderId on a fresh node, which is
+        // otherwise never inserted into `block_states`.
+        if self.tips.is_empty() && !self.block_states.contains_key(&parent) {
+            self.bootstrap_root(parent);
+        }
+
         let parent_fork = self
             .block_states
             .get(&parent)
@@ -295,6 +303,23 @@ where
 
         self.insert_new_tip(block_id, &parent, block_state);
         Ok(())
+    }
+
+    /// Seed `root` as an empty frontier tip. Used on the first ever block
+    /// event to register the genesis HeaderId — the implicit ancestor that
+    /// production code otherwise never inserts into `block_states`.
+    /// `version` is 0 so any txs that arrived before bootstrap (recorded in
+    /// `mempool_log` only) get replayed onto the first descendant via the
+    /// stale-ancestor catch-up in `process_new_block`.
+    fn bootstrap_root(&mut self, root: HeaderId) {
+        self.block_states.insert(
+            root,
+            BlockTracker {
+                state: TxTracker::new(),
+                version: 0,
+            },
+        );
+        self.tips.insert(root);
     }
 
     fn insert_new_tip(

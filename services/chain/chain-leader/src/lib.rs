@@ -594,7 +594,7 @@ where
     ) -> Result<Block<Mempool::Tx>, Error> {
         let txs_stream = relays
             .mempool_adapter()
-            .get_mempool_view([0; 32].into())
+            .get_mempool_view(parent)
             .await
             .map_err(Error::FetchBlockTransactions)?;
 

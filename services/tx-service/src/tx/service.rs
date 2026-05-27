@@ -480,10 +480,16 @@ where
     ) {
         tracing::trace!(target: LOG_TARGET, "Handling mempool View message");
 
-        let items = pool
-            .view(ancestor_hint)
-            .await
-            .unwrap_or_else(|_| Box::pin(futures::stream::iter(Vec::new())));
+        let items = match pool.view(ancestor_hint).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                error!(
+                    target: LOG_TARGET,
+                    "mempool view failed; returning empty stream: {e:?}",
+                );
+                Box::pin(futures::stream::iter(Vec::new()))
+            }
+        };
 
         if let Err(_e) = reply_channel.send(Box::pin(items)) {
             tracing::debug!(target: LOG_TARGET, "Failed to send view reply");

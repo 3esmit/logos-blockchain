@@ -10,7 +10,7 @@ mod serde_;
 use std::sync::LazyLock;
 
 use channel::{
-    config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+    MsgId, config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
     withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -230,6 +230,12 @@ impl Op {
 
     pub fn consumes(&self) -> impl Iterator<Item = DependencyId> {
         match self {
+            // The root MsgId is the "no prior message" sentinel for the first
+            // inscription on a channel; it has no producer so emitting it as
+            // a dep would permanently orphan the tx in the mempool.
+            Self::ChannelInscribe(op) if op.parent == MsgId::root() => {
+                Box::new(std::iter::empty()) as Box<dyn Iterator<Item = DependencyId>>
+            }
             Self::ChannelInscribe(op) => Box::new(std::iter::once(DependencyId::copy_from_slice(
                 op.parent.as_ref(),
             ))) as Box<dyn Iterator<Item = DependencyId>>,

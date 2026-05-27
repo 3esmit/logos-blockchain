@@ -106,7 +106,7 @@ use crate::{
         ChainApi, EpochEvent, EpochHandler, PolEpochInfo, PolInfoProvider as PolInfoProviderTrait,
     },
     kms::PreloadKmsService,
-    membership::{self, MembershipInfo, ZkInfo},
+    membership::{self, MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::{NetworkMessage, ProcessedMessage, ServiceMessage},
     session::{CoreSessionInfo, CoreSessionPublicInfo, MaybeEmptyCoreSessionInfo},
 };
@@ -138,7 +138,6 @@ pub struct BlendService<
     Backend,
     NodeId,
     Network,
-    MembershipAdapter,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -154,7 +153,6 @@ pub struct BlendService<
     last_saved_state: Option<ServiceState<Backend::Settings, Network::BroadcastSettings>>,
     _phantom: PhantomData<(
         Backend,
-        MembershipAdapter,
         SdpService,
         ProofsGenerator,
         TimeBackend,
@@ -167,7 +165,6 @@ impl<
     Backend,
     NodeId,
     Network,
-    MembershipAdapter,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -180,7 +177,6 @@ impl<
         Backend,
         NodeId,
         Network,
-        MembershipAdapter,
         SdpService,
         ProofsGenerator,
         ProofsVerifier,
@@ -209,7 +205,6 @@ impl<
     Backend,
     NodeId,
     Network,
-    MembershipAdapter,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -222,7 +217,6 @@ impl<
         Backend,
         NodeId,
         Network,
-        MembershipAdapter,
         SdpService,
         ProofsGenerator,
         ProofsVerifier,
@@ -235,8 +229,6 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
-    MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
-    membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
     ProofsGenerator: CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>
         + Send
         + Sync,
@@ -246,7 +238,6 @@ where
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     RuntimeServiceId: AsServiceId<NetworkService<Network::Backend, RuntimeServiceId>>
-        + AsServiceId<<MembershipAdapter as membership::Adapter>::Service>
         + AsServiceId<SdpService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
@@ -299,7 +290,6 @@ where
             Some(Duration::from_mins(1)),
             NetworkService<_, _>,
             TimeService<_, _>,
-            <MembershipAdapter as membership::Adapter>::Service,
             SdpService,
             PreloadKmsService<_>
         )
@@ -323,7 +313,14 @@ where
             );
             EpochHandler::new(
                 chain_service,
-                blend_config.time.epoch_transition_period_in_slots,
+                // TODO: This will go one we get rid of the `EpochHandler` completely as we rely on
+                // the slot tick directly.
+                blend_config
+                    .time
+                    .epoch_transition_period
+                    .as_secs()
+                    .try_into()
+                    .expect("Epoch transition period should be at least 1 second."),
             )
         }
         .await;
@@ -367,9 +364,14 @@ where
                 overwatch_handle,
                 non_ephemeral_signing_key.public_key(),
                 Some(zk_public_key),
-                blend_config.time.epoch_transition_period_in_slots,
             )
-            .await;
+            .await
+            // TODO: Consume all info from this stream and remove slot-based stream in this service.
+            .map(
+                |BlendEpochState {
+                     membership_info, ..
+                 }| membership_info,
+            );
 
         let sdp_relay = overwatch_handle
             .relay::<SdpService>()
@@ -407,7 +409,7 @@ where
             activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
         };
         let (
-            mut remaining_session_stream,
+            mut remaining_membership_stream,
             mut remaining_clock_stream,
             current_public_info,
             current_epoch,
@@ -466,7 +468,7 @@ where
             &mut blend_messages,
             &mut remaining_clock_stream,
             secret_pol_info_stream,
-            &mut remaining_session_stream,
+            &mut remaining_membership_stream,
             &running_blend_config,
             &mut backend,
             &network_adapter,
@@ -490,7 +492,7 @@ where
             // past session.
             blend_messages.map(|(message, _)| message),
             remaining_clock_stream,
-            remaining_session_stream,
+            remaining_membership_stream,
             &running_blend_config,
             backend,
             network_adapter,

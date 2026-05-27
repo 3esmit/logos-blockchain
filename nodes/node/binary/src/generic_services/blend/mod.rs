@@ -14,11 +14,10 @@ use lb_blend::{
     },
     scheduling::message_blend::provers::{
         BlendLayerProof, ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator,
-        leader::RealLeaderProofsGenerator,
+        leader::LeaderProofsGenerator,
     },
 };
-use lb_blend_service::{ProofsVerifier, membership::service::Adapter};
-use lb_chain_broadcast_service::BlockBroadcastService;
+use lb_blend_service::ProofsVerifier;
 use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_time_service::backends::NtpTimeBackend;
@@ -96,13 +95,10 @@ impl ProofsVerifier for MockProofsVerifier {
     }
 }
 
-pub type BlendMembershipAdapter<RuntimeServiceId> =
-    Adapter<BlockBroadcastService<RuntimeServiceId>, PeerId>;
 pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendService<
     lb_blend_service::core::backends::libp2p::Libp2pBlendBackend,
     PeerId,
     lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
-    BlendMembershipAdapter<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
     // TODO: Re-establish real proof generator once session removal is complete.
     // RealCoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
@@ -115,12 +111,35 @@ pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendServi
     PolInfoProvider,
     RuntimeServiceId,
 >;
+
+#[derive(Clone)]
+pub struct MockLeaderProofsGenerator;
+
+#[async_trait]
+impl LeaderProofsGenerator for MockLeaderProofsGenerator {
+    fn new(
+        _settings: ProofsGeneratorSettings,
+        _private_inputs: ProofOfLeadershipQuotaInputs,
+    ) -> Self {
+        Self
+    }
+
+    async fn get_next_proof(&mut self) -> BlendLayerProof {
+        BlendLayerProof {
+            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
+            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
+            ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+        }
+    }
+}
+
 pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendService<
         lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
         PeerId,
         <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
-        BlendMembershipAdapter<RuntimeServiceId>,
-        RealLeaderProofsGenerator,
+        // TODO: Re-establish real proof generator once session removal is complete.
+        // RealLeaderProofsGenerator,
+        MockLeaderProofsGenerator,
         NtpTimeBackend,
         CryptarchiaService<RuntimeServiceId>,
         PolInfoProvider,

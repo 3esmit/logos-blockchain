@@ -306,7 +306,7 @@ where
     }
 
     /// Seed `root` as an empty frontier tip. Used on the first ever block
-    /// event to register the genesis HeaderId — the implicit ancestor that
+    /// event to register the genesis `HeaderId` — the implicit ancestor that
     /// production code otherwise never inserts into `block_states`.
     /// `version` is 0 so any txs that arrived before bootstrap (recorded in
     /// `mempool_log` only) get replayed onto the first descendant via the
@@ -917,16 +917,46 @@ mod tests {
         assert!(tracker.is_tip(&b));
     }
 
-    /// Processing a block whose parent is not known returns `ParentNotFound`.
+    /// Processing a block whose parent is not known returns `ParentNotFound`,
+    /// *after* the tracker has been bootstrapped — the very first event
+    /// instead self-bootstraps its parent (see
+    /// `test_first_event_bootstraps_unknown_parent`).
     #[tokio::test]
     async fn test_process_block_unknown_parent_returns_error() {
+        let genesis = id(0);
         let adapter = MockAdapter::new();
-        // Register the block but with an unknown parent so the lookup succeeds
-        // but the parent state is missing.
-        adapter.add_block(id(77), id(50), vec![]);
-        let mut tracker: ForksTracker<TestTx, TestTxId, MockAdapter> = ForksTracker::new(adapter);
+        let mut tracker = ForksTracker::new(adapter);
+        seed_genesis(&mut tracker, genesis).await;
+
+        // Block with an unknown parent (not in block_states, not the bootstrap
+        // root). Lookup of the block succeeds, but its parent state is
+        // missing and tips is non-empty, so bootstrap does not kick in.
+        tracker.adapter.add_block(id(77), id(50), vec![]);
         let result = tracker.process_new_block(&processed_event(id(77))).await;
         assert!(matches!(result, Err(ForksTrackerError::ParentNotFound(_))));
+    }
+
+    /// The first ever block event seeds its parent as an empty frontier so
+    /// the genesis `HeaderId` — never explicitly inserted in production —
+    /// becomes a valid ancestor for subsequent blocks.
+    #[tokio::test]
+    async fn test_first_event_bootstraps_unknown_parent() {
+        let genesis = id(0);
+        let first = id(1);
+
+        let adapter = MockAdapter::new();
+        let mut tracker: ForksTracker<TestTx, TestTxId, MockAdapter> = ForksTracker::new(adapter);
+        tracker.adapter.add_block(first, genesis, vec![]);
+
+        // tips is empty and `genesis` is unknown — bootstrap should seed it
+        // and the event should succeed instead of erroring.
+        tracker
+            .process_new_block(&processed_event(first))
+            .await
+            .expect("first event must self-bootstrap its parent");
+
+        assert!(tracker.is_tip(&first));
+        assert!(tracker.is_historical(&genesis));
     }
 
     /// When `BlockGetter` cannot find the block the error propagates unchanged.

@@ -1154,12 +1154,29 @@ mod tests {
             assert!(tx_produces(&tx).is_empty());
         }
 
+        /// The `MsgId::root` sentinel marks "no prior message" for the first
+        /// inscription on a channel. It is not a real producible dep, so it
+        /// must not appear in `consumes` — otherwise the tx would orphan
+        /// permanently in the mempool waiting on a producer that doesn't
+        /// exist.
+        #[test]
+        fn first_inscribe_does_not_consume_root_sentinel() {
+            let op = inscribe_op([1; 32], MsgId::root(), b"hello");
+            let self_dep = op_dep(&op);
+
+            let tx = MantleTx([Op::ChannelInscribe(op)].into());
+
+            assert!(tx_consumes(&tx).is_empty());
+            assert_eq!(tx_produces(&tx), HashSet::from([self_dep]));
+        }
+
         /// A single op with no internal counterpart: parent is an external
         /// consume, the op's own id is an external produce.
         #[test]
         fn single_inscribe_all_deps_are_external() {
-            let op = inscribe_op([1; 32], MsgId::root(), b"hello");
-            let parent_dep = dep(MsgId::root());
+            let parent = MsgId::from([7; 32]);
+            let op = inscribe_op([1; 32], parent, b"hello");
+            let parent_dep = dep(parent);
             let self_dep = op_dep(&op);
 
             let tx = MantleTx([Op::ChannelInscribe(op)].into());
@@ -1196,18 +1213,19 @@ mod tests {
             assert!(!tx_produces(&tx).contains(&internal_dep));
         }
 
-        /// For a chain root → `op1_id` → `op2_id`, only the chain endpoints
-        /// (root and `op2_id`) are visible externally.
+        /// For a chain `chain_root` → `op1_id` → `op2_id`, only the chain
+        /// endpoints (`chain_root` and `op2_id`) are visible externally.
         #[test]
         fn chained_inscribes_expose_only_external_endpoints() {
-            let op1 = inscribe_op([1; 32], MsgId::root(), b"first");
+            let chain_root = MsgId::from([7; 32]);
+            let op1 = inscribe_op([1; 32], chain_root, b"first");
             let op1_id = op1.id();
             let op2 = inscribe_op([1; 32], op1_id, b"second");
             let op2_dep = op_dep(&op2);
 
             let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
-            assert_eq!(tx_consumes(&tx), HashSet::from([dep(MsgId::root())]));
+            assert_eq!(tx_consumes(&tx), HashSet::from([dep(chain_root)]));
             assert_eq!(tx_produces(&tx), HashSet::from([op2_dep]));
         }
 
@@ -1233,7 +1251,7 @@ mod tests {
         /// endpoints of each sub-graph are visible.
         #[test]
         fn mixed_internal_and_external_deps() {
-            let root_a = MsgId::root();
+            let root_a = MsgId::from([7; 32]);
             let root_b = MsgId::from([9; 32]);
 
             let op1 = inscribe_op([1; 32], root_a, b"a1");

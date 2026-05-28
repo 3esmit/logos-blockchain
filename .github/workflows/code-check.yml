@@ -156,6 +156,13 @@ jobs:
             --locked -p logos-blockchain-node --features testing 
             -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
 
+      - name: Configure curl user-agent for crates.io
+        run: |
+          curlrc="$HOME/.curlrc"
+          user_agent='user-agent = "logos-blockchain-ci (https://github.com/logos-blockchain/logos-blockchain)"'
+          touch "$curlrc"
+          grep -qxF "$user_agent" "$curlrc" || echo "$user_agent" >> "$curlrc"
+
       - name: Install cargo-nextest
         if: ${{ !cancelled()}}
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35

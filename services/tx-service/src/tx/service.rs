@@ -522,10 +522,13 @@ where
         pool: &Pool,
         hashes: Vec<Pool::TxHash>,
     ) -> Result<TransactionsByHashesResponse<Pool::Tx, Pool::TxHash>, MempoolError> {
-        let keys_set: BTreeSet<Pool::TxHash> = hashes.into_iter().collect();
-
+        // Preserve the requested order. Block reconstruction recomputes the
+        // content merkle root over the transaction sequence, so it only
+        // matches the proposal's header when transactions come back in the
+        // same order they were committed — collecting into a `BTreeSet` here
+        // would re-sort by hash and break reconstruction.
         let items_stream = pool
-            .get_items_by_keys(keys_set.iter().cloned())
+            .get_items_by_keys(hashes.iter().cloned())
             .await
             .map_err(|e| {
                 MempoolError::StorageError(format!("Failed to get items by keys: {e:?}"))
@@ -533,7 +536,7 @@ where
 
         let found_transactions: Vec<Pool::Tx> = items_stream.collect().await;
 
-        if found_transactions.len() == keys_set.len() {
+        if found_transactions.len() == hashes.len() {
             return Ok(TransactionsByHashesResponse::new(
                 found_transactions,
                 BTreeSet::new(),
@@ -543,7 +546,10 @@ where
         let found_hashes: BTreeSet<Pool::TxHash> =
             found_transactions.iter().map(Transaction::hash).collect();
 
-        let not_found_hashes: BTreeSet<Pool::TxHash> = &keys_set - &found_hashes;
+        let not_found_hashes: BTreeSet<Pool::TxHash> = hashes
+            .into_iter()
+            .filter(|hash| !found_hashes.contains(hash))
+            .collect();
 
         Ok(TransactionsByHashesResponse::new(
             found_transactions,

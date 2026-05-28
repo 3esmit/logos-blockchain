@@ -181,7 +181,11 @@ where
             .map(|fork| fork.state.get_ready_txs())
             .ok_or(ForksTrackerError::ParentNotFound(parent_hint))?;
         let ledger_state: LedgerState = self.adapter.get_ledger_state(parent_hint).await?;
-        let utxos = &ledger_state.epoch_state().utxos;
+        // Use the frontier's latest spendable UTXOs, the same set the tracker
+        // uses to decide tx readiness. The epoch-boundary snapshot
+        // (`epoch_state().utxos`) omits notes created mid-epoch, so chained
+        // txs (e.g. coin splits) would fail input lookup with `InexistingNote`.
+        let utxos = ledger_state.latest_utxos();
         let gas_prices = ledger_state.get_gas_prices();
         let cached_keys: HashMap<_, _> = txs
             .iter()
@@ -198,6 +202,10 @@ where
                 }
             })
             .collect();
+        // Drop any tx whose ratio could not be computed; it is not applicable
+        // to a block built on `parent_hint`. Keeping it would panic the sort
+        // below on a missing `cached_keys` entry.
+        txs.retain(|tx| cached_keys.contains_key(&tx.hash()));
         txs.sort_unstable_by_key(|tx| cached_keys[&tx.hash()]);
         Ok(txs)
     }

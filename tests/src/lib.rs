@@ -13,3 +13,16 @@ pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(|| {
 pub const BIN_PATH_DEBUG: &str = "../target/debug/logos-blockchain-node";
 /// The default path to the node binary for release builds.
 pub const BIN_PATH_RELEASE: &str = "../target/release/logos-blockchain-node";
+
+#[cfg(test)]
+mod tests {
+    use lb_config::create_general_configs;
+
+    #[test]
+    fn create_general_configs_generates_native_zksign_proofs() {
+        drop(create_general_configs(
+            1,
+            Some("create_general_configs_generates_native_zksign_proofs"),
+        ));
+    }
+}

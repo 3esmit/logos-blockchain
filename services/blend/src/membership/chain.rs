@@ -1,16 +1,15 @@
-//! Chain-derived membership.
+//! Chain-derived per-epoch state.
 //!
-//! The membership for each epoch is read from the SDP snapshot frozen into that
-//! epoch's [`EpochState`](lb_ledger::EpochState), queried from the chain on
-//! slot ticks. This puts membership on the **same slot-tick clock** as the
-//! leader inputs (the [`EpochHandler`] `PoL` path), so both halves share the
-//! chain's per-epoch view and cannot drift — replacing the pushed
-//! `ActiveProviders` broadcast.
+//! On every slot tick the chain is queried for the current epoch's
+//! [`EpochState`](lb_ledger::EpochState); on each new epoch the membership and
+//! leader inputs frozen into its SDP snapshot are yielded together as a
+//! [`BlendEpochState`]. Both halves come from the same chain query, so they
+//! cannot drift — replacing the pushed `ActiveProviders` broadcast.
 
 use core::{hash::Hash, pin::Pin};
 use std::fmt::{Debug, Display};
 
-use futures::{Stream, StreamExt as _};
+use futures::{Stream, StreamExt as _, stream::unfold};
 use lb_chain_service::{
     Epoch,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -30,26 +29,25 @@ use crate::{
 pub struct BlendEpochState<NodeId> {
     pub epoch: Epoch,
     pub nonce: Fr,
+    pub aged: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
     pub membership_info: MembershipInfo<NodeId>,
 }
 
-/// A chain-derived membership stream.
+/// A chain-derived per-epoch state stream.
 ///
-/// Unlike [`MembershipStream`](super::MembershipStream) this is not `Sync`,
-/// since producing each item awaits a chain query; consumers only require
-/// `Send + Unpin`.
+/// Not `Sync`, since producing each item awaits a chain query; consumers only
+/// require `Send + Unpin`.
 pub type BlendEpochStateStream<NodeId> =
     Pin<Box<dyn Stream<Item = BlendEpochState<NodeId>> + Send + 'static>>;
 
-/// Subscribe to a chain-derived stream of
-/// [`BlendEpochState`](super::BlendEpochState).
+/// Subscribe to a chain-derived stream of [`BlendEpochState`].
 ///
-/// On every slot tick the chain is queried for the current epoch's
-/// `EpochState`; on each new epoch the membership frozen into its SDP snapshot
-/// is yielded. The same `EpochHandler`/`get_epoch_state` mechanism is used by
-/// the leader-input path, so the two are on one clock.
+/// One item is yielded per epoch — the first slot of the epoch whose chain
+/// query succeeds. Slot ticks within an already-yielded epoch are ignored;
+/// failed chain queries do not advance the tracked epoch, so the next slot of
+/// the same epoch is retried.
 pub async fn subscribe<ChainService, NodeId, TimeRuntimeBackend, RuntimeServiceId>(
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     signing_public_key: Ed25519PublicKey,
@@ -92,46 +90,46 @@ where
     };
 
     // TODO: Refactor into a function or own type that replaces `EpochHandler`.
-    Box::pin(
-        slot_ticks
-            .scan(None, move |last_epoch, SlotTick { epoch, slot }| {
-                let is_new_epoch = Some(epoch) != *last_epoch;
-                if is_new_epoch {
-                    *last_epoch = Some(epoch);
+    Box::pin(unfold(
+        (
+            slot_ticks,
+            None::<Epoch>,
+            chain_service,
+            signing_public_key,
+            zk_public_key,
+        ),
+        async move |(mut ticks, mut last_epoch, chain_api, signing_pk, zk_pk)| {
+            loop {
+                let SlotTick { epoch, slot } = ticks.next().await?;
+                if Some(epoch) == last_epoch {
+                    continue;
                 }
-                let chain_service = chain_service.clone();
-                let signing_public_key = signing_public_key;
-                let zk_public_key = zk_public_key;
-                async move {
-                    if !is_new_epoch {
-                        return Some(None);
+                match chain_api.get_epoch_state(slot).await {
+                    Ok(Ok(epoch_state)) => {
+                        last_epoch = Some(epoch);
+                        let membership_info = membership_info_from_epoch_state::<NodeId>(
+                            &epoch_state,
+                            &signing_pk,
+                            zk_pk,
+                        );
+                        let item = BlendEpochState {
+                            epoch,
+                            nonce: epoch_state.nonce,
+                            aged: epoch_state.utxo_merkle_root(),
+                            lottery_0: epoch_state.lottery_0,
+                            lottery_1: epoch_state.lottery_1,
+                            membership_info,
+                        };
+                        return Some((item, (ticks, last_epoch, chain_api, signing_pk, zk_pk)));
                     }
-                    match chain_service.get_epoch_state(slot).await {
-                        Ok(Ok(epoch_state)) => {
-                            let membership_info = membership_info_from_epoch_state::<NodeId>(
-                                &epoch_state,
-                                &signing_public_key,
-                                zk_public_key,
-                            );
-                            Some(Some(BlendEpochState {
-                                epoch,
-                                nonce: epoch_state.nonce,
-                                lottery_0: epoch_state.lottery_0,
-                                lottery_1: epoch_state.lottery_1,
-                                membership_info,
-                            }))
-                        }
-                        Ok(Err(e)) => {
-                            tracing::warn!(target: LOG_TARGET, "Chain service returned error for epoch state at slot {slot:?}: {e:?}");
-                            Some(None)
-                        }
-                        Err(e) => {
-                            tracing::warn!(target: LOG_TARGET, "Failed to query epoch state at slot {slot:?}: {e:?}");
-                            Some(None)
-                        }
+                    Ok(Err(e)) => {
+                        tracing::warn!(target: LOG_TARGET, "Chain service returned error for epoch state at slot {slot:?}: {e:?}; will retry on next slot of epoch {epoch:?}");
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: LOG_TARGET, "Failed to query epoch state at slot {slot:?}: {e:?}; will retry on next slot of epoch {epoch:?}");
                     }
                 }
-            })
-            .filter_map(async move |maybe| { maybe }),
-    )
+            }
+        },
+    ))
 }

@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -27,18 +28,18 @@ use lb_blend::{
     scheduling::{
         membership::Membership,
         message_blend::{
-            crypto::EpochCryptographicProcessorSettings as SessionCryptographicProcessorSettings,
+            crypto::EpochCryptographicProcessorSettings,
             provers::{
                 BlendLayerProof, ProofsGeneratorSettings,
                 core_and_leader::CoreAndLeaderProofsGenerator,
             },
         },
-        message_scheduler::{self, session_info::SessionInfo as SchedulerSessionInfo},
+        message_scheduler::{self, epoch_info::EpochInfo as SchedulerEpochInfo},
     },
 };
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
-use lb_groth16::{Field as _, Fr, fr_to_bytes};
+use lb_groth16::{Field as _, Fr, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_poq::CorePathAndSelectors;
@@ -56,7 +57,7 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use crate::{
     core::{
-        backends::{BlendBackend, PublicInfo, SessionInfo},
+        backends::{BackendEpochInfo, BlendBackend},
         kms::KmsPoQAdapter,
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
@@ -67,6 +68,7 @@ use crate::{
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
+    epoch::CoreEpochPublicInfo,
     message::NetworkInfo,
     settings::TimingSettings,
     test_utils,
@@ -124,11 +126,11 @@ pub fn settings<BackendSettings>(
 
 pub fn timing_settings() -> TimingSettings {
     TimingSettings {
-        rounds_per_session: 10.try_into().unwrap(),
+        rounds_per_epoch: 10.try_into().unwrap(),
         rounds_per_interval: 10.try_into().unwrap(),
         round_duration: Duration::from_secs(1),
         rounds_per_observation_window: 5.try_into().unwrap(),
-        rounds_per_session_transition_period: 2.try_into().unwrap(),
+        rounds_per_epoch_transition_period: 2.try_into().unwrap(),
         epoch_transition_period: Duration::from_secs(1),
     }
 }
@@ -139,7 +141,7 @@ pub fn scheduler_settings(
 ) -> message_scheduler::Settings {
     message_scheduler::Settings {
         additional_safety_intervals: 0,
-        expected_intervals_per_session: NonZeroU64::try_from(1).unwrap(),
+        expected_intervals_per_epoch: NonZeroU64::try_from(1).unwrap(),
         maximum_release_delay_in_rounds: NonZeroU64::try_from(1).unwrap(),
         round_duration: timing_settings.round_duration,
         rounds_per_interval: timing_settings.rounds_per_interval,
@@ -169,7 +171,7 @@ where
     fn new(
         _service_config: BlendConfig<Self::Settings>,
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-        _current_public_info: PublicInfo<NodeId>,
+        _current_epoch_info: BackendEpochInfo<NodeId>,
         _rng: Rng,
     ) -> Self {
         let (event_sender, _) = broadcast::channel(CHANNEL_SIZE);
@@ -180,21 +182,32 @@ where
     async fn publish(
         &self,
         _msg: EncapsulatedMessageWithVerifiedPublicHeader,
-        _intended_session: u64,
+        _intended_epoch: Epoch,
     ) {
     }
-    async fn rotate_session(&mut self, _new_session_info: SessionInfo<NodeId>) {}
+    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId>) {
+        // Notify tests that the backend rotated to a new epoch, carrying the new
+        // epoch and membership size so tests can assert the new membership was
+        // propagated to the backend.
+        let (membership, epoch) = new_epoch_info;
+        // Ignore send errors: not all tests subscribe to backend events, and
+        // `rotate_epoch` is also called right before a retirement (no subscriber).
+        let _ = self.event_sender.send(TestBlendBackendEvent::EpochRotated {
+            epoch,
+            membership_size: membership.size(),
+        });
+    }
 
-    async fn complete_session_transition(&mut self) {
-        // Notify tests that the backend completed the session transition.
+    async fn complete_epoch_transition(&mut self) {
+        // Notify tests that the backend completed the epoch transition.
         self.event_sender
-            .send(TestBlendBackendEvent::SessionTransitionCompleted)
+            .send(TestBlendBackendEvent::EpochTransitionCompleted)
             .unwrap();
     }
 
     fn listen_to_incoming_messages(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)> + Send>> {
         unimplemented!()
     }
 
@@ -212,7 +225,12 @@ impl TestBlendBackend {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestBlendBackendEvent {
-    SessionTransitionCompleted,
+    EpochTransitionCompleted,
+    /// Emitted when the backend is rotated to a new epoch.
+    EpochRotated {
+        epoch: Epoch,
+        membership_size: usize,
+    },
 }
 
 /// Waits for the given event to be received on the provided channel.
@@ -303,8 +321,8 @@ pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, RuntimeServ
 }
 
 pub fn new_crypto_processor<CorePoQGenerator>(
-    settings: SessionCryptographicProcessorSettings,
-    public_info: &PublicInfo<NodeId>,
+    settings: EpochCryptographicProcessorSettings,
+    epoch_info: &CoreEpochPublicInfo<NodeId>,
     core_poq_generator: CorePoQGenerator,
 ) -> CoreCryptographicProcessor<
     NodeId,
@@ -312,70 +330,102 @@ pub fn new_crypto_processor<CorePoQGenerator>(
     MockCoreAndLeaderProofsGenerator,
     MockProofsVerifier,
 > {
-    let minimum_network_size = u64::try_from(public_info.session.membership.size())
+    let minimum_network_size = u64::try_from(epoch_info.membership.size())
         .expect("membership size must fit into u64")
         .try_into()
         .expect("minimum_network_size must be non-zero");
     CoreCryptographicProcessor::try_new_with_core_condition_check(
-        public_info.session.membership.clone(),
+        epoch_info.membership.clone(),
         minimum_network_size,
         settings,
         PoQVerificationInputsMinusSigningKey {
-            core: public_info.session.core_public_inputs,
-            leader: public_info.epoch,
+            core: epoch_info.poq_core_public_inputs,
+            leader: epoch_info.poq_leadership_public_inputs,
         },
         core_poq_generator,
-        Epoch::new(0),
+        epoch_info.epoch,
     )
     .expect("crypto processor must be created successfully")
 }
 
-pub fn new_public_info<BackendSettings>(
-    session: u64,
+pub fn new_epoch_info<BackendSettings>(
+    epoch: Epoch,
     membership: Membership<NodeId>,
     settings: &BlendConfig<BackendSettings>,
-) -> PublicInfo<NodeId> {
-    let core_quota = settings.session_core_quota(membership.size());
-    PublicInfo {
-        session: SessionInfo {
-            session_number: session,
-            membership,
-            core_public_inputs: CoreInputs {
-                zk_root: ZkHash::ZERO,
-                quota: core_quota,
-            },
+) -> CoreEpochPublicInfo<NodeId> {
+    let core_quota = settings.epoch_core_quota(membership.size());
+    CoreEpochPublicInfo {
+        epoch,
+        membership,
+        poq_core_public_inputs: CoreInputs {
+            zk_root: ZkHash::ZERO,
+            quota: core_quota,
         },
-        epoch: LeaderInputs {
+        poq_leadership_public_inputs: LeaderInputs {
             pol_ledger_aged: ZkHash::ZERO,
-            pol_epoch_nonce: ZkHash::ZERO,
-            message_quota: settings.session_leadership_quota(),
+            pol_epoch_nonce: fr_from_bytes_unchecked(&epoch.into_inner().to_le_bytes()),
+            message_quota: settings.epoch_leadership_quota(),
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
         },
     }
 }
 
-pub fn scheduler_session_info(public_info: &PublicInfo<NodeId>) -> SchedulerSessionInfo {
-    SchedulerSessionInfo {
-        core_quota: public_info.session.core_public_inputs.quota,
-        session_number: u128::from(public_info.session.session_number).into(),
+/// Dummy secret `PoL` leadership inputs, for tests that exercise the
+/// secret/public epoch-info coordination without needing valid proofs.
+pub fn dummy_pol_private_inputs() -> ProofOfLeadershipQuotaInputs {
+    ProofOfLeadershipQuotaInputs {
+        slot: 1,
+        note_value: 1,
+        transaction_hash: ZkHash::ZERO,
+        output_number: 1,
+        aged_path_and_selectors: [(ZkHash::ZERO, false); _],
+        secret_key: ZkHash::ZERO,
     }
 }
 
-pub fn reward_session_info(public_info: &PublicInfo<NodeId>) -> reward::SessionInfo {
+pub fn scheduler_epoch_info(public_info: &CoreEpochPublicInfo<NodeId>) -> SchedulerEpochInfo {
+    SchedulerEpochInfo {
+        core_quota: public_info.poq_core_public_inputs.quota,
+        epoch: public_info.epoch,
+    }
+}
+
+pub fn reward_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward::SessionInfo {
     reward::SessionInfo::new(
-        public_info.session.session_number,
-        &public_info.epoch.pol_epoch_nonce,
+        // TODO: Change when rewards implement epochs
+        // public_info.epoch,
+        0,
+        &public_info.poq_leadership_public_inputs.pol_epoch_nonce,
         public_info
-            .session
             .membership
             .size()
             .try_into()
             .expect("num_core_nodes must fit into u64"),
-        public_info.session.core_public_inputs.quota,
+        public_info.poq_core_public_inputs.quota,
         1,
     )
     .expect("session info must be created successfully")
+}
+
+thread_local! {
+    /// Records the epochs for which [`MockCoreAndLeaderProofsGenerator::set_epoch_private`]
+    /// was called, so tests can assert that the secret `PoL` info was applied to
+    /// the expected generator. Reliable because `#[tokio::test]` uses a
+    /// single-threaded runtime, so the value is test-isolated.
+    static SET_EPOCH_PRIVATE_CALLS: RefCell<Vec<Epoch>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Clears the record of `set_epoch_private` calls. Call before the code under
+/// test to isolate the calls of interest.
+pub fn reset_set_epoch_private_calls() {
+    SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().clear());
+}
+
+/// Returns the epochs for which `set_epoch_private` has been called since the
+/// last reset, in call order.
+pub fn recorded_set_epoch_private_calls() -> Vec<Epoch> {
+    SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow().clone())
 }
 
 pub struct MockCoreAndLeaderProofsGenerator(ZkHash);
@@ -391,7 +441,9 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self(settings.public_inputs.leader.pol_epoch_nonce)
     }
 
-    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, _: LeaderInputs, _: Epoch) {}
+    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, target_epoch: Epoch) {
+        SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
+    }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(epoch_based_dummy_proofs(self.0))

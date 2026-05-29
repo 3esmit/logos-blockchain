@@ -80,10 +80,11 @@ impl ServiceConfig {
                         .deployment
                         .rounds_per_interval(slots_per_block, &slot_duration),
                     rounds_per_observation_window: self.deployment.rounds_per_observation_window(),
-                    rounds_per_session: self
+                    // TODO: Change to epochs.
+                    rounds_per_epoch: self
                         .deployment
                         .rounds_per_session(slots_per_epoch, &slot_duration),
-                    rounds_per_session_transition_period: self
+                    rounds_per_epoch_transition_period: self
                         .deployment
                         .rounds_per_session_transition_period(slots_per_block, &slot_duration),
                 },

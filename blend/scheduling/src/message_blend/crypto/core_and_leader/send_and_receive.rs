@@ -30,6 +30,7 @@ use crate::{
 pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> {
     sender_processor: SenderEpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>,
     proofs_verifier: ProofsVerifier,
+    epoch: Epoch,
 }
 
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
@@ -55,6 +56,7 @@ where
                 epoch,
             ),
             proofs_verifier: ProofsVerifier::new(public_info),
+            epoch,
         }
     }
 }
@@ -64,6 +66,10 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 {
     pub const fn verifier(&self) -> &ProofsVerifier {
         &self.proofs_verifier
+    }
+
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
     }
 }
 
@@ -185,7 +191,7 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.set_epoch_private(private_inputs.clone(), initial_leader, Epoch::new(1));
+        processor.set_epoch_private(private_inputs.clone(), Epoch::new(1));
 
         assert!(processor.proofs_generator().0 == Some(private_inputs));
     }

@@ -1,6 +1,7 @@
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
-use tracing::info;
+use lb_log_targets::mantle;
+use tracing::debug;
 
 use super::{SDPWithdrawOp, SdpError};
 use crate::{
@@ -11,6 +12,8 @@ use crate::{
     },
     sdp::{NumberOfEpochs, locked_notes::LockedNotes},
 };
+
+const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
 
 pub struct SDPWithdrawValidationContext<'a> {
     pub lock_period: NumberOfEpochs,
@@ -98,7 +101,8 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
             .get(&self.declaration_id)
             .expect("The operation should have been validated");
 
-        info!(
+        debug!(
+            target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
             nonce = self.nonce,
             "updated declaration with withdraw message"

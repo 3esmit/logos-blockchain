@@ -765,8 +765,11 @@ mod tests {
 
     type HeaderId = [u8; 32];
 
-    fn create_tx(inputs: Inputs, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
-        let transfer_op = TransferOp::new(inputs, Outputs::new(outputs));
+    fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
+        let transfer_op = TransferOp::new(
+            Inputs::try_new(inputs).expect("Invalid inputs size"),
+            Outputs::try_new(outputs).expect("Invalid outputs size"),
+        );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
         SignedMantleTx {
             ops_proofs: vec![OpProof::ZkSig(
@@ -887,7 +890,7 @@ mod tests {
         let sk = ZkKey::from(BigUint::from(0u8));
         // determine fees
         let tx = create_tx(
-            [utxo.id()].into(),
+            vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
         );
@@ -895,7 +898,7 @@ mod tests {
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::default())
                 .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
-        let tx = create_tx([utxo.id()].into(), vec![output_note], &[sk]);
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
         // Create a dummy proof (using same structure as in cryptarchia tests)
 
@@ -1039,7 +1042,7 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            inputs: [utxo.id()].into(),
+            inputs: Inputs::new([utxo.id()]),
             metadata: [5, 6, 7, 8].into(),
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
@@ -1099,7 +1102,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: [utxo.id()].into(),
+            inputs: Inputs::new([utxo.id()]),
             metadata: [5, 6, 7, 8].into(),
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
@@ -1131,7 +1134,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new([withdraw_note]),
             withdraw_nonce: 0,
         };
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
@@ -1190,7 +1193,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: [utxo.id()].into(),
+            inputs: Inputs::new([utxo.id()]),
             metadata: Metadata::empty(),
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
@@ -1218,7 +1221,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new([withdraw_note]),
             withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
@@ -1509,7 +1512,7 @@ mod tests {
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
         let tx = create_tx(
-            [utxo.id()].into(),
+            vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
         );
@@ -1520,7 +1523,7 @@ mod tests {
         )
         .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
-        let tx = create_tx([utxo.id()].into(), vec![output_note], &[sk]);
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
         let result = ledger
             .clone()
@@ -1548,7 +1551,7 @@ mod tests {
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
         let tx = create_tx(
-            [utxo.id()].into(),
+            vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
         );
@@ -1562,7 +1565,7 @@ mod tests {
         .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(
-            [utxo.id()].into(),
+            vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
         );
@@ -1578,7 +1581,7 @@ mod tests {
         // storage
         output_note.value = utxo.note.value - fees.into_inner() - 1000;
         let tx = create_tx(
-            [utxo.id()].into(),
+            vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
         );

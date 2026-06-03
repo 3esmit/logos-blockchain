@@ -5,7 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _, stream};
+use futures::{Stream, StreamExt as _};
 use lb_core::{
     block::Block,
     codec::{DeserializeOp as _, SerializeOp as _},
@@ -60,7 +60,6 @@ where
         + Sync
         + 'static
         + Transaction<Hash = TxHash>,
-    RuntimeServiceId: 'static,
 {
     type Backend = Storage;
     type Block = Block<Tx>;
@@ -131,23 +130,6 @@ where
             tracing::error!("Failed to receive block parent from storage relay: {e}");
             None
         })
-    }
-
-    /// Returns a stream of [`Self::Block`]s starting from the block with
-    /// `from_descendant` (inclusive) until no parent block is found.
-    async fn blocks(
-        &self,
-        from_descendant: HeaderId,
-    ) -> Pin<Box<dyn Stream<Item = Self::Block> + Send>> {
-        let this = self.clone();
-        Box::pin(stream::unfold(
-            (this, from_descendant),
-            async move |(this, id)| {
-                let block = this.get_block(&id).await?;
-                let parent_id = block.header().parent();
-                Some((block, (this, parent_id)))
-            },
-        ))
     }
 
     async fn get_block_events(&self, header_id: &HeaderId) -> Option<Self::Events> {
@@ -257,94 +239,5 @@ where
             .map_err(|_| "Failed to send remove transactions batch request")?;
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZero;
-
-    use lb_core::mantle::SignedMantleTx;
-    use lb_ledger::LedgerState;
-    use lb_storage_service::backends::rocksdb::RocksBackend;
-    use tokio::sync::mpsc;
-
-    use super::*;
-    use crate::{
-        Cryptarchia,
-        tests::{
-            TestRuntimeServiceId, ledger_config, spawn_storage_service, try_build_block, utxo,
-        },
-    };
-
-    type Adapter = StorageAdapter<RocksBackend, SignedMantleTx, TestRuntimeServiceId>;
-    type StorageHandle = (tokio::task::JoinHandle<()>, tempfile::TempDir);
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_block_stream() {
-        let (blocks, storage, _storage_svc) = build_chain(3).await;
-
-        for block in &blocks {
-            storage
-                .store_block(
-                    block.header().id(),
-                    block.header().parent(),
-                    block.clone(),
-                    Events::default(),
-                )
-                .await
-                .unwrap();
-        }
-
-        let mut stream = storage.blocks(blocks.last().unwrap().header().id()).await;
-        for expected in blocks.iter().rev() {
-            assert_eq!(
-                stream.next().await.unwrap().header().id(),
-                expected.header().id(),
-            );
-        }
-        assert!(stream.next().await.is_none());
-
-        // Unknown starting id terminates the stream immediately.
-        let unknown: HeaderId = [99; 32].into();
-        assert!(storage.blocks(unknown).await.next().await.is_none());
-    }
-
-    async fn build_chain(
-        num_blocks: usize,
-    ) -> (Vec<Block<SignedMantleTx>>, Adapter, StorageHandle) {
-        let k = NonZero::<u32>::new(1).unwrap();
-        let config = ledger_config(k);
-        let (zk_key, utxo) = utxo();
-        let genesis_id: HeaderId = [0; 32].into();
-        let mut cryptarchia = Cryptarchia::from_lib(
-            genesis_id,
-            LedgerState::from_utxos([utxo], &config),
-            genesis_id,
-            config,
-            lb_cryptarchia_engine::State::Online,
-            Slot::genesis(),
-            0,
-        );
-
-        let mut blocks = Vec::with_capacity(num_blocks);
-        let mut slot = Slot::genesis() + 1;
-        for _ in 0..num_blocks {
-            let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot)
-                .expect("should find a winning slot");
-            cryptarchia
-                .try_apply_block(&block, block.header().slot())
-                .unwrap();
-            slot = block.header().slot() + 1;
-            blocks.push(block);
-        }
-
-        let (storage_tx, storage_rx) = mpsc::channel(32);
-        let storage_svc = spawn_storage_service(storage_rx);
-        let storage_adapter = <Adapter as StorageAdapterTrait<TestRuntimeServiceId>>::new(
-            OutboundRelay::new(storage_tx),
-        )
-        .await;
-        (blocks, storage_adapter, storage_svc)
     }
 }

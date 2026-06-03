@@ -42,13 +42,6 @@ pub trait StorageAdapter<RuntimeServiceId> {
 
     async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId>;
 
-    /// Returns a stream of [`Self::Block`]s starting from the block with
-    /// `from_descendant` (inclusive) until no parent block is found.
-    async fn blocks(
-        &self,
-        from_descendant: HeaderId,
-    ) -> Pin<Box<dyn Stream<Item = Self::Block> + Send>>;
-
     async fn get_block_events(&self, header_id: &HeaderId) -> Option<Self::Events>;
 
     /// Remove a block from the storage layer.

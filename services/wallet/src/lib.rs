@@ -403,12 +403,8 @@ where
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId: AsServiceId<Cryptarchia>
-        + AsServiceId<Kms>
-        + std::fmt::Debug
-        + std::fmt::Display
-        + Sync
-        + 'static,
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
 {
     async fn msg_tip_or_latest(
         msg_tip: Option<HeaderId>,

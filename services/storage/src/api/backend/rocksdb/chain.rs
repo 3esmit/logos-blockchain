@@ -51,7 +51,6 @@ impl StorageChainApi for RocksBackend {
     ) -> Result<(), Self::Error> {
         let header_bytes: [u8; 32] = header_id.into();
         let block_key = Bytes::copy_from_slice(&header_bytes);
-
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, header_bytes);
         let parent_bytes: [u8; 32] = parent_id.into();
         let parent_value = Bytes::copy_from_slice(&parent_bytes);

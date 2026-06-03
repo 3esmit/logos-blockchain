@@ -128,7 +128,7 @@ where
         if let Some(tx) = pop(&mut self.ready_txs, tx_id) {
             let produces: HashSet<_> = tx.produces().collect();
             // cheap clone to iterate through items while mutating original self struct if
-            // necessaary
+            // necessary
             for (waiting_id, tx) in self.orphan_txs.clone().iter() {
                 let depends: HashSet<_> = tx.consumes().collect();
                 let free = produces.intersection(&depends).count();

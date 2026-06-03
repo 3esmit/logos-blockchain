@@ -25,6 +25,13 @@ impl Debug for HeaderId {
     }
 }
 
+impl HeaderId {
+    #[must_use]
+    pub const fn genesis() -> Self {
+        Self([0; 32])
+    }
+}
+
 #[derive(Clone, Eq, PartialEq, Copy, Hash)]
 pub struct ContentId([u8; 32]);
 
@@ -140,7 +147,7 @@ impl Header {
     pub fn genesis(tx: &GenesisTx) -> Self {
         let tx_hash: TxHash = tx.hash();
         Self::new(
-            HeaderId([0; 32]),
+            HeaderId::genesis(),
             ContentId(tx_hash.into()),
             Slot::from(0u64),
             Groth16LeaderProof::genesis(),

@@ -128,6 +128,7 @@ where
         <I as IntoIterator>::IntoIter: Send,
     {
         let mut txs = self.forks_tracker.get_txs();
+        // keep incoming request order
         let txs: Vec<Tx> = keys
             .into_iter()
             .filter_map(move |key| txs.remove(&key))

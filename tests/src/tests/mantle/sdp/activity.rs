@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     num::NonZero,
     path::PathBuf,
     sync::{
@@ -9,7 +10,7 @@ use std::{
 };
 
 use lb_chain_service::Epoch;
-use lb_core::sdp::{NumberOfEpochs, ServiceType};
+use lb_core::sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType};
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
@@ -68,7 +69,9 @@ async fn sdp_blend_activity() {
 
     // Wait past the point where declarations would be removed if no activity
     // proofs were submitted.
-    let survival_epochs = INACTIVITY_PERIOD + RETENTION_PERIOD + 1.into(); // +1 margin
+    let initial_active_epoch = declarations.values().next().unwrap().active;
+    let survival_epochs =
+        initial_active_epoch + INACTIVITY_PERIOD + RETENTION_PERIOD + Epoch::new(2); // +1 margin
     let survival_slots = Slot::new(u64::from(u32::from(survival_epochs)) * slots_per_epoch);
     wait_for_nodes_tip_slot(
         &[&node0.client, &node1.client],
@@ -79,11 +82,7 @@ async fn sdp_blend_activity() {
 
     // Declarations must still be present — this proves that activity messages were
     // submitted/accepted, keeping the declarations alive.
-    let declarations_after = node0
-        .client
-        .get_sdp_declarations()
-        .await
-        .expect("querying SDP declarations should succeed");
+    let declarations_after = wait_for_declarations(&node0.client, Duration::from_secs(30)).await;
 
     // Check if at least one declaration is still present because blocks may have
     // been produced by only one nodes by coincidence
@@ -91,6 +90,16 @@ async fn sdp_blend_activity() {
         !declarations_after.is_empty(),
         "At least one blend declaration should survive past the inactivity window. Activity proofs may not have been submitted/accepted"
     );
+
+    // Check that the declarations have the refreshed `active` epoch number.
+    for (provider_id, declaration) in declarations {
+        let old_active = declaration.active;
+        let new_active = declarations_after.get(&provider_id).unwrap().active;
+        assert!(
+            new_active > old_active,
+            "Declaration must have the refreshed `active` epoch number larger than the initial one ({old_active:?}), but got {new_active:?}"
+        );
+    }
 }
 
 const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
@@ -105,7 +114,7 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
     };
     config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
     config.deployment.cryptarchia.slot_activation_coeff =
-        NonNegativeRatio::new(1, 10.try_into().unwrap());
+        NonNegativeRatio::new(1, 2.try_into().unwrap());
 
     slots_per_epoch.store(
         config.deployment.cryptarchia.slots_per_epoch(),
@@ -130,11 +139,14 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
 async fn wait_for_declarations(
     node: &NodeHttpClient,
     duration: Duration,
-) -> Vec<lb_core::sdp::Declaration> {
+) -> HashMap<ProviderId, Declaration> {
     tokio::time::timeout(duration, async {
         loop {
             if let Ok(declarations) = node.get_sdp_declarations().await {
-                return declarations;
+                return declarations
+                    .into_iter()
+                    .map(|declaration| (declaration.provider_id, declaration))
+                    .collect();
             }
             sleep(Duration::from_millis(200)).await;
         }

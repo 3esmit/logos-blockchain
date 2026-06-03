@@ -6,7 +6,10 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    ChainServiceInfo,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{block::Block, header::HeaderId, mantle::Transaction};
 use lb_ledger::LedgerState;
 use lb_storage_service::StorageService;
@@ -64,7 +67,7 @@ impl<Cryptarchia, Storage, RuntimeServiceId>
     for TrackerAdapter<Cryptarchia, Storage, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: Send + Clone,
+    Cryptarchia::Tx: Send + Sync + Clone,
     Storage: MempoolStorageAdapter<RuntimeServiceId, Tx = Cryptarchia::Tx>,
     Storage::Error: Debug,
     RuntimeServiceId: Send + Sync,
@@ -87,6 +90,14 @@ where
                 Err(ForksTrackerError::ParentNotFound(*header_id))
             }
         }
+    }
+
+    async fn get_tip_id(&self) -> Result<HeaderId, ForksTrackerError> {
+        self.crypatarchia_api
+            .info()
+            .await
+            .map(|info: ChainServiceInfo| info.cryptarchia_info.tip)
+            .map_err(ForksTrackerError::CryptarchiaApi)
     }
 }
 

@@ -26,6 +26,7 @@ pub struct BlockInfo<Tx> {
 #[async_trait::async_trait]
 pub trait BlockInfoGetter<Tx> {
     async fn get_block(&self, header_id: &HeaderId) -> Result<BlockInfo<Tx>, ForksTrackerError>;
+    async fn get_tip_id(&self) -> Result<HeaderId, ForksTrackerError>;
 }
 
 #[async_trait::async_trait]
@@ -110,6 +111,18 @@ where
     tips: HashSet<HeaderId>,
     mempool_log: TxHistory<Tx, TxId>,
     adapter: Adapter,
+}
+
+impl<Tx, TxId, Adapter> ForksTracker<Tx, TxId, Adapter>
+where
+    TxId: Eq + Hash + Clone,
+{
+    pub(crate) fn pending_item_count(&self, id: HeaderId) -> Result<usize, ForksTrackerError> {
+        self.block_states
+            .get(&id)
+            .map(|fork| fork.state.orphan_count())
+            .ok_or(ForksTrackerError::BlockNotFound)
+    }
 }
 
 impl<Tx, Adapter> ForksTracker<Tx, Tx::Hash, Adapter>
@@ -567,6 +580,10 @@ mod tests {
                 parent,
                 transactions,
             })
+        }
+
+        async fn get_tip_id(&self) -> Result<HeaderId, ForksTrackerError> {
+            Ok(HeaderId::genesis())
         }
     }
 

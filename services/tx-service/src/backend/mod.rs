@@ -71,6 +71,7 @@ pub trait MemPool {
     /// Remove items from the mempool..
     async fn remove(&mut self, items: &[Self::TxHash]);
 
+    async fn pending_item_count(&self) -> Result<usize, MempoolError>;
     fn last_item_timestamp(&self) -> u64;
 
     // Return the status of a set of items.

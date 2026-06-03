@@ -25,7 +25,9 @@ use crate::{
         MemPool, MempoolError, RecoverableMempool,
         forks::{BlockInfoGetter, ForksTracker, ForksTrackerState, LedgerStateGetter},
     },
-    metrics::{mempool_transactions_added, mempool_transactions_removed},
+    metrics::{
+        mempool_transactions_added, mempool_transactions_pending, mempool_transactions_removed,
+    },
     storage::MempoolStorageAdapter,
 };
 
@@ -103,7 +105,12 @@ where
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
         self.forks_tracker.process_new_tx(&tx).await;
         self.last_item_timestamp = current_timestamp_millis();
+        let pending_items = self.pending_item_count().await.unwrap_or_else(|e| {
+            tracing::error!(target: LOG_TARGET, "Failed to get pending item count: {}", e);
+            usize::MAX
+        });
         mempool_transactions_added();
+        mempool_transactions_pending(pending_items);
         Ok(())
     }
 
@@ -138,8 +145,24 @@ where
 
     async fn remove(&mut self, keys: &[Self::TxHash]) {
         let removed_count = self.forks_tracker.force_remove_txs(keys);
-        log_removed_items(removed_count);
+        let pending_items = self.pending_item_count().await.unwrap_or_else(|e| {
+            tracing::error!(target: LOG_TARGET, "Failed to get pending item count: {}", e);
+            usize::MAX
+        });
+        log_removed_items(removed_count, pending_items);
         mempool_transactions_removed(removed_count);
+        mempool_transactions_pending(pending_items);
+    }
+
+    async fn pending_item_count(&self) -> Result<usize, MempoolError> {
+        let tip = self
+            .adapter
+            .get_tip_id()
+            .await
+            .map_err(|e| MempoolError::DynamicPoolError(Box::new(e)))?;
+        self.forks_tracker
+            .pending_item_count(tip)
+            .map_err(|e| MempoolError::DynamicPoolError(Box::new(e)))
     }
 
     fn last_item_timestamp(&self) -> u64 {
@@ -227,16 +250,16 @@ fn current_timestamp_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn log_removed_items(removed_count: usize) {
+fn log_removed_items(removed_count: usize, pending_items: usize) {
     if removed_count == 0 {
         tracing::trace!(
             target: LOG_TARGET,
-            "Removed {removed_count} items from mempool"
+            "Removed {removed_count} items from mempool; pending_items={pending_items}"
         );
     } else {
         tracing::debug!(
             target: LOG_TARGET,
-            "Removed {removed_count} items from mempool"
+            "Removed {removed_count} items from mempool; pending_items={pending_items}"
         );
     }
 }

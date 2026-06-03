@@ -409,7 +409,10 @@ impl NodeDiagnostic {
 
     fn format_mempool(&self) -> String {
         match &self.mempool {
-            Ok(info) => format!("ok last_item_timestamp={}", info.last_item_timestamp),
+            Ok(info) => format!(
+                "ok pending_items={} last_item_timestamp={}",
+                info.pending_items, info.last_item_timestamp
+            ),
             Err(error) => format!("error={error}"),
         }
     }
@@ -508,12 +511,14 @@ impl From<BlendNetworkInfo<lb_network_service::backends::libp2p::PeerId>> for Bl
 
 #[derive(Clone)]
 struct MempoolSnapshot {
+    pending_items: usize,
     last_item_timestamp: u64,
 }
 
 impl From<MempoolMetrics> for MempoolSnapshot {
     fn from(value: MempoolMetrics) -> Self {
         Self {
+            pending_items: value.pending_items,
             last_item_timestamp: value.last_item_timestamp,
         }
     }
@@ -536,10 +541,13 @@ struct ClusterSummary {
     blend_epoch_peer_range: String,
     blend_unhealthy_total: usize,
     blend_transitioning_nodes: Vec<String>,
+    mempool_pending_range: String,
+    mempool_pending_total: usize,
     connectivity: ConnectivitySummary,
 }
 
 impl ClusterSummary {
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn build(
         cluster_control_profile: &str,
         node_count: usize,
@@ -553,10 +561,10 @@ impl ClusterSummary {
             .iter()
             .filter_map(|node| node.network.as_ref().ok())
             .collect::<Vec<_>>();
-        let mempool_ok = diagnostics
+        let mempools = diagnostics
             .iter()
             .filter_map(|node| node.mempool.as_ref().ok())
-            .count();
+            .collect::<Vec<_>>();
         let blend_ok = diagnostics
             .iter()
             .filter(|node| matches!(node.blend, Ok(Some(_))))
@@ -592,7 +600,7 @@ impl ClusterSummary {
             network_ok: network.len(),
             blend_ok,
             blend_unavailable,
-            mempool_ok,
+            mempool_ok: mempools.len(),
             height_range: format_range_u64(
                 &consensus
                     .iter()
@@ -642,6 +650,13 @@ impl ClusterSummary {
                 .filter(|(_, info)| info.old_epoch_peers.is_some())
                 .map(|(label, _)| (*label).clone())
                 .collect(),
+            mempool_pending_range: format_range_usize(
+                &mempools
+                    .iter()
+                    .map(|snapshot| snapshot.pending_items)
+                    .collect::<Vec<_>>(),
+            ),
+            mempool_pending_total: mempools.iter().map(|snapshot| snapshot.pending_items).sum(),
             connectivity: ConnectivitySummary::build(diagnostics),
         }
     }
@@ -678,6 +693,10 @@ impl ClusterSummary {
                 self.blend_epoch_peer_range,
                 self.blend_unhealthy_total,
                 self.blend_transitioning_nodes.join(", ")
+            ),
+            format!(
+                "  mempool pending_range={} pending_total={}",
+                self.mempool_pending_range, self.mempool_pending_total
             ),
         ]
         .join("\n")

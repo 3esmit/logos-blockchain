@@ -74,6 +74,10 @@ where
         }
     }
 
+    pub(crate) fn orphan_count(&self) -> usize {
+        self.orphan_txs.size()
+    }
+
     pub fn get_txs(&self) -> impl Iterator<Item = &Tx> + '_ {
         self.ready_txs
             .values()

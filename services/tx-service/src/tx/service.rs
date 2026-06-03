@@ -423,7 +423,7 @@ where
                 pool.remove(&ids).await;
             }
             MempoolMsg::Metrics { reply_channel } => {
-                Self::handle_metrics_message(pool, reply_channel);
+                Self::handle_metrics_message(pool, reply_channel).await;
             }
             MempoolMsg::Status {
                 items,
@@ -496,8 +496,13 @@ where
         }
     }
 
-    fn handle_metrics_message(pool: &Pool, reply_channel: oneshot::Sender<MempoolMetrics>) {
+    async fn handle_metrics_message(pool: &Pool, reply_channel: oneshot::Sender<MempoolMetrics>) {
+        let pending_items = pool.pending_item_count().await.unwrap_or_else(|e| {
+            error!(target: LOG_TARGET, "Failed to get pending item count: {e:?}");
+            usize::MAX
+        });
         let info = MempoolMetrics {
+            pending_items,
             last_item_timestamp: pool.last_item_timestamp(),
         };
 
@@ -613,6 +618,25 @@ where
             return;
         }
 
+        Self::log_mempool_pending_items(pool).await;
+
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
+    }
+
+    async fn log_mempool_pending_items(pool: &Pool) {
+        match pool.pending_item_count().await {
+            Ok(pending_items) => {
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    {
+                        counter.tx_mempool_pending_items = pending_items,
+                    },
+                    "mempool pending items updated"
+                );
+            }
+            Err(e) => {
+                tracing::debug!(target: LOG_TARGET, "failed to update mempool pending items: {e}");
+            }
+        }
     }
 }

@@ -5,7 +5,7 @@ use std::{
 };
 
 use lb_core::mantle::{DependencyId, TxDependencies};
-use rpds::{HashTrieMapSync as HashTrieMap, HashTrieSetSync as HashTrieSet};
+use rpds::HashTrieMapSync as HashTrieMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -15,7 +15,6 @@ where
 {
     pub ready_txs: HashSet<TxId>,
     pub orphan_txs: HashSet<TxId>,
-    pub dep_to_tx: HashMap<DependencyId, HashSet<TxId>>,
     pub tx_pending_count: HashMap<TxId, usize>,
 }
 
@@ -26,7 +25,6 @@ where
 {
     ready_txs: HashTrieMap<TxId, Arc<Tx>>,
     orphan_txs: HashTrieMap<TxId, Arc<Tx>>,
-    dep_to_tx: HashTrieMap<DependencyId, HashTrieSet<TxId>>,
     tx_pending_count: HashTrieMap<TxId, usize>,
 }
 
@@ -47,7 +45,6 @@ where
         Self {
             ready_txs: HashTrieMap::new_sync(),
             orphan_txs: HashTrieMap::new_sync(),
-            dep_to_tx: HashTrieMap::new_sync(),
             tx_pending_count: HashTrieMap::new_sync(),
         }
     }
@@ -63,11 +60,6 @@ where
         TxTrackerState {
             ready_txs: self.ready_txs.keys().cloned().collect(),
             orphan_txs: self.orphan_txs.keys().cloned().collect(),
-            dep_to_tx: self
-                .dep_to_tx
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
             tx_pending_count: self
                 .tx_pending_count
                 .iter()
@@ -80,7 +72,6 @@ where
         TxTrackerState {
             ready_txs,
             orphan_txs,
-            dep_to_tx,
             tx_pending_count,
         }: TxTrackerState<TxId>,
         txs: &HashMap<TxId, Arc<Tx>>,
@@ -105,17 +96,11 @@ where
             })
             .collect();
 
-        let dep_to_tx = dep_to_tx
-            .into_iter()
-            .map(|(k, v)| (k, v.into_iter().collect()))
-            .collect();
-
         let tx_pending_count = tx_pending_count.into_iter().collect();
 
         Self {
             ready_txs,
             orphan_txs,
-            dep_to_tx,
             tx_pending_count,
         }
     }
@@ -133,14 +118,6 @@ where
         if missing_deps.is_empty() {
             self.ready_txs.insert_mut(tx.hash(), tx);
         } else {
-            for dep in missing_deps {
-                if let Some(entry) = self.dep_to_tx.get_mut(&dep) {
-                    entry.insert_mut(tx.hash());
-                } else {
-                    let set = HashTrieSet::new_sync().insert(tx.hash());
-                    self.dep_to_tx.insert_mut(dep, set);
-                }
-            }
             self.tx_pending_count
                 .insert_mut(tx.hash(), pending_deps_count);
             self.orphan_txs.insert_mut(tx.hash(), tx);
@@ -149,18 +126,18 @@ where
 
     pub fn tx_in_block(&mut self, tx_id: &Tx::Hash) {
         if let Some(tx) = pop(&mut self.ready_txs, tx_id) {
-            for dep in tx.produces() {
-                let Some(waiting_ids) = self.dep_to_tx.get(&dep) else {
-                    continue;
-                };
-                for waiting_id in waiting_ids {
-                    if let Some(pending_count) = self.tx_pending_count.get_mut(waiting_id) {
-                        *pending_count -= 1;
-                        if *pending_count == 0
-                            && let Some(orphan_tx) = pop(&mut self.orphan_txs, waiting_id)
-                        {
-                            self.ready_txs.insert_mut(waiting_id.clone(), orphan_tx);
-                        }
+            let produces: HashSet<_> = tx.produces().collect();
+            // cheap clone to iterate through items while mutating original self struct if
+            // necessaary
+            for (waiting_id, tx) in self.orphan_txs.clone().iter() {
+                let depends: HashSet<_> = tx.consumes().collect();
+                let free = produces.intersection(&depends).count();
+                if let Some(pending_count) = self.tx_pending_count.get_mut(waiting_id) {
+                    *pending_count -= free;
+                    if *pending_count == 0
+                        && let Some(orphan_tx) = pop(&mut self.orphan_txs, waiting_id)
+                    {
+                        self.ready_txs.insert_mut(waiting_id.clone(), orphan_tx);
                     }
                 }
             }

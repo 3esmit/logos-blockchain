@@ -1,14 +1,9 @@
-use core::{fmt::Debug, pin::Pin};
-use std::{collections::HashMap, fmt::Display};
+use core::fmt::Debug;
+use std::fmt::Display;
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use futures::Stream;
-use lb_core::{
-    header::HeaderId,
-    sdp::{ProviderId, ProviderInfo},
-};
-use lb_cryptarchia_engine::Epoch;
+use lb_core::header::HeaderId;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{
@@ -21,14 +16,6 @@ use tokio::sync::{broadcast, oneshot};
 use tracing::{error, info, trace};
 
 const BROADCAST_CHANNEL_SIZE: usize = 128;
-
-pub type ActiveProvidersSubscription = Pin<Box<dyn Stream<Item = ActiveProviders> + Send + Sync>>;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActiveProviders {
-    pub epoch: Epoch,
-    pub providers: HashMap<ProviderId, ProviderInfo>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockInfo {

@@ -3,7 +3,7 @@ use nom::IResult;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::{DependencyId, OpProof, SignedMantleTx, TxDependencies, ops::sdp::SDPDeclareOp};
+use super::{OpProof, SignedMantleTx, TxDependencies, TxDependency, ops::sdp::SDPDeclareOp};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
@@ -166,11 +166,11 @@ impl GasCalculator for GenesisTx {
 }
 
 impl TxDependencies for GenesisTx {
-    fn consumes(&self) -> impl Iterator<Item = DependencyId> {
+    fn consumes(&self) -> TxDependency {
         self.tx.mantle_tx.consumes()
     }
 
-    fn produces(&self) -> impl Iterator<Item = DependencyId> {
+    fn produces(&self) -> TxDependency {
         self.tx.mantle_tx.produces()
     }
 }

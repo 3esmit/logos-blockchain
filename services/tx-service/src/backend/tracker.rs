@@ -4,7 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use lb_core::mantle::{DependencyId, TxDependencies};
+use lb_core::mantle::TxDependencies;
+use lb_ledger::LedgerState;
 use rpds::HashTrieMapSync as HashTrieMap;
 use serde::{Deserialize, Serialize};
 
@@ -110,12 +111,24 @@ impl<Tx> TxTracker<Tx, Tx::Hash>
 where
     Tx: TxDependencies + Clone,
 {
-    pub fn process_tx(&mut self, tx: Arc<Tx>, frontier_deps: &HashSet<DependencyId>) {
-        let consumes: HashSet<DependencyId> = tx.consumes().collect();
-        let missing_deps: HashSet<DependencyId> =
-            consumes.difference(frontier_deps).cloned().collect();
-        let pending_deps_count = missing_deps.len();
-        if missing_deps.is_empty() {
+    pub fn process_tx(&mut self, tx: Arc<Tx>, frontier_deps: &LedgerState) {
+        let mut pending_deps_count = 0;
+        let consumes = tx.consumes();
+        let ledger_channels = frontier_deps.mantle_ledger().channels();
+        for (channel_id, msg_id) in consumes.channels {
+            if let Some(state) = ledger_channels.channel_state(&channel_id)
+                && msg_id == state.tip_message
+            {
+                continue;
+            }
+            pending_deps_count += 1;
+        }
+        for utxo in consumes.utxos {
+            if !frontier_deps.latest_utxos().contains(&utxo) {
+                pending_deps_count += 1;
+            }
+        }
+        if pending_deps_count == 0 {
             self.ready_txs.insert_mut(tx.hash(), tx);
         } else {
             self.tx_pending_count
@@ -126,12 +139,19 @@ where
 
     pub fn tx_in_block(&mut self, tx_id: &Tx::Hash) {
         if let Some(tx) = pop(&mut self.ready_txs, tx_id) {
-            let produces: HashSet<_> = tx.produces().collect();
+            let produces = tx.produces();
+            let free_channels_deps: HashSet<_> = produces.channels.values().collect();
+            let free_utxos_deps: HashSet<_> = produces.utxos.iter().cloned().collect();
             // cheap clone to iterate through items while mutating original self struct if
             // necessary
             for (waiting_id, tx) in self.orphan_txs.clone().iter() {
-                let depends: HashSet<_> = tx.consumes().collect();
-                let free = produces.intersection(&depends).count();
+                let depends = tx.consumes();
+                let depends_channels: HashSet<_> = depends.channels.values().collect();
+                let depends_utxos: HashSet<_> = depends.utxos.iter().cloned().collect();
+                let free = {
+                    depends_channels.difference(&free_channels_deps).count()
+                        + depends_utxos.difference(&free_utxos_deps).count()
+                };
                 if let Some(pending_count) = self.tx_pending_count.get_mut(waiting_id) {
                     *pending_count -= free;
                     if *pending_count == 0
@@ -194,7 +214,7 @@ mod tests {
     use std::{collections::HashSet, sync::Arc};
 
     use bytes::Bytes;
-    use lb_core::mantle::{DependencyId, Transaction, TransactionHasher, TxDependencies};
+    use lb_core::mantle::{Transaction, TransactionHasher, TxDependencies};
 
     use super::TxTracker;
 

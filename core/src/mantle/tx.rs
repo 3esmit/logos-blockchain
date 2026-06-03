@@ -12,8 +12,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        AuthenticatedMantleTx, DependencyId, StorageSize, Transaction, TransactionHasher,
-        TxDependencies, TxRewardsRatio, TxRewardsRatioError, Value,
+        AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, TxDependencies,
+        TxDependency, TxDependencyKind, TxRewardsRatio, TxRewardsRatioError, Value,
         channel::Channels,
         encoding::{Ops, decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
@@ -290,20 +290,24 @@ impl Transaction for MantleTx {
 }
 
 impl TxDependencies for MantleTx {
-    fn consumes(&self) -> impl Iterator<Item = DependencyId> {
-        let consumes: HashSet<DependencyId> = self.ops().iter().flat_map(Op::consumes).collect();
-        let produces: HashSet<DependencyId> = self.ops().iter().flat_map(Op::produces).collect();
-        let external_consumes: HashSet<DependencyId> =
-            consumes.difference(&produces).cloned().collect();
-        external_consumes.into_iter()
+    fn consumes(&self) -> TxDependency {
+        let consumes: HashSet<TxDependencyKind> =
+            self.ops().iter().flat_map(Op::consumes).collect();
+        let produces: HashSet<TxDependencyKind> =
+            self.ops().iter().flat_map(Op::produces).collect();
+        let external_consumes: HashSet<TxDependencyKind> =
+            consumes.difference(&produces).copied().collect();
+        external_consumes.into_iter().collect()
     }
 
-    fn produces(&self) -> impl Iterator<Item = DependencyId> {
-        let consumes: HashSet<DependencyId> = self.ops().iter().flat_map(Op::consumes).collect();
-        let produces: HashSet<DependencyId> = self.ops().iter().flat_map(Op::produces).collect();
-        let external_produces: HashSet<DependencyId> =
-            produces.difference(&consumes).cloned().collect();
-        external_produces.into_iter()
+    fn produces(&self) -> TxDependency {
+        let consumes: HashSet<TxDependencyKind> =
+            self.ops().iter().flat_map(Op::consumes).collect();
+        let produces: HashSet<TxDependencyKind> =
+            self.ops().iter().flat_map(Op::produces).collect();
+        let external_produces: HashSet<TxDependencyKind> =
+            produces.difference(&consumes).copied().collect();
+        external_produces.into_iter().collect()
     }
 }
 
@@ -571,11 +575,11 @@ impl Transaction for SignedMantleTx {
 }
 
 impl TxDependencies for SignedMantleTx {
-    fn consumes(&self) -> impl Iterator<Item = DependencyId> {
+    fn consumes(&self) -> TxDependency {
         self.mantle_tx.consumes()
     }
 
-    fn produces(&self) -> impl Iterator<Item = DependencyId> {
+    fn produces(&self) -> TxDependency {
         self.mantle_tx.produces()
     }
 }
@@ -1105,16 +1109,16 @@ mod tests {
     // are both produced and consumed within the same transaction (internal
     // deps), exposing only the truly external consume/produce surface.
     mod transaction_dependencies {
-        use std::collections::HashSet;
+        use std::collections::HashMap;
 
         use lb_key_management_system_keys::keys::Ed25519Key;
 
         use crate::mantle::{
-            DependencyId, MantleTx, TxDependencies as _,
+            MantleTx, TxDependencies as _, TxDependency,
             encoding::Ops,
             ops::{
                 Op,
-                channel::{MsgId, inscribe::InscriptionOp},
+                channel::{ChannelId, MsgId, inscribe::InscriptionOp},
             },
         };
 
@@ -1129,20 +1133,9 @@ mod tests {
             }
         }
 
-        fn dep(msg_id: MsgId) -> DependencyId {
-            DependencyId::copy_from_slice(msg_id.as_ref())
-        }
-
-        fn op_dep(op: &InscriptionOp) -> DependencyId {
-            DependencyId::copy_from_slice(op.id().as_ref())
-        }
-
-        fn tx_consumes(tx: &MantleTx) -> HashSet<DependencyId> {
-            tx.consumes().collect()
-        }
-
-        fn tx_produces(tx: &MantleTx) -> HashSet<DependencyId> {
-            tx.produces().collect()
+        fn assert_channel_deps(deps: &TxDependency, expected: HashMap<ChannelId, MsgId>) {
+            assert!(deps.utxos.is_empty());
+            assert_eq!(deps.channels, expected);
         }
 
         // ── tests ─────────────────────────────────────────────────────────────
@@ -1150,8 +1143,10 @@ mod tests {
         #[test]
         fn empty_tx_has_no_deps() {
             let tx = MantleTx(Ops::new_unchecked(vec![]));
-            assert!(tx_consumes(&tx).is_empty());
-            assert!(tx_produces(&tx).is_empty());
+            let consumes = tx.consumes();
+            let produces = tx.produces();
+            assert!(consumes.channels.is_empty() && consumes.utxos.is_empty());
+            assert!(produces.channels.is_empty() && produces.utxos.is_empty());
         }
 
         /// The `MsgId::root` sentinel marks "no prior message" for the first
@@ -1161,28 +1156,29 @@ mod tests {
         /// exist.
         #[test]
         fn first_inscribe_does_not_consume_root_sentinel() {
+            let channel: ChannelId = [1; 32].into();
             let op = inscribe_op([1; 32], MsgId::root(), b"hello");
-            let self_dep = op_dep(&op);
+            let self_id = op.id();
 
             let tx = MantleTx([Op::ChannelInscribe(op)].into());
 
-            assert!(tx_consumes(&tx).is_empty());
-            assert_eq!(tx_produces(&tx), HashSet::from([self_dep]));
+            assert_channel_deps(&tx.consumes(), HashMap::new());
+            assert_channel_deps(&tx.produces(), HashMap::from([(channel, self_id)]));
         }
 
         /// A single op with no internal counterpart: parent is an external
         /// consume, the op's own id is an external produce.
         #[test]
         fn single_inscribe_all_deps_are_external() {
+            let channel: ChannelId = [1; 32].into();
             let parent = MsgId::from([7; 32]);
             let op = inscribe_op([1; 32], parent, b"hello");
-            let parent_dep = dep(parent);
-            let self_dep = op_dep(&op);
+            let self_id = op.id();
 
             let tx = MantleTx([Op::ChannelInscribe(op)].into());
 
-            assert_eq!(tx_consumes(&tx), HashSet::from([parent_dep]));
-            assert_eq!(tx_produces(&tx), HashSet::from([self_dep]));
+            assert_channel_deps(&tx.consumes(), HashMap::from([(channel, parent)]));
+            assert_channel_deps(&tx.produces(), HashMap::from([(channel, self_id)]));
         }
 
         /// op1 produces X (its id); op2 consumes X (`op1.id()` as its parent).
@@ -1193,10 +1189,9 @@ mod tests {
             let op1_id = op1.id();
             let op2 = inscribe_op([1; 32], op1_id, b"second");
 
-            let internal_dep = dep(op1_id);
             let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
-            assert!(!tx_consumes(&tx).contains(&internal_dep));
+            assert!(!tx.consumes().channels.values().any(|m| *m == op1_id));
         }
 
         /// Same scenario: the internally-linked dep must NOT appear in external
@@ -1207,43 +1202,51 @@ mod tests {
             let op1_id = op1.id();
             let op2 = inscribe_op([1; 32], op1_id, b"second");
 
-            let internal_dep = dep(op1_id);
             let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
-            assert!(!tx_produces(&tx).contains(&internal_dep));
+            assert!(!tx.produces().channels.values().any(|m| *m == op1_id));
         }
 
         /// For a chain `chain_root` → `op1_id` → `op2_id`, only the chain
         /// endpoints (`chain_root` and `op2_id`) are visible externally.
         #[test]
         fn chained_inscribes_expose_only_external_endpoints() {
+            let channel: ChannelId = [1; 32].into();
             let chain_root = MsgId::from([7; 32]);
             let op1 = inscribe_op([1; 32], chain_root, b"first");
             let op1_id = op1.id();
             let op2 = inscribe_op([1; 32], op1_id, b"second");
-            let op2_dep = op_dep(&op2);
+            let op2_id = op2.id();
 
             let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
-            assert_eq!(tx_consumes(&tx), HashSet::from([dep(chain_root)]));
-            assert_eq!(tx_produces(&tx), HashSet::from([op2_dep]));
+            assert_channel_deps(&tx.consumes(), HashMap::from([(channel, chain_root)]));
+            assert_channel_deps(&tx.produces(), HashMap::from([(channel, op2_id)]));
         }
 
         /// Two inscribes with distinct, unrelated parents produce no internal
         /// deps — every consume and produce is external.
         #[test]
         fn independent_ops_all_deps_external() {
+            let ch_a: ChannelId = [10; 32].into();
+            let ch_b: ChannelId = [20; 32].into();
             let root_a = MsgId::from([1; 32]);
             let root_b = MsgId::from([2; 32]);
             let op1 = inscribe_op([10; 32], root_a, b"chain_a");
             let op2 = inscribe_op([20; 32], root_b, b"chain_b");
-            let op1_dep = op_dep(&op1);
-            let op2_dep = op_dep(&op2);
+            let op1_id = op1.id();
+            let op2_id = op2.id();
 
             let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
-            assert_eq!(tx_consumes(&tx), HashSet::from([dep(root_a), dep(root_b)]));
-            assert_eq!(tx_produces(&tx), HashSet::from([op1_dep, op2_dep]));
+            assert_channel_deps(
+                &tx.consumes(),
+                HashMap::from([(ch_a, root_a), (ch_b, root_b)]),
+            );
+            assert_channel_deps(
+                &tx.produces(),
+                HashMap::from([(ch_a, op1_id), (ch_b, op2_id)]),
+            );
         }
 
         /// One internal chain (`root_a` → `op1_id` → `op2_id`) combined with
@@ -1251,6 +1254,8 @@ mod tests {
         /// endpoints of each sub-graph are visible.
         #[test]
         fn mixed_internal_and_external_deps() {
+            let ch_a: ChannelId = [1; 32].into();
+            let ch_b: ChannelId = [3; 32].into();
             let root_a = MsgId::from([7; 32]);
             let root_b = MsgId::from([9; 32]);
 
@@ -1270,13 +1275,13 @@ mod tests {
                 .into(),
             );
 
-            let consumes = tx_consumes(&tx);
-            let produces = tx_produces(&tx);
+            let consumes = tx.consumes();
+            let produces = tx.produces();
 
-            assert_eq!(consumes, HashSet::from([dep(root_a), dep(root_b)]));
-            assert_eq!(produces, HashSet::from([dep(op2_id), dep(op3_id)]));
-            assert!(!consumes.contains(&dep(op1_id)));
-            assert!(!produces.contains(&dep(op1_id)));
+            assert_channel_deps(&consumes, HashMap::from([(ch_a, root_a), (ch_b, root_b)]));
+            assert_channel_deps(&produces, HashMap::from([(ch_a, op2_id), (ch_b, op3_id)]));
+            assert!(!consumes.channels.values().any(|m| *m == op1_id));
+            assert!(!produces.channels.values().any(|m| *m == op1_id));
         }
     }
 }

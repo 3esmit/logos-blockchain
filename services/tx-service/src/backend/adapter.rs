@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::BTreeSet,
     fmt::{Debug, Display},
     pin::Pin,
 };
@@ -7,11 +7,7 @@ use std::{
 use async_trait::async_trait;
 use futures::Stream;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use lb_core::{
-    block::Block,
-    header::HeaderId,
-    mantle::{DependencyId, Transaction},
-};
+use lb_core::{block::Block, header::HeaderId, mantle::Transaction};
 use lb_ledger::LedgerState;
 use lb_storage_service::StorageService;
 use overwatch::{DynError, overwatch::OverwatchHandle, services::AsServiceId};
@@ -21,7 +17,6 @@ use crate::{
     backend::{
         MempoolAdapter,
         forks::{BlockInfo, BlockInfoGetter, ForksTrackerError, LedgerStateGetter},
-        inspector::LedgerStateInspector,
     },
     storage::{MempoolStorageAdapter, MempoolStorageAdapterNew},
 };
@@ -113,20 +108,6 @@ where
             .await
             .map_err(|_| ForksTrackerError::ParentNotFound(header_id))?
             .ok_or(ForksTrackerError::ParentNotFound(header_id))
-    }
-
-    async fn get_ledger_deps(
-        &self,
-        header_id: &HeaderId,
-    ) -> Result<HashSet<DependencyId>, ForksTrackerError> {
-        match self.crypatarchia_api.get_ledger_state(*header_id).await {
-            Ok(Some(state)) => Ok(LedgerStateInspector::new(state).dependencies()),
-            Ok(None) => Err(ForksTrackerError::ParentNotFound(*header_id)),
-            Err(e) => {
-                error!("{e:?}");
-                Err(ForksTrackerError::ParentNotFound(*header_id))
-            }
-        }
     }
 }
 

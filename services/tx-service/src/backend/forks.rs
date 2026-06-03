@@ -9,7 +9,7 @@ use futures::StreamExt as _;
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, api::ApiError};
 use lb_core::{
     header::HeaderId,
-    mantle::{DependencyId, TxDependencies, TxRewardsRatio, gas::MainnetGasConstants},
+    mantle::{TxDependencies, TxRewardsRatio, gas::MainnetGasConstants},
 };
 use lb_ledger::LedgerState;
 use serde::{Deserialize, Serialize};
@@ -32,10 +32,6 @@ pub trait BlockInfoGetter<Tx> {
 pub trait LedgerStateGetter {
     async fn get_ledger_state(&self, header_id: HeaderId)
     -> Result<LedgerState, ForksTrackerError>;
-    async fn get_ledger_deps(
-        &self,
-        header_id: &HeaderId,
-    ) -> Result<HashSet<DependencyId>, ForksTrackerError>;
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -288,9 +284,9 @@ where
         if parent_version < self.mempool_log.version() {
             let replay_txs = self.mempool_log.txs_since(parent_version);
             if !replay_txs.is_empty() {
-                let deps = self.adapter.get_ledger_deps(&parent).await?;
+                let ledger_state = self.adapter.get_ledger_state(parent).await?;
                 for tx in replay_txs {
-                    block_state.process_tx(tx, &deps);
+                    block_state.process_tx(tx, &ledger_state);
                 }
             }
         }
@@ -366,7 +362,7 @@ where
                     .zip(std::iter::repeat_with(|| ledger_getter.clone()))
             )
             .map(async |(header_id, ledger_getter)| {
-                let ledger_state = ledger_getter.get_ledger_deps(&header_id).await;
+                let ledger_state = ledger_getter.get_ledger_state(header_id).await;
                 (header_id, ledger_state)
             })
             .buffer_unordered(tips_len)
@@ -426,7 +422,7 @@ mod tests {
     use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Slot};
     use lb_core::{
         header::HeaderId,
-        mantle::{DependencyId, Transaction, TransactionHasher, TxDependencies},
+        mantle::{Transaction, TransactionHasher, TxDependencies},
     };
     use lb_ledger::LedgerState;
 
@@ -515,13 +511,6 @@ mod tests {
             header_id: HeaderId,
         ) -> Result<LedgerState, ForksTrackerError> {
             Err(ForksTrackerError::LedgerStateNotFound(header_id))
-        }
-
-        async fn get_ledger_deps(
-            &self,
-            _: &HeaderId,
-        ) -> Result<HashSet<DependencyId>, ForksTrackerError> {
-            Ok(HashSet::new())
         }
     }
 

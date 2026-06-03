@@ -22,7 +22,7 @@ use nom::{
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
-    DependencyId, NoteId,
+    NoteId, TxDependencyKind,
     gas::{Gas, GasConstants},
     ops::{
         leader_claim::LeaderClaimOp,
@@ -227,33 +227,39 @@ impl Op {
         }
     }
 
-    pub fn consumes(&self) -> impl Iterator<Item = DependencyId> {
+    pub fn consumes(&self) -> impl Iterator<Item = TxDependencyKind> {
         match self {
             // The root MsgId is the "no prior message" sentinel for the first
             // inscription on a channel; it has no producer so emitting it as
             // a dep would permanently orphan the tx in the mempool.
             Self::ChannelInscribe(op) if op.parent == MsgId::root() => {
-                Box::new(std::iter::empty()) as Box<dyn Iterator<Item = DependencyId>>
+                Box::new(std::iter::empty()) as Box<dyn Iterator<Item = TxDependencyKind>>
             }
-            Self::ChannelInscribe(op) => Box::new(std::iter::once(DependencyId::copy_from_slice(
-                op.parent.as_ref(),
-            ))) as Box<dyn Iterator<Item = DependencyId>>,
-            Self::Transfer(op) => {
-                Box::new(op.inputs.iter().map(|note_id: &NoteId| note_id.as_bytes()))
-            }
+            Self::ChannelInscribe(op) => Box::new(std::iter::once(TxDependencyKind::Channel((
+                op.channel_id,
+                op.parent,
+            ))))
+                as Box<dyn Iterator<Item = TxDependencyKind>>,
+            Self::Transfer(op) => Box::new(
+                op.inputs
+                    .iter()
+                    .map(|note_id: &NoteId| TxDependencyKind::Utxo(*note_id)),
+            ) as Box<dyn Iterator<Item = TxDependencyKind>>,
             _ => Box::new(std::iter::empty()),
         }
     }
 
-    pub fn produces(&self) -> impl Iterator<Item = DependencyId> {
+    pub fn produces(&self) -> impl Iterator<Item = TxDependencyKind> {
         match self {
-            Self::ChannelInscribe(op) => Box::new(std::iter::once(DependencyId::copy_from_slice(
-                op.id().as_ref(),
-            ))) as Box<dyn Iterator<Item = DependencyId>>,
+            Self::ChannelInscribe(op) => Box::new(std::iter::once(TxDependencyKind::Channel((
+                op.channel_id,
+                op.id(),
+            ))))
+                as Box<dyn Iterator<Item = TxDependencyKind>>,
             Self::Transfer(op) => Box::new(
                 op.outputs
                     .utxos(op)
-                    .map(|utxo| DependencyId::copy_from_slice(utxo.id().as_bytes().as_ref())),
+                    .map(|utxo| TxDependencyKind::Utxo(utxo.id())),
             ),
             _ => Box::new(std::iter::empty()),
         }

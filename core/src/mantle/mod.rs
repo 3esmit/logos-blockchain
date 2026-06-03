@@ -1,6 +1,9 @@
-use std::{hash::Hash, pin::Pin};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    pin::Pin,
+};
 
-use bytes::Bytes;
 use futures::Stream;
 use thiserror::Error;
 
@@ -27,7 +30,10 @@ pub use tx::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 use crate::mantle::{
     gas::GasOverflow,
     ledger::Utxos,
-    ops::transfer::{TransferError, TransferOp},
+    ops::{
+        channel::{ChannelId, MsgId},
+        transfer::{TransferError, TransferOp},
+    },
     tx::{GasPrices, OperationVerificationHelper},
 };
 
@@ -144,11 +150,41 @@ pub enum Error {
     InvalidWitness,
 }
 
-pub type DependencyId = Bytes;
+pub struct TxDependency {
+    pub channels: HashMap<ChannelId, MsgId>,
+    pub utxos: HashSet<NoteId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TxDependencyKind {
+    Channel((ChannelId, MsgId)),
+    Utxo(NoteId),
+}
+
+impl FromIterator<TxDependencyKind> for TxDependency {
+    fn from_iter<I: IntoIterator<Item = TxDependencyKind>>(iter: I) -> Self {
+        let mut channel_deps = HashMap::new();
+        let mut utxos = HashSet::new();
+        for dep in iter {
+            match dep {
+                TxDependencyKind::Channel((channel_id, msg_id)) => {
+                    channel_deps.insert(channel_id, msg_id);
+                }
+                TxDependencyKind::Utxo(note_id) => {
+                    utxos.insert(note_id);
+                }
+            }
+        }
+        Self {
+            channels: channel_deps,
+            utxos,
+        }
+    }
+}
 
 pub trait TxDependencies: Transaction {
-    fn consumes(&self) -> impl Iterator<Item = DependencyId>;
-    fn produces(&self) -> impl Iterator<Item = DependencyId>;
+    fn consumes(&self) -> TxDependency;
+    fn produces(&self) -> TxDependency;
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -26,7 +26,7 @@ use lb_sdp_service::{
     wallet::SdpWalletAdapter,
 };
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
-use lb_tx_service::{TxMempoolService, backend::Mempool, storage::MempoolStorageAdapter};
+use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
@@ -108,6 +108,9 @@ where
     StorageAdapter:
         lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     MempoolAdapter: lb_tx_service::backend::MempoolAdapter<SignedMantleTx, RuntimeServiceId>
+        + lb_tx_service::storage::MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
+        + lb_tx_service::backend::LedgerStateGetter
+        + lb_tx_service::backend::BlockInfoGetter<SignedMantleTx>
         + Send
         + Sync
         + Clone
@@ -233,7 +236,7 @@ where
             )
             .route(
                 paths::MEMPOOL_VIEW,
-                routing::get(mempool_view::<MempoolStorageAdapter, RuntimeServiceId>),
+                routing::get(mempool_view::<MempoolAdapter, RuntimeServiceId>),
             )
             .route(paths::CHANNEL, routing::get(channel::<RuntimeServiceId>))
             .route(

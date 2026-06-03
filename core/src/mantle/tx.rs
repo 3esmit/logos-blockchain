@@ -1133,9 +1133,9 @@ mod tests {
             }
         }
 
-        fn assert_channel_deps(deps: &TxDependency, expected: HashMap<ChannelId, MsgId>) {
+        fn assert_channel_deps(deps: &TxDependency, expected: &HashMap<ChannelId, MsgId>) {
             assert!(deps.utxos.is_empty());
-            assert_eq!(deps.channels, expected);
+            assert_eq!(&deps.channels, expected);
         }
 
         // ── tests ─────────────────────────────────────────────────────────────
@@ -1162,8 +1162,8 @@ mod tests {
 
             let tx = MantleTx([Op::ChannelInscribe(op)].into());
 
-            assert_channel_deps(&tx.consumes(), HashMap::new());
-            assert_channel_deps(&tx.produces(), HashMap::from([(channel, self_id)]));
+            assert_channel_deps(&tx.consumes(), &HashMap::new());
+            assert_channel_deps(&tx.produces(), &HashMap::from([(channel, self_id)]));
         }
 
         /// A single op with no internal counterpart: parent is an external
@@ -1177,8 +1177,8 @@ mod tests {
 
             let tx = MantleTx([Op::ChannelInscribe(op)].into());
 
-            assert_channel_deps(&tx.consumes(), HashMap::from([(channel, parent)]));
-            assert_channel_deps(&tx.produces(), HashMap::from([(channel, self_id)]));
+            assert_channel_deps(&tx.consumes(), &HashMap::from([(channel, parent)]));
+            assert_channel_deps(&tx.produces(), &HashMap::from([(channel, self_id)]));
         }
 
         /// op1 produces X (its id); op2 consumes X (`op1.id()` as its parent).
@@ -1220,8 +1220,8 @@ mod tests {
 
             let tx = MantleTx([Op::ChannelInscribe(op1), Op::ChannelInscribe(op2)].into());
 
-            assert_channel_deps(&tx.consumes(), HashMap::from([(channel, chain_root)]));
-            assert_channel_deps(&tx.produces(), HashMap::from([(channel, op2_id)]));
+            assert_channel_deps(&tx.consumes(), &HashMap::from([(channel, chain_root)]));
+            assert_channel_deps(&tx.produces(), &HashMap::from([(channel, op2_id)]));
         }
 
         /// Two inscribes with distinct, unrelated parents produce no internal
@@ -1241,11 +1241,11 @@ mod tests {
 
             assert_channel_deps(
                 &tx.consumes(),
-                HashMap::from([(ch_a, root_a), (ch_b, root_b)]),
+                &HashMap::from([(ch_a, root_a), (ch_b, root_b)]),
             );
             assert_channel_deps(
                 &tx.produces(),
-                HashMap::from([(ch_a, op1_id), (ch_b, op2_id)]),
+                &HashMap::from([(ch_a, op1_id), (ch_b, op2_id)]),
             );
         }
 
@@ -1278,8 +1278,8 @@ mod tests {
             let consumes = tx.consumes();
             let produces = tx.produces();
 
-            assert_channel_deps(&consumes, HashMap::from([(ch_a, root_a), (ch_b, root_b)]));
-            assert_channel_deps(&produces, HashMap::from([(ch_a, op2_id), (ch_b, op3_id)]));
+            assert_channel_deps(&consumes, &HashMap::from([(ch_a, root_a), (ch_b, root_b)]));
+            assert_channel_deps(&produces, &HashMap::from([(ch_a, op2_id), (ch_b, op3_id)]));
             assert!(!consumes.channels.values().any(|m| *m == op1_id));
             assert!(!produces.channels.values().any(|m| *m == op1_id));
         }

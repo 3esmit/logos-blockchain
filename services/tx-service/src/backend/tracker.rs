@@ -164,13 +164,13 @@ where
         if let Some(tx) = pop(&mut self.ready_txs, tx_id) {
             let produces = tx.produces();
             let free_channels_deps: HashSet<_> = produces.channels.values().collect();
-            let free_utxos_deps: HashSet<_> = produces.utxos.iter().cloned().collect();
+            let free_utxos_deps: HashSet<_> = produces.utxos.iter().copied().collect();
             // cheap clone to iterate through items while mutating original self struct if
             // necessary
             for (waiting_id, tx) in self.orphan_txs.clone().iter() {
                 let depends = tx.consumes();
                 let depends_channels: HashSet<_> = depends.channels.values().collect();
-                let depends_utxos: HashSet<_> = depends.utxos.iter().cloned().collect();
+                let depends_utxos: HashSet<_> = depends.utxos.iter().copied().collect();
                 let free = {
                     depends_channels.intersection(&free_channels_deps).count()
                         + depends_utxos.intersection(&free_utxos_deps).count()
@@ -361,10 +361,6 @@ mod tests {
     ///                  └── tx_combine (token_a + coin_y → nft_1 + coin_w) ─┤
     ///                         └── tx_settle (coin_z + coin_w → coin_final) ┘
     /// ```
-    #[expect(
-        clippy::too_many_lines,
-        reason = "comprehensive integration test for dependency graph"
-    )]
     #[test]
     fn test_diamond_dependency_graph() {
         let mut tracker: TxTracker<TestTx, TestTxId> = TxTracker::new();
@@ -386,13 +382,7 @@ mod tests {
 
         // Submit in reverse topological order
         for t in [
-            tx_settle,
-            tx_combine.clone(),
-            tx_chain.clone(),
-            tx_mint_b,
-            tx_mint_a.clone(),
-            tx_fund.clone(),
-            tx_genesis.clone(),
+            tx_settle, tx_combine, tx_chain, tx_mint_b, tx_mint_a, tx_fund, tx_genesis,
         ] {
             tracker.process_tx(Arc::new(t), &frontier);
         }

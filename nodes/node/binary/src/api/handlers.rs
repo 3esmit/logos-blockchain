@@ -50,8 +50,10 @@ use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
 use lb_tx_service::{
-    MempoolMsg, TxMempoolService, backend::Mempool,
+    MempoolMsg, TxMempoolService,
+    backend::{BlockInfoGetter, LedgerStateGetter, Mempool},
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
+    storage::MempoolStorageAdapter,
 };
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
 use overwatch::{
@@ -653,19 +655,18 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn mempool_view<StorageAdapter, RuntimeServiceId>(
+pub async fn mempool_view<MempoolAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
-        > + Send
+    MempoolAdapter: MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
+        + LedgerStateGetter
+        + BlockInfoGetter<SignedMantleTx>
+        + Send
         + Sync
         + Clone
         + 'static,
-    StorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -680,35 +681,34 @@ where
                     RuntimeServiceId,
                 >,
                 Mempool<
-                    HeaderId,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    StorageAdapter,
+                    MempoolAdapter,
                     RuntimeServiceId,
                 >,
-                StorageAdapter,
+                MempoolAdapter,
+                Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
 {
     make_request_and_return_response!(
-        current_tip_mempool_view::<StorageAdapter, RuntimeServiceId>(&handle)
+        current_tip_mempool_view::<MempoolAdapter, RuntimeServiceId>(&handle)
     )
 }
 
-async fn current_tip_mempool_view<StorageAdapter, RuntimeServiceId>(
+async fn current_tip_mempool_view<MempoolAdapter, RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
 ) -> Result<Vec<TxHash>, DynError>
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
-        > + Send
+    MempoolAdapter: MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
+        + LedgerStateGetter
+        + BlockInfoGetter<SignedMantleTx>
+        + Send
         + Sync
         + Clone
         + 'static,
-    StorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -723,37 +723,36 @@ where
                     RuntimeServiceId,
                 >,
                 Mempool<
-                    HeaderId,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    StorageAdapter,
+                    MempoolAdapter,
                     RuntimeServiceId,
                 >,
-                StorageAdapter,
+                MempoolAdapter,
+                Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
 {
     let consensus = consensus::cryptarchia_info::<RuntimeServiceId>(handle).await?;
 
-    mempool_view_at::<StorageAdapter, RuntimeServiceId>(handle, consensus.cryptarchia_info.tip)
+    mempool_view_at::<MempoolAdapter, RuntimeServiceId>(handle, consensus.cryptarchia_info.tip)
         .await
 }
 
-async fn mempool_view_at<StorageAdapter, RuntimeServiceId>(
+async fn mempool_view_at<MempoolAdapter, RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
     ancestor_hint: HeaderId,
 ) -> Result<Vec<TxHash>, DynError>
 where
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
-        > + Send
+    MempoolAdapter: MempoolStorageAdapter<RuntimeServiceId, Tx = SignedMantleTx>
+        + LedgerStateGetter
+        + BlockInfoGetter<SignedMantleTx>
+        + Send
         + Sync
         + Clone
         + 'static,
-    StorageAdapter::Error: Debug,
+    MempoolAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -767,13 +766,13 @@ where
                     RuntimeServiceId,
                 >,
                 Mempool<
-                    HeaderId,
                     SignedMantleTx,
                     <SignedMantleTx as Transaction>::Hash,
-                    StorageAdapter,
+                    MempoolAdapter,
                     RuntimeServiceId,
                 >,
-                StorageAdapter,
+                MempoolAdapter,
+                Cryptarchia<RuntimeServiceId>,
                 RuntimeServiceId,
             >,
         >,
@@ -786,13 +785,13 @@ where
                 RuntimeServiceId,
             >,
             Mempool<
-                HeaderId,
                 SignedMantleTx,
                 <SignedMantleTx as Transaction>::Hash,
-                StorageAdapter,
+                MempoolAdapter,
                 RuntimeServiceId,
             >,
-            StorageAdapter,
+            MempoolAdapter,
+            Cryptarchia<RuntimeServiceId>,
             RuntimeServiceId,
         >>()
         .await?;

@@ -25,17 +25,20 @@ use lb_node::config::{
     RunConfig, blend::deployment::MinimumNetworkSize, cryptarchia::deployment::EpochConfig,
 };
 use lb_testing_framework::{
-    DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+    DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
 };
 use lb_utils::math::NonNegativeRatio;
-use logos_blockchain_tests::common::{
-    chain::wait_for_transactions_inclusion,
-    manual_cluster::{
-        build_local_manual_cluster, read_manual_node_logs,
-        wait_for_height as wait_for_manual_cluster_height,
+use logos_blockchain_tests::{
+    common::{
+        chain::wait_for_transactions_inclusion,
+        manual_cluster::{
+            LocalManualClusterHarnessBase, build_local_manual_cluster, read_manual_node_logs,
+            wait_for_height as wait_for_manual_cluster_height,
+        },
+        wallet::{current_wallet_funding_source, fund_builder_from_wallet_source},
     },
-    wallet::{current_wallet_funding_source, fund_builder_from_wallet_source},
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
@@ -64,7 +67,6 @@ const LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
 )]
 async fn sdp_ops_e2e() {
     let (
-        _scenario_base_dir,
         _cluster,
         _node0_name,
         node0,
@@ -222,7 +224,7 @@ async fn sdp_ops_e2e() {
     reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
 )]
 async fn sdp_declaration_restoration_e2e() {
-    let (scenario_base_dir, cluster, node0_name, node0, ..) =
+    let (cluster_harness, node0_name, node0, ..) =
         start_sdp_manual_cluster("sdp-declaration-restoration").await;
 
     let declarations = node0
@@ -237,14 +239,16 @@ async fn sdp_declaration_restoration_e2e() {
     let initial_declaration = declarations.first().unwrap().clone();
     let target_locked_note = initial_declaration.locked_note_id;
 
-    cluster
+    cluster_harness
+        .cluster()
         .restart_node(&node0_name)
         .await
         .expect("manual cluster node should restart successfully");
 
     sleep(Duration::from_secs(5)).await;
 
-    let post_restart_declarations = cluster
+    let post_restart_declarations = cluster_harness
+        .cluster()
         .node_client(&node0_name)
         .expect("restarted node client should be available")
         .get_sdp_declarations()
@@ -269,7 +273,7 @@ async fn sdp_declaration_restoration_e2e() {
         "zk_id should be preserved after restart"
     );
 
-    let logs = read_manual_node_logs(&scenario_base_dir, &node0_name);
+    let logs = read_manual_node_logs(cluster_harness.scenario_base_dir(), &node0_name);
     assert!(
         logs.contains("Loaded declaration from ledger"),
         "SDP service should log that it loaded declaration from ledger"
@@ -350,8 +354,7 @@ async fn wait_for_sdp_declarations(
 async fn start_sdp_manual_cluster(
     test_name: &str,
 ) -> (
-    PathBuf,
-    LbcManualCluster,
+    LocalManualClusterHarnessBase,
     String,
     NodeHttpClient,
     Vec<Utxo>,
@@ -370,7 +373,7 @@ async fn start_sdp_manual_cluster(
     let spare_wallet =
         WalletAccount::deterministic(1, 100, false).expect("spare locked-note wallet should build");
 
-    let base = build_local_manual_cluster(
+    let cluster_harness = build_local_manual_cluster(
         test_name,
         "tf-sdp",
         DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(1))
@@ -379,12 +382,13 @@ async fn start_sdp_manual_cluster(
                 spare_wallet.clone(),
             ]))
             .with_test_context(test_name),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     );
 
-    let cluster = base.cluster;
-    let node0_persist_dir = base.scenario_base_dir.join("node-0");
+    let node0_persist_dir = cluster_harness.scenario_base_dir().join("node-0");
 
-    let node0 = cluster
+    let node0 = cluster_harness
+        .cluster()
         .start_node_with(
             "0",
             StartNodeOptions::default()
@@ -406,7 +410,8 @@ async fn start_sdp_manual_cluster(
         .await
         .expect("starting node-0 should succeed");
 
-    cluster
+    cluster_harness
+        .cluster()
         .wait_network_ready()
         .await
         .expect("manual cluster should become ready");
@@ -415,8 +420,8 @@ async fn start_sdp_manual_cluster(
         .await
         .expect("node-0 should produce the first block");
 
-    let genesis_utxos: Vec<_> = base
-        .deployment
+    let genesis_utxos: Vec<_> = cluster_harness
+        .deployment()
         .config
         .genesis_block
         .clone()
@@ -425,9 +430,11 @@ async fn start_sdp_manual_cluster(
         .genesis_transfer()
         .outputs
         .utxos(
-            base.deployment
+            cluster_harness
+                .deployment()
                 .config
                 .genesis_block
+                .as_ref()
                 .expect("manual-cluster deployment should include genesis tx")
                 .genesis_tx()
                 .genesis_transfer(),
@@ -441,11 +448,13 @@ async fn start_sdp_manual_cluster(
         .expect("wallet-backed spare note should exist at genesis")
         .id();
 
+    let node0_name = node0.name;
+    let node0_client = node0.client;
+
     (
-        base.scenario_base_dir,
-        cluster,
-        node0.name,
-        node0.client,
+        cluster_harness,
+        node0_name,
+        node0_client,
         genesis_utxos,
         funding_wallet,
         spare_wallet.secret_key,

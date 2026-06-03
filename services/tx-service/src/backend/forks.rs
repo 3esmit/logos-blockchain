@@ -413,18 +413,29 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeMap, HashMap, HashSet},
-        sync::{Arc, Mutex},
+        collections::{BTreeMap, HashMap},
+        num::{NonZero, NonZeroU64},
+        sync::{Arc, LazyLock, Mutex},
     };
 
     use async_trait::async_trait;
-    use bytes::Bytes;
     use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Slot};
     use lb_core::{
         header::HeaderId,
-        mantle::{Transaction, TransactionHasher, TxDependencies},
+        mantle::{
+            Transaction, TransactionHasher, TxDependencies, TxDependency, TxDependencyKind,
+            ops::channel::{ChannelId, MsgId},
+        },
+        sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_ledger::LedgerState;
+    use lb_cryptarchia_engine::EpochConfig;
+    use lb_ledger::{
+        LedgerState,
+        mantle::sdp::{
+            Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
+        },
+    };
+    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
     use super::{
         BlockInfo, BlockInfoGetter, BlockTracker, ForksTracker, ForksTrackerError,
@@ -453,21 +464,77 @@ mod tests {
         }
     }
 
+    /// Encode an abstract `&str` dep name as a deterministic channel dep so
+    /// producer/consumer txs that reference the same name resolve to the same
+    /// `(ChannelId, MsgId)` pair.
+    fn str_to_dep_kind(s: &str) -> TxDependencyKind {
+        let mut bytes = [0u8; 32];
+        let len = s.len().min(32);
+        bytes[..len].copy_from_slice(&s.as_bytes()[..len]);
+        TxDependencyKind::Channel((ChannelId::from(bytes), MsgId::from(bytes)))
+    }
+
     impl TxDependencies for TestTx {
-        fn consumes(&self) -> impl Iterator<Item = DependencyId> {
-            self.consumes
-                .iter()
-                .map(|s| Bytes::from_static(s.as_bytes()))
+        fn consumes(&self) -> TxDependency {
+            self.consumes.iter().map(|s| str_to_dep_kind(s)).collect()
         }
 
-        fn produces(&self) -> impl Iterator<Item = DependencyId> {
-            self.produces
-                .iter()
-                .map(|s| Bytes::from_static(s.as_bytes()))
+        fn produces(&self) -> TxDependency {
+            self.produces.iter().map(|s| str_to_dep_kind(s)).collect()
         }
     }
 
     // ── mock adapter ─────────────────────────────────────────────────────────
+
+    /// Empty `LedgerState` shared across all mock `get_ledger_state` calls:
+    /// no channels, no utxos. Txs with empty `consumes` are reported ready;
+    /// txs with any `consumes` are reported as orphaned (their deps appear
+    /// missing). Orphan promotion still flows through `tx_in_block`, which
+    /// matches against in-memory `produces` and does not consult the ledger.
+    static EMPTY_LEDGER_STATE: LazyLock<LedgerState> = LazyLock::new(|| {
+        let mut service_params = HashMap::new();
+        service_params.insert(
+            ServiceType::BlendNetwork,
+            ServiceParameters {
+                lock_period: 10,
+                inactivity_period: 1,
+                retention_period: 1,
+                timestamp: 0,
+                session_duration: 10,
+            },
+        );
+        let config = lb_ledger::Config {
+            epoch_config: EpochConfig {
+                epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
+            },
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                NonZero::new(1).unwrap(),
+                NonNegativeRatio::new(1, 10.try_into().unwrap()),
+                1f64.try_into().expect("1 > 0"),
+            ),
+            sdp_config: SdpConfig {
+                service_params: Arc::new(service_params),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: RewardsParameters {
+                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        num_blend_layers: NonZeroU64::new(3).unwrap(),
+                        minimum_network_size: NonZeroU64::new(1).unwrap(),
+                        data_replication_factor: 0,
+                        activity_threshold_sensitivity: 1,
+                    },
+                },
+                min_stake: MinStake {
+                    threshold: 1,
+                    timestamp: 0,
+                },
+            },
+            faucet_pk: None,
+        };
+        LedgerState::from_utxos([], &config)
+    });
 
     /// Adapter backed by a shared block store. Cloning shares the same store,
     /// so blocks registered on the original are visible through the clone held
@@ -508,9 +575,9 @@ mod tests {
     impl LedgerStateGetter for MockAdapter {
         async fn get_ledger_state(
             &self,
-            header_id: HeaderId,
+            _header_id: HeaderId,
         ) -> Result<LedgerState, ForksTrackerError> {
-            Err(ForksTrackerError::LedgerStateNotFound(header_id))
+            Ok(EMPTY_LEDGER_STATE.clone())
         }
     }
 

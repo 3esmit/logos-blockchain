@@ -4,10 +4,34 @@ use std::{
     sync::Arc,
 };
 
-use lb_core::mantle::TxDependencies;
+use lb_core::mantle::{
+    NoteId, TxDependencies,
+    ops::channel::{ChannelId, MsgId},
+};
 use lb_ledger::LedgerState;
 use rpds::HashTrieMapSync as HashTrieMap;
 use serde::{Deserialize, Serialize};
+
+/// Narrow read-only view over the ledger that `TxTracker` needs to validate a
+/// tx's dependencies. Implemented for `LedgerState` in production; tests can
+/// provide a lightweight mock without constructing a full ledger.
+pub trait LedgerStateInspector {
+    fn channel_tip(&self, channel_id: &ChannelId) -> Option<MsgId>;
+    fn contains_utxo(&self, note_id: &NoteId) -> bool;
+}
+
+impl LedgerStateInspector for LedgerState {
+    fn channel_tip(&self, channel_id: &ChannelId) -> Option<MsgId> {
+        self.mantle_ledger()
+            .channels()
+            .channel_state(channel_id)
+            .map(|state| state.tip_message)
+    }
+
+    fn contains_utxo(&self, note_id: &NoteId) -> bool {
+        self.latest_utxos().contains(note_id)
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TxTrackerState<TxId>
@@ -111,20 +135,19 @@ impl<Tx> TxTracker<Tx, Tx::Hash>
 where
     Tx: TxDependencies + Clone,
 {
-    pub fn process_tx(&mut self, tx: Arc<Tx>, frontier_deps: &LedgerState) {
+    pub fn process_tx<L: LedgerStateInspector>(&mut self, tx: Arc<Tx>, frontier_deps: &L) {
         let mut pending_deps_count = 0;
         let consumes = tx.consumes();
-        let ledger_channels = frontier_deps.mantle_ledger().channels();
         for (channel_id, msg_id) in consumes.channels {
-            if let Some(state) = ledger_channels.channel_state(&channel_id)
-                && msg_id == state.tip_message
+            if let Some(tip) = frontier_deps.channel_tip(&channel_id)
+                && msg_id == tip
             {
                 continue;
             }
             pending_deps_count += 1;
         }
         for utxo in consumes.utxos {
-            if !frontier_deps.latest_utxos().contains(&utxo) {
+            if !frontier_deps.contains_utxo(&utxo) {
                 pending_deps_count += 1;
             }
         }
@@ -149,8 +172,8 @@ where
                 let depends_channels: HashSet<_> = depends.channels.values().collect();
                 let depends_utxos: HashSet<_> = depends.utxos.iter().cloned().collect();
                 let free = {
-                    depends_channels.difference(&free_channels_deps).count()
-                        + depends_utxos.difference(&free_utxos_deps).count()
+                    depends_channels.intersection(&free_channels_deps).count()
+                        + depends_utxos.intersection(&free_utxos_deps).count()
                 };
                 if let Some(pending_count) = self.tx_pending_count.get_mut(waiting_id) {
                     *pending_count -= free;
@@ -213,10 +236,12 @@ where
 mod tests {
     use std::{collections::HashSet, sync::Arc};
 
-    use bytes::Bytes;
-    use lb_core::mantle::{Transaction, TransactionHasher, TxDependencies};
+    use lb_core::mantle::{
+        NoteId, Transaction, TransactionHasher, TxDependencies, TxDependency, TxDependencyKind,
+        ops::channel::{ChannelId, MsgId},
+    };
 
-    use super::TxTracker;
+    use super::{LedgerStateInspector, TxTracker};
 
     // ── mock transaction type ────────────────────────────────────────────────
 
@@ -239,17 +264,67 @@ mod tests {
         }
     }
 
+    /// Map an abstract `&str` dep name onto a deterministic channel dep so
+    /// producer/consumer pairs that reference the same name share the same
+    /// `(ChannelId, MsgId)`. Channel id and message id use the same bytes;
+    /// channel uniqueness per name keeps the `HashMap<ChannelId, MsgId>` in
+    /// `TxDependency` from collapsing distinct deps.
+    fn str_to_dep_kind(s: &str) -> TxDependencyKind {
+        let mut bytes = [0u8; 32];
+        let len = s.len().min(32);
+        bytes[..len].copy_from_slice(&s.as_bytes()[..len]);
+        TxDependencyKind::Channel((ChannelId::from(bytes), MsgId::from(bytes)))
+    }
+
+    fn str_to_channel(s: &str) -> ChannelId {
+        let mut bytes = [0u8; 32];
+        let len = s.len().min(32);
+        bytes[..len].copy_from_slice(&s.as_bytes()[..len]);
+        ChannelId::from(bytes)
+    }
+
+    fn str_to_msg(s: &str) -> MsgId {
+        let mut bytes = [0u8; 32];
+        let len = s.len().min(32);
+        bytes[..len].copy_from_slice(&s.as_bytes()[..len]);
+        MsgId::from(bytes)
+    }
+
     impl TxDependencies for TestTx {
-        fn consumes(&self) -> impl Iterator<Item = DependencyId> {
-            self.consumes
-                .iter()
-                .map(|s| Bytes::from_static(s.as_bytes()))
+        fn consumes(&self) -> TxDependency {
+            self.consumes.iter().map(|s| str_to_dep_kind(s)).collect()
         }
 
-        fn produces(&self) -> impl Iterator<Item = DependencyId> {
-            self.produces
+        fn produces(&self) -> TxDependency {
+            self.produces.iter().map(|s| str_to_dep_kind(s)).collect()
+        }
+    }
+
+    // ── mock ledger inspector ────────────────────────────────────────────────
+
+    /// Set of dep names whose channels are considered present at their
+    /// expected tip; anything outside the set is reported as missing.
+    #[derive(Default)]
+    struct MockFrontier {
+        channels: HashSet<&'static str>,
+    }
+
+    impl MockFrontier {
+        fn insert(&mut self, name: &'static str) {
+            self.channels.insert(name);
+        }
+    }
+
+    impl LedgerStateInspector for MockFrontier {
+        fn channel_tip(&self, channel_id: &ChannelId) -> Option<MsgId> {
+            self.channels
                 .iter()
-                .map(|s| Bytes::from_static(s.as_bytes()))
+                .find(|name| str_to_channel(name) == *channel_id)
+                .map(|name| str_to_msg(name))
+        }
+
+        fn contains_utxo(&self, _note_id: &NoteId) -> bool {
+            false
         }
     }
 
@@ -261,10 +336,6 @@ mod tests {
             consumes,
             produces,
         }
-    }
-
-    fn dep(s: &'static str) -> DependencyId {
-        Bytes::from_static(s.as_bytes())
     }
 
     fn ready_names(tracker: &TxTracker<TestTx, TestTxId>) -> Vec<&'static str> {
@@ -297,8 +368,8 @@ mod tests {
     #[test]
     fn test_diamond_dependency_graph() {
         let mut tracker: TxTracker<TestTx, TestTxId> = TxTracker::new();
-        let mut frontier: HashSet<DependencyId> = HashSet::new();
-        frontier.insert(dep("root"));
+        let mut frontier = MockFrontier::default();
+        frontier.insert("root");
 
         let tx_genesis = tx("tx_genesis", vec!["root"], vec!["genesis"]);
         let tx_mint_a = tx("tx_mint_a", vec!["genesis"], vec!["token_a"]);
@@ -344,9 +415,7 @@ mod tests {
         // tx_genesis confirmed → unlocks tx_mint_a, tx_mint_b, tx_fund
         // frontier gains "genesis" (produced by tx_genesis)
         tracker.tx_in_block(&TestTxId("tx_genesis"));
-        for dep_id in tx_genesis.produces() {
-            frontier.insert(dep_id);
-        }
+        frontier.insert("genesis");
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_fund", "tx_mint_a", "tx_mint_b"].into_iter().collect()
@@ -361,9 +430,8 @@ mod tests {
         // tx_fund confirmed → unlocks tx_chain (coin_x); tx_combine drops 2→1 (coin_y
         // still missing); frontier gains "coin_x", "coin_y"
         tracker.tx_in_block(&TestTxId("tx_fund"));
-        for dep_id in tx_fund.produces() {
-            frontier.insert(dep_id);
-        }
+        frontier.insert("coin_x");
+        frontier.insert("coin_y");
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_chain", "tx_mint_a", "tx_mint_b"].into_iter().collect()
@@ -376,9 +444,7 @@ mod tests {
         // tx_mint_a confirmed → tx_combine drops 1→0, promoted to ready
         // frontier gains "token_a"
         tracker.tx_in_block(&TestTxId("tx_mint_a"));
-        for dep_id in tx_mint_a.produces() {
-            frontier.insert(dep_id);
-        }
+        frontier.insert("token_a");
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_chain", "tx_combine", "tx_mint_b"]
@@ -393,9 +459,7 @@ mod tests {
         // tx_chain confirmed → coin_z satisfied; tx_settle drops 2→1 (coin_w still
         // missing); frontier gains "coin_z"
         tracker.tx_in_block(&TestTxId("tx_chain"));
-        for dep_id in tx_chain.produces() {
-            frontier.insert(dep_id);
-        }
+        frontier.insert("coin_z");
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_combine", "tx_mint_b"].into_iter().collect()
@@ -408,9 +472,8 @@ mod tests {
         // tx_combine confirmed → coin_w satisfied; tx_settle drops 1→0, diamond
         // resolved; frontier gains "nft_1", "coin_w"
         tracker.tx_in_block(&TestTxId("tx_combine"));
-        for dep_id in tx_combine.produces() {
-            frontier.insert(dep_id);
-        }
+        frontier.insert("nft_1");
+        frontier.insert("coin_w");
         assert_eq!(
             ready_names(&tracker).into_iter().collect::<HashSet<_>>(),
             ["tx_settle", "tx_mint_b"].into_iter().collect()

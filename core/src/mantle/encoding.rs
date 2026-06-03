@@ -19,7 +19,7 @@ use crate::{
         nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey, deposit::DepositOp},
+            channel::{ChannelId, Ed25519PublicKey},
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
@@ -50,6 +50,16 @@ const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
 type NomOps<'a> = NomBoundedVec<'a, Op, { Ops::MIN }, { Ops::MAX }, 1>;
+const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
+const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
+pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
+pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
+pub type NomInputs<'a> =
+    NomBoundedVec<'a, NoteId, { BoundedInputs::MIN }, { BoundedInputs::MAX }, 1>;
+
+pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
+pub type NomOutputs<'a> =
+    NomBoundedVec<'a, Note, { BoundedOutputs::MIN }, { BoundedOutputs::MAX }, 1>;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -76,24 +86,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
 // ==============================================================================
 // Channel Operation Decoders
 // ==============================================================================
-
-pub(crate) fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
-    // ChannelDeposit = ChannelId Amount Metadata
-    let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
-    let (input, inputs) = decode_inputs(input)?;
-    let (input, metadata_len) = decode_uint32(input)?;
-    let (input, metadata) =
-        map(take(metadata_len as usize), |bytes: &[u8]| bytes.to_vec()).parse(input)?;
-
-    Ok((
-        input,
-        DepositOp {
-            channel_id,
-            inputs,
-            metadata,
-        },
-    ))
-}
 
 pub(crate) fn decode_channel_withdraw(input: &[u8]) -> IResult<&[u8], ChannelWithdrawOp> {
     // ChannelWithdraw = ChannelId Amount
@@ -233,29 +225,16 @@ pub(crate) fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp>
 // Transfer Decoders
 // ==============================================================================
 
-fn decode_note(input: &[u8]) -> IResult<&[u8], Note> {
-    // Note = Value ZkPublicKey
-    let (input, value) = decode_uint64(input)?;
-    let (input, pk) = decode_zk_public_key(input)?;
-
-    Ok((input, Note::new(value, pk)))
-}
-
 fn decode_inputs(input: &[u8]) -> IResult<&[u8], Inputs> {
-    // Inputs = InputCount *NoteId
-    let (input, input_count) = decode_byte(input)?;
+    let (input, bounded_inputs) = NomInputs::decode(input)?;
 
-    let (input, note_ids) =
-        count(map(decode_field_element, NoteId), input_count as usize).parse(input)?;
-    Ok((input, Inputs::new(note_ids)))
+    Ok((input, Inputs::new(bounded_inputs)))
 }
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
-    // Outputs = OutputCount *Note
-    let (input, output_count) = decode_byte(input)?;
-    let (input, notes) = count(decode_note, output_count as usize).parse(input)?;
+    let (input, bounded_outputs) = NomOutputs::decode(input)?;
 
-    Ok((input, Outputs::new(notes)))
+    Ok((input, Outputs::new(bounded_outputs)))
 }
 
 pub(crate) fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
@@ -343,7 +322,7 @@ fn decode_groth16(input: &[u8]) -> IResult<&[u8], CompressedGroth16Proof> {
     .parse(input)
 }
 
-fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
+pub(crate) fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
     // ZkPublicKey = FieldElement
     map(decode_field_element, ZkPublicKey::new).parse(input)
 }
@@ -468,6 +447,7 @@ use lb_groth16::fr_to_bytes;
 
 use crate::{
     mantle::{
+        Utxo,
         ledger::{Inputs, Outputs},
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
@@ -543,16 +523,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
             .into_iter()
             .chain(encode_uint16(signature.channel_key_index))
     }));
-    bytes
-}
-
-#[must_use]
-pub(crate) fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(op.channel_id.as_ref()));
-    bytes.extend(encode_inputs(op.inputs.as_ref()));
-    bytes.extend(encode_uint32(op.metadata.len() as u32));
-    bytes.extend(op.metadata.as_slice());
     bytes
 }
 
@@ -653,13 +623,7 @@ fn encode_note(note: &Note) -> Vec<u8> {
     bytes
 }
 
-fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
-    assert!(
-        u8::try_from(inputs.len()).is_ok(),
-        "Fatal error in 'encode_inputs' - {} inputs clipped to {}",
-        inputs.len(),
-        u8::MAX
-    );
+fn encode_inputs(inputs: &BoundedInputs) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_byte(inputs.len() as u8));
     for input in inputs {
@@ -668,14 +632,8 @@ fn encode_inputs(inputs: &[NoteId]) -> Vec<u8> {
     bytes
 }
 
-fn encode_outputs(outputs: &[Note]) -> Vec<u8> {
+fn encode_outputs(outputs: &BoundedOutputs) -> Vec<u8> {
     let mut bytes = Vec::new();
-    assert!(
-        u8::try_from(outputs.len()).is_ok(),
-        "Fatal error in 'encode_outputs' - {} outputs clipped to {}",
-        outputs.len(),
-        u8::MAX
-    );
     bytes.extend(encode_byte(outputs.len() as u8));
     for output in outputs {
         bytes.extend(encode_note(output));
@@ -1085,7 +1043,7 @@ mod tests {
         let pk = ZkPublicKey::from(BigUint::from(42u64));
         let note = Note::new(1000, pk);
         let note_id = NoteId(BigUint::from(123u64).into());
-        let transfer_op = TransferOp::new(Inputs::new(vec![note_id]), Outputs::new(vec![note]));
+        let transfer_op = TransferOp::new(Inputs::new([note_id]), Outputs::new([note]));
 
         let original_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
 
@@ -1211,7 +1169,7 @@ mod tests {
         let locator2: Multiaddr = "/ip6/::1/tcp/9090".parse().unwrap();
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
-        let locked_note = crate::mantle::Utxo {
+        let locked_note = Utxo {
             op_id: [1u8; 32],
             output_index: 12,
             note: Note {
@@ -1410,8 +1368,8 @@ mod tests {
         let note_id3 = NoteId(BigUint::from(333u64).into());
 
         let transfer_op = TransferOp::new(
-            Inputs::new(vec![note_id1, note_id2, note_id3]),
-            Outputs::new(vec![note1, note2]),
+            Inputs::new([note_id1, note_id2, note_id3]),
+            Outputs::new([note1, note2]),
         );
 
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
@@ -1458,8 +1416,8 @@ mod tests {
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
         let transfer_op = TransferOp {
-            inputs: Inputs::new(vec![NoteId(BigUint::from(777u64).into())]),
-            outputs: Outputs::new(vec![Note::new(5000, locked_note_sk.to_public_key())]),
+            inputs: Inputs::new([NoteId(BigUint::from(777u64).into())]),
+            outputs: Outputs::new([Note::new(5000, locked_note_sk.to_public_key())]),
         };
 
         let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
@@ -1604,7 +1562,7 @@ mod tests {
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelWithdraw(
             ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
-                outputs: Outputs::new(vec![note1, note2]),
+                outputs: Outputs::new([note1, note2]),
                 withdraw_nonce: 0,
             },
         )]));
@@ -1902,30 +1860,6 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_reject_excessive_input_count() {
-        let note_id = NoteId(BigUint::from(111u64).into());
-        let inputs = [note_id; u8::MAX as usize + 1];
-
-        // Should panic
-        let result = panic::catch_unwind(|| {
-            encode_inputs(&inputs);
-        });
-        assert!(result.is_err(), "Should reject excessive output count");
-    }
-
-    #[test]
-    fn test_encode_reject_excessive_output_count() {
-        let note = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)));
-        let outputs = [note; u8::MAX as usize + 1];
-
-        // Should panic
-        let result = panic::catch_unwind(|| {
-            encode_outputs(&outputs);
-        });
-        assert!(result.is_err(), "Should reject excessive output count");
-    }
-
-    #[test]
     fn test_decode_reject_oversized_locator() {
         // Create a malicious input with oversized locator
         let mut malicious_input = Vec::new();
@@ -2012,6 +1946,7 @@ mod tests {
     fn test_encode_decode_max_inputs() {
         let note_id = NoteId(BigUint::from(111u64).into());
         let inputs = [note_id; u8::MAX as usize];
+        let inputs = BoundedInputs::from(inputs);
 
         // Encode should succeed
         let encoded = encode_inputs(&inputs);
@@ -2035,6 +1970,7 @@ mod tests {
     fn test_encode_decode_max_outputs() {
         let note = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)));
         let outputs = [note; u8::MAX as usize];
+        let outputs = BoundedOutputs::from(outputs);
 
         // Encode should succeed
         let encoded = encode_outputs(&outputs);

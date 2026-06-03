@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
+pub use lb_core::events::{Event, EventPayload, Events};
 use lb_core::{
     block::MAX_BLOCK_SIZE,
     header::{ContentId, HeaderId},
@@ -18,14 +19,15 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO,
-        CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
+        BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL,
+        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_log_targets::http_client;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -33,6 +35,8 @@ use tokio_util::{
     codec::{FramedRead, LinesCodec},
     io::StreamReader,
 };
+
+const LOG_TARGET: &str = http_client::ROOT;
 
 /// Client-side header representation matching the server's
 /// `ApiHeaderSerializer`.
@@ -96,6 +100,10 @@ pub struct CommonHttpClient {
 }
 
 impl CommonHttpClient {
+    fn is_channel_not_found(body: &str) -> bool {
+        body.to_ascii_lowercase().contains("channel not found")
+    }
+
     #[must_use]
     pub fn new(basic_auth: Option<BasicAuthCredentials>) -> Self {
         let initial_stream_window_size: u32 =
@@ -223,6 +231,38 @@ impl CommonHttpClient {
         }
     }
 
+    /// Get the events emitted by execution of a block by its id.
+    pub async fn get_block_events(
+        &self,
+        base_url: Url,
+        id: HeaderId,
+    ) -> Result<Option<Events>, Error> {
+        let path = BLOCK_EVENTS
+            .trim_start_matches('/')
+            .replace(":id", &id.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<Events>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
+    }
+
     pub async fn post_transaction<Tx>(&self, base_url: Url, transaction: Tx) -> Result<(), Error>
     where
         Tx: Serialize + Send + Sync + 'static,
@@ -245,26 +285,46 @@ impl CommonHttpClient {
         self.post(request_url, declaration).await
     }
 
-    /// Get the on-chain state for a channel (`accredited_keys`,
-    /// `withdrawal_nonce`, balance, etc.). Returns the tip-of-chain view.
-    pub async fn get_channel_state(
-        &self,
-        base_url: Url,
-        channel_id: ChannelId,
-    ) -> Result<ChannelState, Error> {
-        let path = CHANNEL
-            .trim_start_matches('/')
-            .replace(":id", &channel_id.to_string());
-        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
-        self.get::<(), ChannelState>(request_url, None).await
-    }
-
     /// Get consensus info (tip, height, etc.)
     pub async fn consensus_info(&self, base_url: Url) -> Result<ChainServiceInfo, Error> {
         let request_url = base_url
             .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), ChainServiceInfo>(request_url, None).await
+    }
+
+    /// Get channel state for a specific channel id.
+    pub async fn channel_state(
+        &self,
+        base_url: Url,
+        channel_id: ChannelId,
+    ) -> Result<Option<ChannelState>, Error> {
+        let path = CHANNEL
+            .trim_start_matches('/')
+            .replace(":id", &hex::encode(channel_id.as_ref()));
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<ChannelState>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR if Self::is_channel_not_found(&body) => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ if Self::is_channel_not_found(&body) => Ok(None),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
     }
 
     /// Get immutable blocks in a slot range.
@@ -428,13 +488,16 @@ impl CommonHttpClient {
                     Ok(event) => Some(event),
                     Err(err) => {
                         let preview: String = line.chars().take(LOG_LINE_PREVIEW_CHARS).collect();
-                        warn!("blocks stream JSON decode failed: {err}; line_preview={preview:?}");
+                        warn!(
+                            target: LOG_TARGET,
+                            "blocks stream JSON decode failed: {err}; line_preview={preview:?}"
+                        );
                         None
                     }
                 }
             }
             Err(err) => {
-                warn!("blocks stream line decode failed: {err}");
+                warn!(target: LOG_TARGET, "blocks stream line decode failed: {err}");
                 None
             }
         })

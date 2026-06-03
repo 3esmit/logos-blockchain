@@ -237,12 +237,12 @@ mod tests {
         events::{Event, EventPayload},
         mantle::{
             Note, Utxo,
-            ledger::{Inputs, Outputs, Utxos},
+            ledger::{Outputs, Utxos},
             ops::{
                 OpId as _,
                 channel::{
                     Ed25519PublicKey as PublicKey,
-                    deposit::{DepositExecutionContext, DepositOp},
+                    deposit::{DepositExecutionContext, DepositOp, Metadata},
                     withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
                 },
             },
@@ -383,8 +383,8 @@ mod tests {
 
         let deposit_op = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
-            metadata: vec![],
+            inputs: [utxo.id()].into(),
+            metadata: Metadata::empty(),
         };
 
         let utxo_tree = utxo_tree(vec![utxo]);
@@ -433,7 +433,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new([Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
@@ -465,7 +465,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new([Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
@@ -490,7 +490,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new([Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),

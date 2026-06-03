@@ -12,8 +12,10 @@ use derivative::Derivative;
 use lb_core::{
     codec::DeserializeOp as _,
     mantle::{
-        SignedMantleTx, TxHash, Utxo,
-        ops::channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
+        SignedMantleTx, TxHash, Utxo, Value,
+        ops::channel::{
+            ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+        },
     },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
@@ -37,7 +39,7 @@ use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::{
-    BIN_PATH_DEBUG, BIN_PATH_RELEASE,
+    BIN_PATH_RELEASE,
     common::wallet::{TrackedWallets, WalletDiagnostics},
     cucumber::{
         TARGET,
@@ -129,11 +131,11 @@ impl ManualNodeConfigOverrides {
 }
 
 pub struct ZonePublishedMessage {
-    pub payload: Vec<u8>,
+    pub payload: Inscription,
     pub inscription_id: Option<InscriptionId>,
 }
 
-pub type ZoneDiscardedPayloads = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
+pub type ZoneDiscardedPayloads = std::sync::Arc<tokio::sync::Mutex<HashSet<Inscription>>>;
 
 pub struct ZoneSequencerIdentity {
     signing_key: Ed25519Key,
@@ -144,7 +146,14 @@ pub struct ZoneSequencerRuntime {
     handle: SequencerHandle<ZoneNodeHttpClient>,
     task: JoinHandle<()>,
     events: Option<tokio::sync::mpsc::Receiver<Event>>,
+    checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
     discarded_payloads: Option<ZoneDiscardedPayloads>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ZoneSequencerStartup {
+    pub pending_submit_depth: Option<usize>,
+    pub passive_republish_orphans: bool,
 }
 
 #[derive(Default)]
@@ -156,13 +165,15 @@ pub struct ZoneState {
     runtimes: HashMap<String, ZoneSequencerRuntime>,
     default_sequencer_alias: Option<String>,
     published_messages: HashMap<String, ZonePublishedMessage>,
-    submitted_deposits: HashMap<String, DepositOp>,
+    submitted_deposits: HashMap<String, (DepositOp, Value)>,
     submitted_withdraws: HashMap<String, ChannelWithdrawOp>,
     account_balances: HashMap<String, i64>,
     published_order: Vec<String>,
-    checkpoints: HashMap<String, SequencerCheckpoint>,
+    saved_checkpoints: HashMap<String, SequencerCheckpoint>,
     latest_checkpoints: HashMap<String, SequencerCheckpoint>,
+    sequencer_startups: HashMap<String, ZoneSequencerStartup>,
     sorted_total_payloads: Option<usize>,
+    sorted_expected_by_sequencer: Option<HashMap<String, Vec<Inscription>>>,
 }
 
 impl ZoneState {
@@ -258,7 +269,7 @@ impl ZoneState {
     pub fn remember_zone_message(
         &mut self,
         alias: String,
-        payload: Vec<u8>,
+        payload: Inscription,
         inscription_id: Option<InscriptionId>,
         sequencer_alias: Option<&str>,
         checkpoint: Option<SequencerCheckpoint>,
@@ -278,14 +289,14 @@ impl ZoneState {
         }
     }
 
-    pub fn remember_submitted_deposit(&mut self, alias: String, deposit: DepositOp) {
-        self.submitted_deposits.insert(alias, deposit);
+    pub fn remember_submitted_deposit(&mut self, alias: String, deposit: DepositOp, amount: Value) {
+        self.submitted_deposits.insert(alias, (deposit, amount));
     }
 
     pub fn resolve_submitted_deposit(
         &self,
         alias: impl AsRef<str>,
-    ) -> Result<&DepositOp, StepError> {
+    ) -> Result<&(DepositOp, Value), StepError> {
         let alias = alias.as_ref();
 
         self.submitted_deposits
@@ -345,7 +356,7 @@ impl ZoneState {
     pub fn message_payloads_for_aliases(
         &self,
         aliases: &[String],
-    ) -> Result<Vec<Vec<u8>>, StepError> {
+    ) -> Result<Vec<Inscription>, StepError> {
         aliases
             .iter()
             .map(|alias| {
@@ -359,7 +370,7 @@ impl ZoneState {
             .collect()
     }
 
-    pub fn published_message_payloads(&self) -> Result<Vec<Vec<u8>>, StepError> {
+    pub fn published_message_payloads(&self) -> Result<Vec<Inscription>, StepError> {
         self.message_payloads_for_aliases(&self.published_order)
     }
 
@@ -369,7 +380,7 @@ impl ZoneState {
     }
 
     pub fn remember_checkpoint(&mut self, alias: String, checkpoint: SequencerCheckpoint) {
-        self.checkpoints.insert(alias, checkpoint);
+        self.saved_checkpoints.insert(alias, checkpoint);
     }
 
     pub fn set_latest_checkpoint_for(
@@ -381,10 +392,35 @@ impl ZoneState {
             .insert(sequencer_alias.to_owned(), checkpoint);
     }
 
+    pub fn set_sequencer_startup(
+        &mut self,
+        sequencer_alias: impl AsRef<str>,
+        startup: ZoneSequencerStartup,
+    ) {
+        self.sequencer_startups
+            .insert(sequencer_alias.as_ref().to_owned(), startup);
+    }
+
+    pub fn sequencer_startup_for(&self, sequencer_alias: impl AsRef<str>) -> ZoneSequencerStartup {
+        self.sequencer_startups
+            .get(sequencer_alias.as_ref())
+            .copied()
+            .unwrap_or_default()
+    }
+
     pub fn current_checkpoint_for(
         &self,
         sequencer_alias: &str,
     ) -> Result<SequencerCheckpoint, StepError> {
+        if let Some(Some(checkpoint)) = self
+            .runtimes
+            .get(sequencer_alias)
+            .and_then(|runtime| runtime.checkpoint_rx.as_ref())
+            .map(|rx| rx.borrow().clone())
+        {
+            return Ok(checkpoint);
+        }
+
         self.latest_checkpoints
             .get(sequencer_alias)
             .cloned()
@@ -395,13 +431,24 @@ impl ZoneState {
             })
     }
 
+    #[must_use]
+    pub fn checkpoint_receiver(
+        &self,
+        sequencer_alias: &str,
+    ) -> Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>> {
+        self.runtimes
+            .get(sequencer_alias)
+            .and_then(|runtime| runtime.checkpoint_rx.as_ref())
+            .cloned()
+    }
+
     pub fn resolve_checkpoint(
         &self,
         alias: impl AsRef<str>,
     ) -> Result<SequencerCheckpoint, StepError> {
         let alias = alias.as_ref();
 
-        self.checkpoints
+        self.saved_checkpoints
             .get(alias)
             .cloned()
             .ok_or(StepError::LogicalError {
@@ -415,6 +462,7 @@ impl ZoneState {
         sequencer_handle: SequencerHandle<ZoneNodeHttpClient>,
         sequencer_task: JoinHandle<()>,
         sequencer_events: Option<tokio::sync::mpsc::Receiver<Event>>,
+        checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
         discarded_payloads: Option<ZoneDiscardedPayloads>,
     ) {
         if let Some(runtime) = self.runtimes.remove(&alias) {
@@ -427,6 +475,7 @@ impl ZoneState {
                 handle: sequencer_handle,
                 task: sequencer_task,
                 events: sequencer_events,
+                checkpoint_rx,
                 discarded_payloads,
             },
         );
@@ -479,10 +528,27 @@ impl ZoneState {
         self.sorted_total_payloads = Some(total);
     }
 
+    pub fn set_sorted_expected_by_sequencer(
+        &mut self,
+        expected_by_sequencer: HashMap<String, Vec<Inscription>>,
+    ) {
+        self.sorted_expected_by_sequencer = Some(expected_by_sequencer);
+    }
+
     pub fn sorted_total_payloads(&self) -> Result<usize, StepError> {
         self.sorted_total_payloads.ok_or(StepError::LogicalError {
             message: "Zone sorted conflict expectations are not initialized".to_owned(),
         })
+    }
+
+    pub fn sorted_expected_by_sequencer(
+        &self,
+    ) -> Result<HashMap<String, Vec<Inscription>>, StepError> {
+        self.sorted_expected_by_sequencer
+            .clone()
+            .ok_or(StepError::LogicalError {
+                message: "Zone sorted conflict payload order is not initialized".to_owned(),
+            })
     }
 
     pub fn set_indexer(&mut self, indexer: ZoneIndexer<ZoneNodeHttpClient>) {
@@ -503,7 +569,7 @@ impl ZoneState {
         let published = self.published_messages.len();
         let deposits = self.submitted_deposits.len();
         let withdraws = self.submitted_withdraws.len();
-        let checkpoints = self.checkpoints.len();
+        let checkpoints = self.saved_checkpoints.len();
 
         format!(
             "node={node_name}, sequencers={sequencers}, running={running}, published={published}, deposits={deposits}, withdraws={withdraws}, checkpoints={checkpoints}"
@@ -524,6 +590,7 @@ impl ZoneState {
         self.indexer = None;
         self.default_sequencer_alias = None;
         self.sorted_total_payloads = None;
+        self.sorted_expected_by_sequencer = None;
 
         self.sequencers.clear();
         self.published_messages.clear();
@@ -531,7 +598,7 @@ impl ZoneState {
         self.submitted_withdraws.clear();
         self.account_balances.clear();
         self.published_order.clear();
-        self.checkpoints.clear();
+        self.saved_checkpoints.clear();
         self.latest_checkpoints.clear();
     }
 }
@@ -634,6 +701,8 @@ pub struct CucumberWorld {
     pub wallets: TrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
+    /// Manual: Exact signed transactions prepared for later submission.
+    pub prepared_transactions: HashMap<String, SignedMantleTx>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -779,6 +848,7 @@ impl Debug for CucumberWorld {
             .field("wallet_accounts", &self.wallet_accounts.len())
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("submitted_transactions", &self.submitted_transactions.len())
+            .field("prepared_transactions", &self.prepared_transactions.len())
             .field(
                 "wallet_utxos_by_block",
                 &wallet_diagnostics.utxo_snapshot_count,
@@ -1202,7 +1272,11 @@ impl CucumberWorld {
             return Ok(());
         }
 
-        let default_binary = default_node_binary_path().ok_or_else(missing_node_binary_error)?;
+        if !running_in_ci() {
+            return Ok(());
+        }
+
+        let default_binary = ci_node_binary_path().ok_or_else(missing_node_binary_error)?;
         warn_if_overriding_invalid_node_binary(&default_binary);
         let default_binary_display = default_binary.display().to_string();
 
@@ -1344,6 +1418,19 @@ impl CucumberWorld {
             .copied()
             .ok_or(StepError::LogicalError {
                 message: format!("Transaction alias '{alias}' not found in world state"),
+            })
+    }
+
+    pub fn remember_prepared_transaction(&mut self, alias: String, signed_tx: SignedMantleTx) {
+        self.prepared_transactions.insert(alias, signed_tx);
+    }
+
+    pub fn resolve_prepared_transaction(&self, alias: &str) -> Result<SignedMantleTx, StepError> {
+        self.prepared_transactions
+            .get(alias)
+            .cloned()
+            .ok_or(StepError::LogicalError {
+                message: format!("Prepared transaction alias '{alias}' not found in world state"),
             })
     }
 
@@ -1550,14 +1637,9 @@ fn host_node_binary_from_env_var_available() -> bool {
         || shared_host_bin_path("logos-blockchain-node").is_file()
 }
 
-fn default_node_binary_path() -> Option<PathBuf> {
+fn ci_node_binary_path() -> Option<PathBuf> {
     let current_dir = env::current_dir().ok()?;
-    let debug_binary = current_dir.join(BIN_PATH_DEBUG);
     let release_binary = current_dir.join(BIN_PATH_RELEASE);
-
-    if matches!(std::fs::exists(&debug_binary), Ok(true)) {
-        return Some(debug_binary);
-    }
 
     if matches!(std::fs::exists(&release_binary), Ok(true)) {
         return Some(release_binary);
@@ -1581,11 +1663,14 @@ fn warn_if_overriding_invalid_node_binary(path: &Path) {
 fn missing_node_binary_error() -> StepError {
     StepError::Preflight {
         message: format!(
-            "Missing Logos host binaries. Set {LOGOS_BLOCKCHAIN_NODE_BIN}, \
-            or run `scripts/run/run-examples.sh host` to restore them into \
-            `testing-framework/assets/stack/bin`."
+            "Missing Logos host binary in CI. Set {LOGOS_BLOCKCHAIN_NODE_BIN}, \
+            or build target/release/logos-blockchain-node before running Cucumber tests."
         ),
     }
+}
+
+fn running_in_ci() -> bool {
+    env::var_os("CI").is_some() || env::var_os("GITHUB_ACTIONS").is_some()
 }
 
 fn nodes_info_display(nodes_info: &HashMap<String, NodeInfo>) -> String {

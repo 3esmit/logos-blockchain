@@ -39,9 +39,9 @@ use std::error::Error;
 pub use chain_inputs::{PoCChainInputs, PoCChainInputsData};
 pub use inputs::{PoCWitnessInputs, PoCWitnessInputsData};
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
+use lb_log_targets::proofs;
 use tracing::error;
 pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData};
-pub use witness::Witness;
 
 pub use crate::{
     inputs::{PoCVerifierInput, PoCVerifierInputJson},
@@ -50,6 +50,8 @@ pub use crate::{
 
 pub type PoCProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
+
+const LOG_TARGET: &str = proofs::POC;
 
 ///
 /// This function generates a proof for the given set of inputs.
@@ -70,7 +72,7 @@ pub type ProveError = lbp_error::Error;
 ///   witness or proving from contents.
 /// - Returns a `ProveError::Json` if there is an error during JSON
 ///   serialization or deserialization.
-pub fn prove(inputs: &PoCWitnessInputs) -> Result<(PoCProof, PoCVerifierInput), ProveError> {
+pub fn prove(inputs: PoCWitnessInputs) -> Result<(PoCProof, PoCVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
     let (proof, verifier_inputs) =
         lb_circuits_prover::prover_from_contents(POC_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
@@ -79,7 +81,7 @@ pub fn prove(inputs: &PoCWitnessInputs) -> Result<(PoCProof, PoCVerifierInput), 
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
-            error!("Fatal CompressedGroth16Proof::try_from: {e}");
+            error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
             // We panic here because this should never happen, and if it does, it's a
             // critical error that we want to be immediately visible during
             // development and testing.
@@ -287,7 +289,7 @@ mod tests {
         };
         let witness_inputs = PoCWitnessInputs::from_chain_and_wallet_data(chain_data, wallet_data);
 
-        let (proof, inputs) = prove(&witness_inputs).unwrap();
+        let (proof, inputs) = prove(witness_inputs).unwrap();
         assert!(verify(&proof, &inputs).unwrap());
     }
 }

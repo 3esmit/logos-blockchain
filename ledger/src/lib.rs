@@ -734,8 +734,11 @@ mod tests {
             ops::{
                 OpId as _,
                 channel::{
-                    ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                    inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                    ChannelId, MsgId,
+                    config::ChannelConfigOp,
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
                 },
                 transfer::TransferOp,
             },
@@ -755,7 +758,10 @@ mod tests {
     type HeaderId = [u8; 32];
 
     fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
-        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
+        let transfer_op = TransferOp::new(
+            Inputs::try_new(inputs).expect("Invalid inputs size"),
+            Outputs::try_new(outputs).expect("Invalid outputs size"),
+        );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
         SignedMantleTx {
             ops_proofs: vec![OpProof::ZkSig(
@@ -1015,8 +1021,8 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
-            metadata: vec![5, 6, 7, 8],
+            inputs: Inputs::new([utxo.id()]),
+            metadata: [5, 6, 7, 8].into(),
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
@@ -1075,8 +1081,8 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
-            metadata: vec![5, 6, 7, 8],
+            inputs: Inputs::new([utxo.id()]),
+            metadata: [5, 6, 7, 8].into(),
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state
@@ -1107,7 +1113,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new([withdraw_note]),
             withdraw_nonce: 0,
         };
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
@@ -1166,8 +1172,8 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
-            metadata: vec![],
+            inputs: Inputs::new([utxo.id()]),
+            metadata: Metadata::empty(),
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state
@@ -1194,7 +1200,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new([withdraw_note]),
             withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);

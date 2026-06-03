@@ -542,7 +542,13 @@ impl LedgerState {
     ) -> Result<Self, LedgerError<Id>> {
         let transfer_op = tx.genesis_transfer();
         if !transfer_op.inputs.is_empty() {
-            return Err(LedgerError::InputInGenesis(transfer_op.inputs.as_ref()[0]));
+            let first_input = transfer_op
+                .inputs
+                .iter()
+                .next()
+                .copied()
+                .expect("is not empty");
+            return Err(LedgerError::InputInGenesis(first_input));
         }
 
         Ok(Self::from_utxos(
@@ -1267,7 +1273,10 @@ pub mod tests {
             .map(|(sk, _)| (*sk).clone())
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
-        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
+        let transfer_op = TransferOp::new(
+            Inputs::try_new(inputs).expect("Invalid inputs size"),
+            Outputs::try_new(outputs).expect("Invalid outputs size"),
+        );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op.clone())].into());
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
         (

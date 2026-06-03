@@ -18,6 +18,7 @@ use lb_core::{
     mantle::{
         AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
         gas::MainnetGasConstants,
+        ledger::Inputs,
         ops::{
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
@@ -26,7 +27,7 @@ use lb_core::{
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
         tx::MantleTxContext,
-        tx_builder::MantleTxBuilder,
+        tx_builder::{MantleTxBuilder, TxBuilderError},
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
@@ -40,6 +41,7 @@ use lb_key_management_system_service::{
     operators::zk::voucher::UnsafeVoucherOperator,
 };
 use lb_ledger::LedgerState;
+use lb_log_targets::wallet;
 use lb_mmr::MerklePath;
 use lb_services_utils::{
     overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
@@ -62,6 +64,8 @@ use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
+
+const LOG_TARGET: &str = wallet::SERVICE;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -97,6 +101,9 @@ pub enum WalletServiceError {
 
     #[error("Input note {0:?} is missing in ledger")]
     MissingInputNote(NoteId),
+
+    #[error(transparent)]
+    TxBuilder(#[from] TxBuilderError),
 
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
@@ -321,6 +328,7 @@ where
         } = cryptarchia_api.info().await?;
 
         info!(
+            target: LOG_TARGET,
             tip = ?cryptarchia_info.tip,
             lib = ?cryptarchia_info.lib,
             slot = ?cryptarchia_info.slot,
@@ -367,7 +375,7 @@ where
         .await?;
 
         service_resources_handle.status_updater.notify_ready();
-        info!("Wallet service is ready and subscribed to blocks");
+        info!(target: LOG_TARGET, "Wallet service is ready and subscribed to blocks");
 
         loop {
             tokio::select! {
@@ -430,7 +438,11 @@ where
             Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, epoch_config)
                 .await
         {
-            warn!(err=?err, "Failed backfilling wallet to message tip; continuing to process the message {msg:?}");
+            warn!(
+                target: LOG_TARGET,
+                err = ?err,
+                "Failed backfilling wallet to message tip; continuing to process the message {msg:?}"
+            );
         }
 
         match msg {
@@ -472,7 +484,7 @@ where
                     }))
                     .is_err()
                 {
-                    error!("Failed to respond to FundTx");
+                    debug!(target: LOG_TARGET, "Failed to respond to FundTx");
                 }
             }
             WalletMsg::SignTx {
@@ -508,7 +520,7 @@ where
                     });
 
                 if resp_tx.send(resp).is_err() {
-                    error!("Failed to respond to SignTx");
+                    debug!(target: LOG_TARGET, "Failed to respond to SignTx");
                 }
             }
             WalletMsg::SignTxWithEd25519 {
@@ -518,7 +530,7 @@ where
             } => {
                 let result = Self::sign_ed25519(tx_hash, pk, kms).await;
                 if resp_tx.send(result).is_err() {
-                    error!("Failed to respond to SignTxWithEd25519");
+                    debug!(target: LOG_TARGET, "Failed to respond to SignTxWithEd25519");
                 }
             }
             WalletMsg::SignTxWithZk {
@@ -528,7 +540,7 @@ where
             } => {
                 let result = Self::sign_zksig(tx_hash, pks, kms).await;
                 if resp_tx.send(result).is_err() {
-                    error!("Failed to respond to SignTxWithZk");
+                    debug!(target: LOG_TARGET, "Failed to respond to SignTxWithZk");
                 }
             }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
@@ -579,7 +591,7 @@ where
             });
 
         if resp_tx.send(resp).is_err() {
-            error!("Failed to respond to GetBalance");
+            debug!(target: LOG_TARGET, "Failed to respond to GetBalance");
         }
     }
 
@@ -594,11 +606,11 @@ where
 
     async fn sign_channel_deposit(
         tx_hash: TxHash,
-        note_ids: Vec<NoteId>,
+        note_ids: Inputs,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         ledger: &LedgerState,
     ) -> Result<OpProof, WalletServiceError> {
-        let input_pks = Self::resolve_note_input_pks(ledger, note_ids)?;
+        let input_pks = Self::resolve_note_input_pks(ledger, note_ids.into_inner())?;
         let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
@@ -632,6 +644,7 @@ where
         // We look it up from the UTXO set to get the public key for signing.
         let utxo_tree = ledger.latest_utxos();
         debug!(
+            target: LOG_TARGET,
             "SDPDeclare: Looking for note_id={}, utxo_tree has {} UTXOs",
             hex::encode(declare_op.locked_note_id.as_bytes()),
             utxo_tree.size()
@@ -732,11 +745,11 @@ where
 
     async fn sign_transfer(
         tx_hash: TxHash,
-        note_ids: Vec<NoteId>,
+        note_ids: Inputs,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         ledger: &LedgerState,
     ) -> Result<OpProof, WalletServiceError> {
-        let input_pks = Self::resolve_note_input_pks(ledger, note_ids)?;
+        let input_pks = Self::resolve_note_input_pks(ledger, note_ids.into_inner())?;
         let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
@@ -751,7 +764,7 @@ where
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
         let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
-        let mantle_tx = tx_builder.clone().build();
+        let mantle_tx = tx_builder.clone().build()?;
         let tx_hash = mantle_tx.hash();
 
         let mut ops_proofs = Vec::new();
@@ -764,13 +777,8 @@ where
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &tip_leader, kms).await?
                 }
                 Op::ChannelDeposit(deposit_op) => {
-                    Self::sign_channel_deposit(
-                        tx_hash,
-                        deposit_op.inputs.as_ref().clone(),
-                        kms,
-                        &tip_leader,
-                    )
-                    .await?
+                    Self::sign_channel_deposit(tx_hash, deposit_op.inputs.clone(), kms, &tip_leader)
+                        .await?
                 }
                 Op::ChannelWithdraw(_channel_withdraw_op) => {
                     let proof = channel_multi_sig_proofs
@@ -791,13 +799,8 @@ where
                     Self::sign_leader_claim(tx_hash, claim_op, tip, wallet, kms).await?
                 }
                 Op::Transfer(transfer_op) => {
-                    Self::sign_transfer(
-                        tx_hash,
-                        transfer_op.inputs.as_ref().clone(),
-                        kms,
-                        &tip_leader,
-                    )
-                    .await?
+                    Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
+                        .await?
                 }
             };
             ops_proofs.push(proof);
@@ -914,7 +917,7 @@ where
         let wallet_state = match wallet.wallet_state_at(tip) {
             Ok(wallet_state) => wallet_state,
             Err(err) => {
-                error!(err = ?err, "Failed to fetch wallet state");
+                error!(target: LOG_TARGET, err = ?err, "Failed to fetch wallet state");
                 Self::send_err(
                     resp_tx,
                     WalletServiceError::FailedToFetchWalletStateForBlock(tip),
@@ -946,7 +949,7 @@ where
             }))
             .is_err()
         {
-            error!("Failed to respond to GetLeaderAgedNotes");
+            debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotes");
         }
     }
 
@@ -965,7 +968,7 @@ where
         state.add_known_voucher(cm, nf, (master_key_id, index));
 
         if let Err(e) = resp_tx.send(cm) {
-            error!("Failed to send voucher secret: {e:?}");
+            debug!(target: LOG_TARGET, "Failed to send voucher secret: {e:?}");
         }
     }
 
@@ -1017,7 +1020,7 @@ where
             }))
             .is_err()
         {
-            error!("Failed to respond to GetClaimableVoucher");
+            debug!(target: LOG_TARGET, "Failed to respond to GetClaimableVoucher");
         }
     }
 
@@ -1059,7 +1062,7 @@ where
         if state.wallet().has_processed_block(tip) {
             Ok(())
         } else {
-            error!("Failed to backfill wallet to {tip}");
+            error!(target: LOG_TARGET, "Failed to backfill wallet to {tip}");
             Err(WalletServiceError::FailedToFetchWalletStateForBlock(tip))
         }
     }
@@ -1075,14 +1078,17 @@ where
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         epoch_config: &EpochConfig,
     ) {
-        let Ok(block) = Self::load_block(
-            header_id,
-            storage_adapter,
-        )
+        let Ok(block) = Self::load_block(header_id, storage_adapter)
             .await
             .inspect_err(|e| {
-                error!(block_id=?header_id, err=%e, "Failed to fetch new block and ledger for wallet");
-            }) else {
+                error!(
+                    target: LOG_TARGET,
+                    block_id = ?header_id,
+                    err = %e,
+                    "Failed to fetch new block and ledger for wallet"
+                );
+            })
+        else {
             return;
         };
 
@@ -1090,10 +1096,14 @@ where
             WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()));
         match state.apply_block(&wallet_block) {
             Ok(()) => {
-                trace!(block_id=?wallet_block.id, "Applied block to wallet");
+                trace!(target: LOG_TARGET, block_id = ?wallet_block.id, "Applied block to wallet");
             }
             Err(WalletError::UnknownBlock(block_id)) => {
-                debug!(block_id = ?block_id, "Missing block in wallet, backfilling");
+                debug!(
+                    target: LOG_TARGET,
+                    block_id = ?block_id,
+                    "Missing block in wallet, backfilling"
+                );
                 if let Err(e) = Self::backfill_missing_blocks(
                     wallet_block.id,
                     state,
@@ -1103,11 +1113,20 @@ where
                 )
                 .await
                 {
-                    error!(block_id=?header_id, err=%e, "Failed to backfill missing block to wallet");
+                    error!(
+                        target: LOG_TARGET,
+                        block_id = ?header_id,
+                        err = %e,
+                        "Failed to backfill missing block to wallet"
+                    );
                 }
             }
             Err(e) => {
-                error!(err=%e, "unexpected error while applying block to wallet");
+                error!(
+                    target: LOG_TARGET,
+                    err = %e,
+                    "unexexpected error while applying block to wallet"
+                );
             }
         }
     }
@@ -1178,7 +1197,12 @@ where
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         epoch_config: &EpochConfig,
     ) -> Result<(), WalletServiceError> {
-        debug!(from_tip = ?tip, to_state_lib = ?state.lib(), "backfilling missing blocks");
+        debug!(
+            target: LOG_TARGET,
+            from_tip = ?tip,
+            to_state_lib = ?state.lib(),
+            "backfilling missing blocks"
+        );
 
         // Fetch block IDs in [state.lib, tip]
         let missing_headers = cryptarchia_api
@@ -1186,13 +1210,19 @@ where
             .await
             .map_err(WalletServiceError::CryptarchiaApi)
             .inspect_err(|e| {
-                error!(block_id = ?tip, err = %e, "Failed to fetch missing headers for backfill");
+                error!(
+                    target: LOG_TARGET,
+                    block_id = ?tip,
+                    err = %e,
+                    "Failed to fetch missing headers for backfill"
+                );
             })?
             .try_collect::<Vec<_>>()
             .await?;
 
         if !missing_headers.is_empty() {
             debug!(
+                target: LOG_TARGET,
                 "Backfilling wallet to tip {tip:?} with {} missing headers",
                 missing_headers.len()
             );
@@ -1201,7 +1231,10 @@ where
         // Load/apply blocks in order from `state.lib` to `tip`
         for header_id in missing_headers.into_iter().rev() {
             if state.wallet().has_processed_block(header_id) {
-                debug!("Skipping already processed wallet block {header_id:?}");
+                debug!(
+                    target: LOG_TARGET,
+                    "Skipping already processed wallet block {header_id:?}"
+                );
                 continue;
             }
 
@@ -1211,6 +1244,7 @@ where
 
             if let Err(e) = state.apply_block(&wallet_block) {
                 error!(
+                    target: LOG_TARGET,
                     block_id = ?header_id,
                     err = %e,
                     "Failed to apply backfill block to wallet"
@@ -1227,7 +1261,7 @@ where
         err: WalletServiceError,
     ) {
         if let Err(msg) = tx.send(Err(err)) {
-            error!(msg = ?msg, "Wallet failed to send error response");
+            debug!(target: LOG_TARGET, msg = ?msg, "Wallet failed to send error response");
         }
     }
 
@@ -1237,7 +1271,7 @@ where
     ) {
         let response: Vec<_> = wallet.known_keys().keys().copied().collect();
         if let Err(e) = tx.send(Ok(response)) {
-            error!(err = ?e, "Failed to send known addresses response");
+            debug!(target: LOG_TARGET, err = ?e, "Failed to send known addresses response");
         }
     }
 
@@ -1267,7 +1301,7 @@ where
         };
 
         if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context())) {
-            error!(err = ?e, "Failed to send gas context response");
+            debug!(target: LOG_TARGET, err = ?e, "Failed to send gas context response");
         }
     }
 }
@@ -1277,6 +1311,7 @@ fn log_lib_update(lib_update: &LibUpdate) {
     let immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len();
     if stale_blocks_count == 0 && immutable_blocks_count == 1 {
         trace!(
+            target: LOG_TARGET,
             new_lib = ?lib_update.new_lib,
             stale_blocks_count,
             immutable_blocks_count,
@@ -1284,6 +1319,7 @@ fn log_lib_update(lib_update: &LibUpdate) {
         );
     } else {
         debug!(
+            target: LOG_TARGET,
             new_lib = ?lib_update.new_lib,
             stale_blocks_count,
             immutable_blocks_count,

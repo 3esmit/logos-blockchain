@@ -9,6 +9,7 @@ use std::error::Error;
 
 pub use inputs::ZkSignWitnessInputs;
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
+use lb_log_targets::proofs;
 pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
 use tracing::error;
@@ -19,6 +20,8 @@ use crate::{
 };
 
 pub type ZkSignProof = CompressedGroth16Proof;
+
+const LOG_TARGET: &str = proofs::ZKSIGN;
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error, Clone)]
 pub enum ZkSignError {
@@ -54,9 +57,9 @@ pub enum ProveError {
 /// - Returns a `ProveError::Json` if there is an error during JSON
 ///   serialization or deserialization.
 pub fn prove(
-    inputs: &ZkSignWitnessInputs,
+    inputs: ZkSignWitnessInputs,
 ) -> Result<(ZkSignProof, ZkSignVerifierInputs), ProveError> {
-    let witness = witness::generate_witness(inputs).map_err(lbp_error::Error::from)?;
+    let witness = witness::generate_witness(inputs)?;
     let (proof, verifier_inputs) = lb_circuits_prover::prover_from_contents(
         ZKSIGN_PROVING_KEY_PATH.as_path(),
         witness.as_ref(),
@@ -71,7 +74,7 @@ pub fn prove(
         .map_err(lbp_error::Error::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
-            error!("Fatal CompressedGroth16Proof::try_from: {e}");
+            error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
             // We panic here because this should never happen, and if it does, it's a
             // critical error that we want to be immediately visible during
             // development and testing.
@@ -142,7 +145,7 @@ mod tests {
         let sks: ZkSignPrivateKeysData = sks.into();
         let msg_hash = Poseidon2Bn254Hasher::digest(&[BigUint::from_bytes_le(b"foo_bar").into()]);
         let input = ZkSignWitnessInputs::from_witness_data_and_message_hash(sks, msg_hash);
-        let (proof, verifier_inputs) = prove(&input).unwrap();
+        let (proof, verifier_inputs) = prove(input).unwrap();
         assert!(verify(&proof, &verifier_inputs).unwrap());
     }
 }

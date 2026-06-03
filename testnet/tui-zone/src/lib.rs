@@ -11,11 +11,11 @@ use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
     sequencer::{Event, OrphanedTx, SequencerHandle, ZoneSequencer},
-    state::InscriptionInfo,
+    state::{FinalizedOp, InscriptionInfo},
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     message::AppMessage,
@@ -36,7 +36,7 @@ pub struct InscribeArgs {
 
 #[expect(
     clippy::cognitive_complexity,
-    reason = "TODO: Address this at some point."
+    reason = "TODO: address this in a dedicated refactor"
 )]
 pub async fn run(args: InscribeArgs) {
     let node_url: Url = args.node_url.parse().expect("invalid node URL");
@@ -54,6 +54,7 @@ pub async fn run(args: InscribeArgs) {
 
     let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
     let (mut sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
+    let mut channel_view_rx = handle.subscribe_channel_view();
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let mut stdin_rx = spawn_stdin_reader(ready_rx);
@@ -69,6 +70,14 @@ pub async fn run(args: InscribeArgs) {
                 }
             }
 
+            changed = channel_view_rx.changed() => {
+                if changed.is_ok() {
+                    state.set_channel_view(channel_view_rx.borrow().clone());
+                    ui::render_state(&state);
+                    ui::prompt();
+                }
+            }
+
             input = stdin_rx.recv() => {
                 let Some(text) = input else {
                     println!();
@@ -81,12 +90,23 @@ pub async fn run(args: InscribeArgs) {
                     error!("Message is too large to fit in an inscription");
                     continue;
                 };
-                if let Err(e) = handle.publish_message(inscription).await {
-                    error!("failed to publish: {e}");
-                    break;
+                match handle.publish_message(inscription).await {
+                    Ok(()) => {
+                        eprintln!("  \x1b[90mpending...\x1b[0m");
+                        ui::prompt();
+                    }
+                    Err(lb_zone_sdk::sequencer::Error::Unavailable { reason }) => {
+                        warn!("publish rejected: {reason}");
+                        eprintln!(
+                            "  \x1b[33msequencer reconnecting, try again in a moment\x1b[0m"
+                        );
+                        ui::prompt();
+                    }
+                    Err(e) => {
+                        error!("failed to publish: {e}");
+                        break;
+                    }
                 }
-                eprintln!("  \x1b[90mpending...\x1b[0m");
-                ui::prompt();
             }
 
             _ = tokio::signal::ctrl_c() => {
@@ -106,28 +126,40 @@ async fn handle_event(
     ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     match event {
-        Event::Ready => handle_ready(state, ready_tx),
+        Event::Readiness { ready: true } => handle_ready(state, ready_tx),
+        Event::Readiness { ready: false } => handle_not_ready(state),
         Event::ChannelUpdate { orphaned, adopted } => {
             handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
-        Event::TxsFinalized { txs, .. } => {
-            let inscriptions: Vec<InscriptionInfo> =
-                txs.iter().map(|t| t.inscription().clone()).collect();
+        Event::TxsFinalized { items } => {
+            // TUI only cares about inscriptions for rendering; deposit /
+            // withdraw ops have no inscription payload.
+            let inscriptions: Vec<InscriptionInfo> = items
+                .iter()
+                .flat_map(|t| t.ops.iter())
+                .filter_map(|op| match op {
+                    FinalizedOp::Inscription(i) => Some(i.clone()),
+                    FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+                })
+                .collect();
             state.on_finalized(&inscriptions);
             ui::render_state(state);
             ui::prompt();
         }
-        Event::Published { tx, checkpoint } => {
-            let info = tx.inscription();
-            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
-            state.on_published(info);
+        Event::Published { tx } => {
+            // `publish_*` APIs only emit inscription / atomic-withdraw — never
+            // a deposit — so `inscription()` is `Some` here in practice.
+            if let Some(info) = tx.inscription() {
+                debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
+                state.on_published(info);
+            }
+            ui::render_state(state);
+            ui::prompt();
+        }
+        Event::Checkpoint { checkpoint } => {
             state.save_checkpoint(checkpoint);
-            ui::render_state(state);
-            ui::prompt();
         }
-        Event::FinalizedInscriptions { inscriptions } => {
-            state.on_finalized(&inscriptions);
-        }
+        Event::TurnNotification { .. } => {}
     }
 }
 
@@ -177,6 +209,13 @@ fn handle_ready(
     println!("Type a message and press Enter to publish.");
     println!("Press Ctrl-D or type an empty line to exit.");
     println!();
+    ui::render_state(state);
+    ui::prompt();
+}
+
+fn handle_not_ready(state: &InMemoryZoneState) {
+    warn!("Sequencer disconnected - publishes will fail until reconnected");
+    println!("Sequencer disconnected. Reconnecting...");
     ui::render_state(state);
     ui::prompt();
 }

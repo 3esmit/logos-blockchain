@@ -196,8 +196,8 @@ pub enum TxRewardsRatioError {
     #[error(transparent)]
     TransferError(#[from] TransferError),
 }
-pub trait TxRewardsRatio: AuthenticatedMantleTx {
-    fn rewards_ratio<Constants: GasConstants>(
+pub trait TxPriorityTip: AuthenticatedMantleTx {
+    fn tip<Constants: GasConstants>(
         &self,
         gas_price: &GasPrices,
         utxos: &Utxos,

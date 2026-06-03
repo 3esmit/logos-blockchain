@@ -13,7 +13,7 @@ use futures::{Stream, StreamExt as _, stream};
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent};
 use lb_core::{
     header::HeaderId,
-    mantle::{Transaction, TxDependencies, TxRewardsRatio},
+    mantle::{Transaction, TxDependencies, TxPriorityTip},
 };
 use lb_log_targets::mempool;
 use serde::{Deserialize, Serialize};
@@ -67,7 +67,7 @@ where
 impl<Tx, Adapter, RuntimeServiceId> MemPool for Mempool<Tx, Tx::Hash, Adapter, RuntimeServiceId>
 where
     Tx: TxDependencies
-        + TxRewardsRatio
+        + TxPriorityTip
         + Clone
         + Send
         + Sync
@@ -168,7 +168,7 @@ where
     Tx::Hash:
         Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Tx: TxDependencies
-        + TxRewardsRatio
+        + TxPriorityTip
         + Clone
         + Send
         + Sync

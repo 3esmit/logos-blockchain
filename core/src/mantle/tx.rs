@@ -13,7 +13,7 @@ use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, TxDependencies,
-        TxDependency, TxDependencyKind, TxRewardsRatio, TxRewardsRatioError, Value,
+        TxDependency, TxDependencyKind, TxPriorityTip, TxRewardsRatioError, Value,
         channel::Channels,
         encoding::{Ops, decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
@@ -637,8 +637,8 @@ impl GasCalculator for SignedMantleTx {
     }
 }
 
-impl TxRewardsRatio for SignedMantleTx {
-    fn rewards_ratio<Constants: GasConstants>(
+impl TxPriorityTip for SignedMantleTx {
+    fn tip<Constants: GasConstants>(
         &self,
         gas_prices: &GasPrices,
         utxos: &Utxos,

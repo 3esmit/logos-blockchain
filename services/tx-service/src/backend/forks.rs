@@ -9,7 +9,7 @@ use futures::StreamExt as _;
 use lb_chain_service::{LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, api::ApiError};
 use lb_core::{
     header::HeaderId,
-    mantle::{TxDependencies, TxRewardsRatio, gas::MainnetGasConstants},
+    mantle::{TxDependencies, TxPriorityTip, gas::MainnetGasConstants},
 };
 use lb_ledger::LedgerState;
 use serde::{Deserialize, Serialize};
@@ -168,7 +168,7 @@ where
         parent_hint: HeaderId,
     ) -> Result<Vec<Tx>, ForksTrackerError>
     where
-        Tx: TxRewardsRatio,
+        Tx: TxPriorityTip,
     {
         if !self.tips.contains(&parent_hint) {
             return Err(ForksTrackerError::ParentNotFound(parent_hint));
@@ -188,7 +188,7 @@ where
         let cached_keys: HashMap<_, _> = txs
             .iter()
             .filter_map(|tx| {
-                match TxRewardsRatio::rewards_ratio::<MainnetGasConstants>(tx, &gas_prices, utxos) {
+                match TxPriorityTip::tip::<MainnetGasConstants>(tx, &gas_prices, utxos) {
                     Ok(ratio) => Some((tx.hash(), ratio)),
                     Err(e) => {
                         error!(

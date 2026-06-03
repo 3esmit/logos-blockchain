@@ -4277,9 +4277,7 @@ version = "0.1.2"
 dependencies = [
  "async-trait",
  "derivative",
- "futures",
  "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
  "overwatch",
  "serde",
  "tokio",

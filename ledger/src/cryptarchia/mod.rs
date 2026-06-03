@@ -1053,31 +1053,28 @@ pub mod tests {
 
         let h_3 = apply_and_add_utxo(&mut ledger, h_2, 90, utxos[2], utxo_4);
 
-        // TODO: This code block should be enabled after
-        // defining how to handle epoch jumps.
-        //
         // Epoch jump: epoch 0 -> 2
         // Jump to the slot that is not the 1st slot of epoch 2
-        // let h_4 = update_ledger(&mut ledger, h_3, 222, utxos[3]).unwrap();
-        // // nonce for epoch 2 should be taken at the end of slot 160, but in our case
-        // the // last block is at slot 90 because of epoch jumps
-        // assert_eq!(
-        //     ledger.states[&h_4].cryptarchia_ledger.epoch_state.nonce,
-        //     ledger.states[&h_3].cryptarchia_ledger.nonce,
-        // );
-        // // stake distribution snapshot should be taken at the end of slot 90
-        // assert_eq!(
-        //     ledger.states[&h_4].cryptarchia_ledger.epoch_state.utxos,
-        //     ledger.states[&h_3].cryptarchia_ledger.utxos,
-        // );
-        // // block density slot range should be [200, 259]
-        // assert_eq!(
-        //     ledger.states[&h_4]
-        //         .cryptarchia_ledger
-        //         .block_density
-        //         .period_range(),
-        //     &(200.into()..=259.into())
-        // );
+        let h_4 = update_ledger(&mut ledger, h_3, 222, utxos[3]).unwrap();
+        // nonce for epoch 2 should be taken at the end of slot 160, but in our case
+        // the last block is at slot 90 because of epoch jumps
+        assert_eq!(
+            ledger.states[&h_4].cryptarchia_ledger.epoch_state.nonce,
+            ledger.states[&h_3].cryptarchia_ledger.nonce,
+        );
+        // stake distribution snapshot should be taken at the end of slot 90
+        assert_eq!(
+            ledger.states[&h_4].cryptarchia_ledger.epoch_state.utxos,
+            ledger.states[&h_3].cryptarchia_ledger.utxos,
+        );
+        // block density slot range should be [200, 259]
+        assert_eq!(
+            ledger.states[&h_4]
+                .cryptarchia_ledger
+                .block_density
+                .period_range(),
+            &(200.into()..=259.into())
+        );
 
         // Epoch transition: 0 -> 1
         // nonce for epoch 1 should be taken at the end of slot 10,

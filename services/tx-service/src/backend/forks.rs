@@ -496,11 +496,10 @@ mod tests {
         service_params.insert(
             ServiceType::BlendNetwork,
             ServiceParameters {
-                lock_period: 10,
-                inactivity_period: 1,
-                retention_period: 1,
-                timestamp: 0,
-                session_duration: 10,
+                lock_period: 10.into(),
+                inactivity_period: 1.into(),
+                retention_period: 1.into(),
+                epoch: 0.into(),
             },
         );
         let config = lb_ledger::Config {
@@ -518,7 +517,7 @@ mod tests {
                 service_params: Arc::new(service_params),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
-                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        rounds_per_epoch: NonZeroU64::new(10).unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),

@@ -226,7 +226,8 @@ where
         + Sync
         + Display
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
-        + AsServiceId<ConsensusService>,
+        + AsServiceId<ConsensusService>
+        + 'static,
 {
     let processed_blocks_stream =
         get_processed_blocks_event_stream::<Transaction, ConsensusService, RuntimeServiceId>(
@@ -735,8 +736,11 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let header_ids = get_immutable_blocks_header_ids(handle, from_slot, to_slot).await?;
 
@@ -787,8 +791,11 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay().await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
@@ -828,8 +835,11 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay().await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
@@ -867,8 +877,11 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let mut stream = get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(
         handle,
@@ -884,8 +897,13 @@ pub async fn get_sdp_declarations<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<Vec<Declaration>, super::DynError>
 where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
     let (sender, receiver) = oneshot::channel();

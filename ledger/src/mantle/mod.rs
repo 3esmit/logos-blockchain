@@ -125,13 +125,6 @@ impl LedgerState {
         Self { channels, ..self }
     }
 
-    pub fn inscriptions_tips(&self) -> impl Iterator<Item = MsgId> {
-        self.channels
-            .channels
-            .values()
-            .map(|state: &ChannelState| state.tip_message)
-    }
-
     /// Get the root of the voucher commitments snapshot.
     #[must_use]
     pub const fn vouchers_snapshot_root(&self) -> RewardsRoot {

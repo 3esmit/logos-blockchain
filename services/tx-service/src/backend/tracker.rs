@@ -140,7 +140,7 @@ where
     Tx: TxDependencies + Clone,
 {
     pub fn process_tx<L: LedgerStateInspector>(&mut self, tx: Arc<Tx>, frontier_deps: &L) {
-        let mut pending_deps_count = 0;
+        let mut pending_deps_count = 0usize;
         let consumes = tx.consumes();
         for (channel_id, msg_id) in consumes.channels {
             if let Some(tip) = frontier_deps.channel_tip(&channel_id)
@@ -148,11 +148,11 @@ where
             {
                 continue;
             }
-            pending_deps_count += 1;
+            pending_deps_count = pending_deps_count.saturating_add(1);
         }
         for utxo in consumes.utxos {
             if !frontier_deps.contains_utxo(&utxo) {
-                pending_deps_count += 1;
+                pending_deps_count = pending_deps_count.saturating_add(1);
             }
         }
         if pending_deps_count == 0 {
@@ -180,7 +180,7 @@ where
                         + depends_utxos.intersection(&free_utxos_deps).count()
                 };
                 if let Some(pending_count) = self.tx_pending_count.get_mut(waiting_id) {
-                    *pending_count -= free;
+                    *pending_count = pending_count.saturating_sub(free);
                     if *pending_count == 0
                         && let Some(orphan_tx) = pop(&mut self.orphan_txs, waiting_id)
                     {

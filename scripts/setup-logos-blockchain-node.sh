@@ -8,8 +8,11 @@ TMP_FILE="/tmp/logos-blockchain-node.tar.gz"
 
 echo "Installing Logos Node $VERSION ($PLATFORM) to $OUT_PATH."
 
-curl -Lfo "$TMP_FILE" \
-  "https://github.com/logos-blockchain/logos-blockchain/releases/download/$VERSION/logos-blockchain-node-$PLATFORM-$VERSION.tar.gz"
+DOWNLOAD_URL="https://github.com/logos-blockchain/logos-blockchain/releases/download/$VERSION/logos-blockchain-node-$PLATFORM-$VERSION.tar.gz"
+
+echo ">> $DOWNLOAD_URL"
+
+curl -Lfo "$TMP_FILE" $DOWNLOAD_URL
 
 tar -xzf "$TMP_FILE" -C "$OUT_PATH"
 rm "$TMP_FILE"

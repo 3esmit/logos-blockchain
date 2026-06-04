@@ -60,7 +60,7 @@ services:
       - LOG_LEVEL=DEBUG
       - LOG_APPENDER=rolling-max-files
       - LOG_APPENDER_MAX_FILES=48
-      - STATE_PATH=/node-data/0/state
+      - STATE_PATH=/node-data/0/state-new
     ports:
       - "3000:3000/udp"
       - "3400:3400/udp"
@@ -84,7 +84,7 @@ services:
       - LOG_LEVEL=DEBUG
       - LOG_APPENDER=rolling-max-files
       - LOG_APPENDER_MAX_FILES=48
-      - STATE_PATH=/node-data/1/state
+      - STATE_PATH=/node-data/1/state-new
     ports:
       - "3001:3001/udp"
       - "3401:3401/udp"
@@ -108,7 +108,7 @@ services:
       - LOG_LEVEL=DEBUG
       - LOG_APPENDER=rolling-max-files
       - LOG_APPENDER_MAX_FILES=48
-      - STATE_PATH=/node-data/2/state
+      - STATE_PATH=/node-data/2/state-new
     ports:
       - "3002:3002/udp"
       - "3402:3402/udp"
@@ -132,7 +132,7 @@ services:
       - LOG_LEVEL=TRACE
       - LOG_APPENDER=rolling-max-files
       - LOG_APPENDER_MAX_FILES=48
-      - STATE_PATH=/node-data/3/state
+      - STATE_PATH=/node-data/3/state-new
     ports:
       - "3003:3003/udp"
       - "3403:3403/udp"

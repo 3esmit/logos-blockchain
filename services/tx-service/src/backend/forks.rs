@@ -179,14 +179,14 @@ where
     pub async fn get_frontier_txs(
         &self,
         parent_hint: HeaderId,
-    ) -> Result<impl Iterator<Item = Tx> + use<'_, Tx>, ForksTrackerError>
+    ) -> Result<impl Iterator<Item = Tx> + use<Tx, Adapter>, ForksTrackerError>
     where
         Tx: TxPriorityTip,
     {
         if !self.block_states.contains_key(&parent_hint) {
             return Err(ForksTrackerError::ParentNotFound(parent_hint));
         }
-        let mut txs = self
+        let txs = self
             .block_states
             .get(&parent_hint)
             .map(|fork| fork.state.get_ready_txs())
@@ -201,7 +201,7 @@ where
         let sorted_txs = txs.flat_map(move |mut txs| {
             let cached_keys: HashMap<_, _> = txs
                 .iter()
-                .flat_map(|tx| {
+                .filter_map(|tx| {
                     match TxPriorityTip::priority_tip::<MainnetGasConstants>(
                         tx,
                         &gas_prices,

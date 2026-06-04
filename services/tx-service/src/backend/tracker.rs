@@ -191,7 +191,8 @@ where
         }
     }
 
-    pub fn get_ready_txs(&self) -> impl Iterator<Item = Vec<Tx>> {
+    pub fn get_ready_txs(&self) -> impl Iterator<Item = Vec<Tx>> + use<Tx> {
+        // cheap clone state to send with the iterator
         let mut moved = self.clone();
         std::iter::once(
             self.ready_txs

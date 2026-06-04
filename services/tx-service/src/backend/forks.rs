@@ -138,7 +138,7 @@ where
             mempool_log: TxHistory::new(),
             adapter,
         };
-        instance.bootstrap_root(HeaderId::genesis());
+        instance.bootstrap_root(HeaderId::zeroes());
         instance
     }
 
@@ -201,7 +201,7 @@ where
         let cached_keys: HashMap<_, _> = txs
             .iter()
             .filter_map(|tx| {
-                match TxPriorityTip::tip::<MainnetGasConstants>(tx, &gas_prices, utxos) {
+                match TxPriorityTip::priority_tip::<MainnetGasConstants>(tx, &gas_prices, utxos) {
                     Ok(ratio) => Some((tx.hash(), ratio)),
                     Err(e) => {
                         error!(
@@ -583,7 +583,7 @@ mod tests {
         }
 
         async fn get_tip_id(&self) -> Result<HeaderId, ForksTrackerError> {
-            Ok(HeaderId::genesis())
+            Ok(HeaderId::zeroes())
         }
     }
 

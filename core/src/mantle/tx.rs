@@ -12,8 +12,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, TxDependencies,
-        TxDependency, TxDependencyKind, TxPriorityTip, TxRewardsRatioError, Value,
+        AuthenticatedMantleTx, PriorityTipError, StorageSize, Transaction, TransactionHasher,
+        TxDependencies, TxDependency, TxDependencyKind, TxPriorityTip, Value,
         channel::Channels,
         encoding::{Ops, decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
@@ -638,11 +638,11 @@ impl GasCalculator for SignedMantleTx {
 }
 
 impl TxPriorityTip for SignedMantleTx {
-    fn tip<Constants: GasConstants>(
+    fn priority_tip<Constants: GasConstants>(
         &self,
         gas_prices: &GasPrices,
         utxos: &Utxos,
-    ) -> Result<Value, TxRewardsRatioError> {
+    ) -> Result<Value, PriorityTipError> {
         // compute the balance
         let balance: Result<i128, _> =
             self.mantle_tx
@@ -650,7 +650,7 @@ impl TxPriorityTip for SignedMantleTx {
                 .try_fold(0i128, |accum, transfer| {
                     accum
                         .checked_add(transfer.balance(utxos)?)
-                        .ok_or(TxRewardsRatioError::OverflownBalance)
+                        .ok_or(PriorityTipError::OverflownBalance)
                 });
         // Update the total of fee burned and tipped in the block
         let tx_fee_burned = GasCost::calculate(

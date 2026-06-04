@@ -188,7 +188,7 @@ pub trait TxDependencies: Transaction {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum TxRewardsRatioError {
+pub enum PriorityTipError {
     #[error("Balance overflow")]
     OverflownBalance,
     #[error(transparent)]
@@ -197,9 +197,9 @@ pub enum TxRewardsRatioError {
     TransferError(#[from] TransferError),
 }
 pub trait TxPriorityTip: AuthenticatedMantleTx {
-    fn tip<Constants: GasConstants>(
+    fn priority_tip<Constants: GasConstants>(
         &self,
         gas_price: &GasPrices,
         utxos: &Utxos,
-    ) -> Result<Value, TxRewardsRatioError>;
+    ) -> Result<Value, PriorityTipError>;
 }

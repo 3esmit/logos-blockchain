@@ -27,7 +27,7 @@ impl Debug for HeaderId {
 
 impl HeaderId {
     #[must_use]
-    pub const fn genesis() -> Self {
+    pub const fn zeroes() -> Self {
         Self([0; 32])
     }
 }
@@ -147,7 +147,7 @@ impl Header {
     pub fn genesis(tx: &GenesisTx) -> Self {
         let block_root = merkle::calculate_block_root(&[tx]);
         Self::new(
-            HeaderId::genesis(),
+            HeaderId::zeroes(),
             ContentId(block_root),
             Slot::from(0u64),
             Groth16LeaderProof::genesis(),

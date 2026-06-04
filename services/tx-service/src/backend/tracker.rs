@@ -78,13 +78,6 @@ where
         self.orphan_txs.size()
     }
 
-    pub fn get_txs(&self) -> impl Iterator<Item = &Tx> + '_ {
-        self.ready_txs
-            .values()
-            .chain(self.orphan_txs.values())
-            .map(Arc::as_ref)
-    }
-
     pub fn to_state(&self) -> TxTrackerState<TxId> {
         TxTrackerState {
             ready_txs: self.ready_txs.keys().cloned().collect(),

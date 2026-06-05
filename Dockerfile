@@ -19,7 +19,7 @@ WORKDIR /logos-blockchain
 COPY . .
 
 RUN apk add --no-cache curl bash
-RUN scripts/setup-logos-blockchain-circuits.sh "$LB_CIRCUITS_VERSION" 
+RUN scripts/setup-logos-blockchain-circuits.sh "$LB_CIRCUITS_VERSION" "linux-$(uname -m)"
 RUN scripts/setup-logos-blockchain-node.sh "$LB_NODE_VERSION" "linux-$(uname -m)"
 
 # ===========================

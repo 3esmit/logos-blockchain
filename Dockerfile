@@ -35,7 +35,8 @@ LABEL maintainer="augustinas@status.im" \
 # Copies the entire cache dir.
 # We only need the circuits, but this is currently much simpler than just copying the circuits subdir.
 # This might be addressed later, after the circuits directories structure is standardised.
-COPY --from=builder /opt/circuits /root/.cache/logos/blockchain/
+RUN mkdir -p /home/runner/.cache/logos/blockchain/
+COPY --from=builder /opt/circuits /home/runner/.cache/logos/blockchain/
 COPY --from=builder /usr/local/bin/logos-blockchain-node /usr/local/bin/logos-blockchain-node
 
 EXPOSE 3000 8080 9000 60000

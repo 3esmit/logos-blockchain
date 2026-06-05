@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use lb_core::{
     mantle::Note,
     sdp::{
@@ -23,7 +21,7 @@ pub fn create_epoch_state(
     service_type: ServiceType,
     epoch: Epoch,
     nonce: Fr,
-    _params: &blend::RewardsParameters,
+    params: &blend::RewardsParameters,
 ) -> EpochState {
     let mut declarations = rpds::RedBlackTreeMapSync::new_sync();
     let mut locked_notes = LockedNotes::new();
@@ -70,9 +68,7 @@ pub fn create_epoch_state(
             ServiceType::BlendNetwork,
             Service::BlendNetwork(ServiceState {
                 declarations,
-                // TODO: enable after making `rewards` module stable
-                // rewards: blend::Rewards::new(params, &epoch_state),
-                _phantom: PhantomData,
+                rewards: blend::Rewards::new(params, &epoch_state),
             }),
         ),
         locked_notes,

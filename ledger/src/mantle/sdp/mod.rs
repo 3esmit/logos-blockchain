@@ -1,6 +1,6 @@
 pub mod rewards;
 
-use std::{collections::HashMap, marker::PhantomData};
+use std::collections::HashMap;
 
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
@@ -83,23 +83,18 @@ impl Service {
         }
     }
 
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "TODO: enable this after making the `rewards` module stable"
-    )]
-    pub const fn update_rewards(
+    pub fn update_rewards(
         &mut self,
-        _provider_id: ProviderId,
-        _metadata: &ActivityMetadata,
-        _rewards_params: &ServiceRewardsParameters,
+        provider_id: ProviderId,
+        metadata: &ActivityMetadata,
+        rewards_params: &ServiceRewardsParameters,
     ) -> Result<(), Error> {
         match self {
-            Self::BlendNetwork(_state) => {
-                // TODO: enable this after making the `rewards` module stable
-                // state.rewards =
-                //     state
-                //         .rewards
-                //         .update_active(provider_id, metadata, &rewards_params.blend)?;
+            Self::BlendNetwork(state) => {
+                state.rewards =
+                    state
+                        .rewards
+                        .update_active(provider_id, metadata, &rewards_params.blend)?;
                 Ok(())
             }
         }
@@ -166,10 +161,8 @@ pub enum Error {
 struct ServiceState<R: Rewards> {
     /// Declarations accumulated until the current block.
     declarations: Declarations,
-    // TODO: enable this after making the `rewards` module stable
     // Rewards calculation and tracking for this service
-    // pub rewards: R,
-    _phantom: PhantomData<R>,
+    pub rewards: R,
 }
 
 impl<R: Rewards> ServiceState<R> {
@@ -179,9 +172,9 @@ impl<R: Rewards> ServiceState<R> {
         epoch_state: &EpochState,
         locked_notes: &mut LockedNotes,
         service_params: &ServiceParameters,
-        _rewards_params: &R::Params,
+        rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
-        let reward_utxos = Vec::new();
+        let mut reward_utxos = Vec::new();
 
         if last_epoch_state.epoch() < epoch_state.epoch() {
             // Unlock notes from withdrawn declarations if possible
@@ -191,13 +184,12 @@ impl<R: Rewards> ServiceState<R> {
             self.gc_declarations(epoch_state.epoch(), service_params);
 
             // Update rewards with current epoch state and distribute rewards
-            // TODO: enable this after making the `rewards` module stable
-            //     (self.rewards, reward_utxos) = self.rewards.update_epoch(
-            //         last_epoch_state,
-            //         epoch_state,
-            //         service_params,
-            //         rewards_params,
-            //     );
+            (self.rewards, reward_utxos) = self.rewards.update_epoch(
+                last_epoch_state,
+                epoch_state,
+                service_params,
+                rewards_params,
+            );
         }
 
         (self, reward_utxos)
@@ -260,13 +252,8 @@ impl<R: Rewards> ServiceState<R> {
         withdrawn || inactive
     }
 
-    #[expect(
-        clippy::unused_self,
-        reason = "TODO: enable this after making the `rewards` module stable"
-    )]
-    const fn add_income(&self, _income: Value) {
-        // TODO: enable this after making the `rewards` module stable
-        // self.rewards = self.rewards.add_income(income);
+    fn add_income(&mut self, income: Value) {
+        self.rewards = self.rewards.add_income(income);
     }
 
     fn contains(&self, declaration_id: &DeclarationId) -> bool {
@@ -318,31 +305,26 @@ impl SdpLedger {
     #[must_use]
     pub fn with_blend_service(
         mut self,
-        _rewards_settings: &blend::RewardsParameters,
+        rewards_settings: &blend::RewardsParameters,
         epoch_state: &EpochState,
     ) -> Self {
         assert_eq!(
             epoch_state.epoch, self.epoch,
             "TODO: refactor to remove this assertion"
         );
-        let service = Service::BlendNetwork(Self::new_service_state(
-            // TODO: enable this after making the `rewards` module stable
-            // blend::Rewards::new(
-            //     rewards_settings,
-            //     epoch_state,
-            // )
-        ));
+        let service = Service::BlendNetwork(Self::new_service_state(blend::Rewards::new(
+            rewards_settings,
+            epoch_state,
+        )));
         self.services = self.services.insert(ServiceType::BlendNetwork, service);
         self
     }
 
     #[must_use]
-    fn new_service_state<R: Rewards>(// TODO: enabled this after making the `rewards` module stable
-        //rewards: R
-    ) -> ServiceState<R> {
+    fn new_service_state<R: Rewards>(rewards: R) -> ServiceState<R> {
         ServiceState {
             declarations: rpds::RedBlackTreeMapSync::new_sync(),
-            _phantom: PhantomData,
+            rewards,
         }
     }
 

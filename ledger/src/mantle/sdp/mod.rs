@@ -175,29 +175,30 @@ struct ServiceState<R: Rewards> {
 impl<R: Rewards> ServiceState<R> {
     fn try_apply_header(
         mut self,
-        _last_epoch_state: &EpochState,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         locked_notes: &mut LockedNotes,
         service_params: &ServiceParameters,
         _rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
-        // Unlock notes from withdrawn declarations if possible
-        self.unlock_notes_from_withdrawn_declarations(locked_notes, epoch_state.epoch());
-
-        // Garbage collect declarations
-        self.gc_declarations(epoch_state.epoch(), service_params);
-
-        // Update rewards with current epoch state and distribute rewards
         let reward_utxos = Vec::new();
-        // TODO: enable this after making the `rewards` module stable
-        // if last_epoch_state.epoch() < epoch_state.epoch() {
-        //     (self.rewards, reward_utxos) = self.rewards.update_epoch(
-        //         last_epoch_state,
-        //         epoch_state,
-        //         service_params,
-        //         rewards_params,
-        //     );
-        // }
+
+        if last_epoch_state.epoch() < epoch_state.epoch() {
+            // Unlock notes from withdrawn declarations if possible
+            self.unlock_notes_from_withdrawn_declarations(locked_notes, epoch_state.epoch());
+
+            // Garbage collect declarations
+            self.gc_declarations(epoch_state.epoch(), service_params);
+
+            // Update rewards with current epoch state and distribute rewards
+            // TODO: enable this after making the `rewards` module stable
+            //     (self.rewards, reward_utxos) = self.rewards.update_epoch(
+            //         last_epoch_state,
+            //         epoch_state,
+            //         service_params,
+            //         rewards_params,
+            //     );
+        }
 
         (self, reward_utxos)
     }
@@ -817,6 +818,18 @@ mod tests {
         }
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
+
+        // Before moving to epoch 7 where declaration will be removed,
+        // applying another header within the same epoch 6 must be a no-op
+        // (GC and unlock are gated to epoch transitions only).
+        let ledger_before = ledger.clone();
+        (ledger, _) = ledger
+            .try_apply_header(&config, &last_epoch_state, &last_epoch_state)
+            .unwrap();
+        assert_eq!(
+            ledger, ledger_before,
+            "within-epoch try_apply_header must not change ledger state"
+        );
 
         // Move forward to epoch 7 where declaration should be removed
         // because no activity message has been submitted since epoch 4

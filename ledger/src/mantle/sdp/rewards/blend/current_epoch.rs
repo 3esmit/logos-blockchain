@@ -80,6 +80,7 @@ impl CurrentEpochTracker {
     /// if the following conditions are met:
     /// - The network size of the new target epoch is not below the minimum.
     /// - No multi-epoch jump has occurred.
+    ///
     /// Otherwise, it returns [`CurrentEpochTrackerOutput::WithoutTargetEpoch`].
     pub fn finalize<ProofsVerifier>(
         &self,
@@ -105,9 +106,8 @@ impl CurrentEpochTracker {
             last_epoch_state.epoch,
         );
 
-        // On a multi-epoch jump, skip target epoch setup: it would be
-        // ambiguous which intermediate epoch's activity messages should be
-        // accepted.
+        // On a multi-epoch jump, skip target epoch setup.
+        // See the details in the [`Rewards::update_epoch`] documentation.
         if next_epoch_state.epoch > last_epoch_state.epoch + Epoch::new(1) {
             debug!(
                 target: LOG_TARGET,

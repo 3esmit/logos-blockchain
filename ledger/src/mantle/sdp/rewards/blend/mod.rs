@@ -838,10 +838,9 @@ mod tests {
     }
 
     /// On a multi-epoch jump, `update_epoch` must transition to
-    /// `WithoutTargetEpoch` (rejecting upcoming activity messages) because
-    /// it is ambiguous which intermediate epoch's messages should be
-    /// accepted. Rewards already earned during the last epoch must still be
-    /// distributed.
+    /// `WithoutTargetEpoch` (rejecting upcoming activity messages), because
+    /// it is too late to accept activity messages for the last epoch and
+    /// we cannot verify activity proofs for the skipped epochs.
     #[test]
     fn test_blend_multi_epoch_jump_transitions_to_without_target() {
         let provider1 = create_provider_id(1);

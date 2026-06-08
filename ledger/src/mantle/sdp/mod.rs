@@ -183,7 +183,7 @@ impl<R: Rewards> ServiceState<R> {
             // Garbage collect declarations
             self.gc_declarations(epoch_state.epoch(), service_params);
 
-            // Update rewards with current epoch state and distribute rewards
+            // Update and distribute rewards
             (self.rewards, reward_utxos) = self.rewards.update_epoch(
                 last_epoch_state,
                 epoch_state,

@@ -587,8 +587,20 @@ impl SdpLedger {
 mod tests {
     use std::{collections::VecDeque, num::NonZeroU64, sync::Arc};
 
-    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
+    use lb_blend_crypto::merkle::MerkleTree;
+    use lb_blend_message::reward::{BlendingToken, BlendingTokenEvaluation};
+    use lb_blend_proofs::{
+        quota::{
+            VerifiedProofOfQuota,
+            inputs::prove::{
+                PrivateInputs, PublicInputs,
+                private::ProofOfCoreQuotaInputs,
+                public::{CoreInputs, LeaderInputs},
+            },
+        },
+        selection::VerifiedProofOfSelection,
+    };
+    use lb_core::{blend::core_quota, crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
@@ -682,14 +694,18 @@ mod tests {
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
+    const NONCE: Fr = Fr::ZERO;
+    const LOTTERY_0: Fr = Fr::ZERO;
+    const LOTTERY_1: Fr = Fr::ZERO;
+
     fn dummy_epoch_state(epoch: Epoch, rewards_settings: &blend::RewardsParameters) -> EpochState {
         let mut epoch_state = EpochState {
             epoch,
-            nonce: ZkHash::ZERO,
+            nonce: NONCE,
             utxos: UtxoTree::default(),
             total_stake: 100,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ZERO,
+            lottery_0: LOTTERY_0,
+            lottery_1: LOTTERY_1,
             sdp: SdpLedger::new(epoch),
         };
 
@@ -704,13 +720,103 @@ mod tests {
     fn next_epoch_state(epoch: Epoch, sdp_snapshot: SdpLedger) -> EpochState {
         EpochState {
             epoch,
-            nonce: ZkHash::ZERO,
+            nonce: NONCE,
             utxos: UtxoTree::default(),
             total_stake: 100,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ZERO,
+            lottery_0: LOTTERY_0,
+            lottery_1: LOTTERY_1,
             sdp: sdp_snapshot,
         }
+    }
+
+    const SINGLE_NODE_SNAPSHOT_SIZE: usize = 1;
+
+    /// Generates an activity proof with a real `PoQ` + `PoSel` that the
+    /// `rewards` module will accept for the single-provider snapshot used
+    /// in these tests.
+    ///
+    /// Grinds `message_release_index` until the resulting blending token's
+    /// Hamming distance falls within the activity threshold.
+    //
+    // TODO: Remove this after making `SdpLedger` generic over `Rewards`,
+    //       which requires extensive changes across multiple crates.
+    fn generate_activity_proof(
+        activity_epoch: Epoch,
+        provider_zk_key: &ZkKey,
+        config: &Config,
+    ) -> lb_core::sdp::blend::ActivityProof {
+        let blend_params = &config.service_rewards_params.blend;
+        let zk_id = provider_zk_key.to_public_key();
+        // Build a Merkle tree with a single leaf corresponding to the provider's zk_id.
+        // This function works only for single-provider snapshots.
+        let merkle_tree = MerkleTree::new(vec![zk_id.into_inner()]).unwrap();
+        let core_path_and_selectors = merkle_tree.get_proof_for_key(&zk_id.into_inner()).unwrap();
+
+        let quota = core_quota(
+            blend_params.rounds_per_epoch,
+            blend_params.message_frequency_per_round,
+            blend_params.num_blend_layers,
+            SINGLE_NODE_SNAPSHOT_SIZE,
+        );
+        let num_blend_layers = blend_params.num_blend_layers.get();
+        let message_quota =
+            num_blend_layers + (num_blend_layers * blend_params.data_replication_factor);
+        // Use the same nonce and lottery values that are used for epoch states
+        let leader_inputs = LeaderInputs {
+            pol_ledger_aged: UtxoTree::default().root(),
+            pol_epoch_nonce: NONCE,
+            message_quota,
+            lottery_0: LOTTERY_0,
+            lottery_1: LOTTERY_1,
+        };
+        let core_inputs = CoreInputs {
+            zk_root: merkle_tree.root(),
+            quota,
+        };
+        let token_evaluation = BlendingTokenEvaluation::new(
+            quota,
+            SINGLE_NODE_SNAPSHOT_SIZE as u64,
+            blend_params.activity_threshold_sensitivity,
+        )
+        .unwrap();
+        let epoch_randomness = ZkHash::ZERO.into();
+
+        // Ephemeral signing key (separate from the provider's identity key —
+        // matches production behaviour where proofs use ephemeral keys).
+        let ephemeral = Ed25519Key::from_bytes(&[7u8; 32]);
+        let public_inputs = PublicInputs {
+            signing_key: ephemeral.public_key().into_inner(),
+            core: core_inputs,
+            leader: leader_inputs,
+        };
+        for message_release_index in 0u64.. {
+            let private_inputs = PrivateInputs::new_proof_of_core_quota_inputs(
+                message_release_index,
+                ProofOfCoreQuotaInputs {
+                    core_path_and_selectors,
+                    core_sk: *provider_zk_key.as_fr(),
+                },
+            );
+            let Ok((poq, secret_selection_randomness)) =
+                VerifiedProofOfQuota::new(&public_inputs, private_inputs)
+            else {
+                continue;
+            };
+            let posel = VerifiedProofOfSelection::new(secret_selection_randomness);
+            let token = BlendingToken::new(ephemeral.public_key(), poq, posel);
+            if token_evaluation
+                .evaluate(&token, epoch_randomness)
+                .is_some()
+            {
+                return lb_core::sdp::blend::ActivityProof {
+                    epoch: activity_epoch,
+                    signing_key: ephemeral.public_key(),
+                    proof_of_quota: poq.into(),
+                    proof_of_selection: posel.into(),
+                };
+            }
+        }
+        unreachable!("failed to grind message_release_index")
     }
 
     /// A provider that hasn't submit a new active message during
@@ -774,12 +880,11 @@ mod tests {
         let active_op = SDPActiveOp {
             declaration_id,
             nonce: 1,
-            metadata: ActivityMetadata::Blend(Box::new(lb_core::sdp::blend::ActivityProof {
-                epoch: 3.into(), // proving activity from epoch 3
-                signing_key: signing_key.public_key(),
-                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]).into(),
-                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([1; _]).into(),
-            })),
+            metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
+                3.into(), // proving activity from epoch 3
+                &zk_key,
+                &config,
+            ))),
         };
         let ledger4 = apply_active_with_dummies(ledger4, &active_op, zk_key, &config).unwrap();
         let declaration = ledger4.get_declarations(ServiceType::BlendNetwork).unwrap();

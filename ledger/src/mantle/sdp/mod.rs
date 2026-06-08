@@ -585,7 +585,7 @@ impl SdpLedger {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::{collections::VecDeque, num::NonZeroU64, sync::Arc};
 
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
@@ -701,11 +701,15 @@ mod tests {
         epoch_state
     }
 
-    fn next_epoch_state(epoch: Epoch, last_epoch_state: EpochState) -> EpochState {
+    fn next_epoch_state(epoch: Epoch, sdp_snapshot: SdpLedger) -> EpochState {
         EpochState {
             epoch,
-            nonce: ZkHash::from(epoch.into_inner()),
-            ..last_epoch_state
+            nonce: ZkHash::ZERO,
+            utxos: UtxoTree::default(),
+            total_stake: 100,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
+            sdp: sdp_snapshot,
         }
     }
 
@@ -723,15 +727,11 @@ mod tests {
 
         // Init ledger with no declaration
         let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
-        let mut ledger = epoch0.sdp.clone();
+        let ledger0 = epoch0.sdp.clone();
 
         // Move forward to the epoch 1
-        let mut last_epoch_state = epoch0.clone();
-        let new_epoch_state = next_epoch_state(1.into(), epoch0);
-        (ledger, _) = ledger
-            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-            .unwrap();
-        last_epoch_state = new_epoch_state;
+        let epoch1 = next_epoch_state(1.into(), epoch0.sdp.clone());
+        let (ledger1, _) = ledger0.try_apply_header(&config, &epoch0, &epoch1).unwrap();
 
         // Add a declaration at epoch 1
         let (_utxo_sk, utxo) = utxo_with_sk();
@@ -746,29 +746,28 @@ mod tests {
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
-        let mut ledger = apply_declare_with_dummies(
+        let ledger1 = apply_declare_with_dummies(
             &utxo_tree(vec![utxo]),
-            ledger,
+            ledger1,
             declare_op,
             &zk_key,
             &config,
         )
         .unwrap();
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        let declarations = ledger1.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
         // Move forward to the epoch 4 where the provider can submit an activity
         // message.
         // (The provider is expected to provide the service from epoch 3)
-        for epoch in 2..=4 {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (ledger, _) = ledger
-                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-                .unwrap();
-            last_epoch_state = new_epoch_state;
-        }
+        let epoch2 = next_epoch_state(2.into(), ledger0);
+        let (ledger2, _) = ledger1.try_apply_header(&config, &epoch1, &epoch2).unwrap();
+        let epoch3 = next_epoch_state(3.into(), ledger1);
+        let (ledger3, _) = ledger2.try_apply_header(&config, &epoch2, &epoch3).unwrap();
+        let epoch4 = next_epoch_state(4.into(), ledger2);
+        let (ledger4, _) = ledger3.try_apply_header(&config, &epoch3, &epoch4).unwrap();
         // Check that the declaration is still present.
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        let declarations = ledger4.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
         // Submit an activity message at epoch 4
@@ -782,8 +781,8 @@ mod tests {
                 proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([1; _]).into(),
             })),
         };
-        let mut ledger = apply_active_with_dummies(ledger, &active_op, zk_key, &config).unwrap();
-        let declaration = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        let ledger4 = apply_active_with_dummies(ledger4, &active_op, zk_key, &config).unwrap();
+        let declaration = ledger4.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert_eq!(
             declaration.get(&declaration_id).unwrap().active,
             Epoch::new(4) // epoch when the activity message is submitted/accepted
@@ -791,35 +790,28 @@ mod tests {
 
         // Move forward to the epoch 6. The declaration should be still present
         // because the activity message was accepted at epoch 4.
-        for epoch in 5..=6 {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (ledger, _) = ledger
-                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-                .unwrap();
-            last_epoch_state = new_epoch_state;
-        }
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        let epoch5 = next_epoch_state(5.into(), ledger3);
+        let (ledger5, _) = ledger4.try_apply_header(&config, &epoch4, &epoch5).unwrap();
+        let epoch6 = next_epoch_state(6.into(), ledger4);
+        let (ledger6, _) = ledger5.try_apply_header(&config, &epoch5, &epoch6).unwrap();
+        let declarations = ledger6.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
         // Before moving to epoch 7 where declaration will be removed,
         // applying another header within the same epoch 6 must be a no-op
         // (GC and unlock are gated to epoch transitions only).
-        let ledger_before = ledger.clone();
-        (ledger, _) = ledger
-            .try_apply_header(&config, &last_epoch_state, &last_epoch_state)
-            .unwrap();
+        let ledger6_before = ledger6.clone();
+        let (ledger6, _) = ledger6.try_apply_header(&config, &epoch6, &epoch6).unwrap();
         assert_eq!(
-            ledger, ledger_before,
+            ledger6, ledger6_before,
             "within-epoch try_apply_header must not change ledger state"
         );
 
         // Move forward to epoch 7 where declaration should be removed
         // because no activity message has been submitted since epoch 4
-        let new_epoch_state = next_epoch_state(7.into(), last_epoch_state.clone());
-        (ledger, _) = ledger
-            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-            .unwrap();
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        let epoch7 = next_epoch_state(7.into(), ledger5);
+        let (ledger7, _) = ledger6.try_apply_header(&config, &epoch6, &epoch7).unwrap();
+        let declarations = ledger7.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(!declarations.contains_key(&declaration_id));
     }
 
@@ -851,15 +843,14 @@ mod tests {
 
         // Initialize ledger with service config and declare
         let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
-        let sdp_ledger = epoch0.sdp.clone();
+        let ledger0 = epoch0.sdp.clone();
 
         let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
+        let ledger0 =
+            apply_declare_with_dummies(&utxo_tree, ledger0, declare_op, &zk_key, &config).unwrap();
 
         // Verify declaration is present
-        assert!(sdp_ledger.get_declaration(&declaration_id).is_some());
+        assert!(ledger0.get_declaration(&declaration_id).is_some());
 
         // Withdraw the declaration
         let withdraw_op = &SDPWithdrawOp {
@@ -867,31 +858,34 @@ mod tests {
             nonce: 1,
             locked_note_id: note_id,
         };
-        let sdp_ledger =
-            apply_withdraw_with_dummies(sdp_ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
+        let ledger0 =
+            apply_withdraw_with_dummies(ledger0, withdraw_op, utxo_sk, zk_key, &config).unwrap();
 
-        let withdrawn_epoch = sdp_ledger.get_declaration(&declaration_id)
+        let withdrawn_epoch = ledger0.get_declaration(&declaration_id)
             .expect("declaration must still exist even after withdrawal because GC shouldn't remove it immediately")
             .withdrawn
             .expect("withdraw epoch must be set after withdraw tx is accepted");
 
         // Move forward epochs until withdrawn_epoch is reached,
         // and check that the note has been unlocked.
-        let mut sdp_ledger = sdp_ledger;
-        let mut last_epoch_state = epoch0;
+        let mut ledger = ledger0.clone();
+        let mut last_epoch_state = epoch0.clone();
+        let mut sdp_snapshots = VecDeque::from([epoch0.sdp, ledger0]);
         for epoch in 1..=withdrawn_epoch.into_inner() {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (sdp_ledger, _) = sdp_ledger
+            let new_epoch_state =
+                next_epoch_state(epoch.into(), sdp_snapshots.pop_front().unwrap());
+            (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
             last_epoch_state = new_epoch_state;
+            sdp_snapshots.push_back(ledger.clone());
         }
         assert!(
-            sdp_ledger.get_declaration(&declaration_id).is_some(),
+            ledger.get_declaration(&declaration_id).is_some(),
             "declaration must still exist because GC shouldn't remove it until snapshot_finalization + retention_period has passed"
         );
         assert!(
-            !sdp_ledger
+            !ledger
                 .locked_notes()
                 .is_locked_for_service(&declare_op.locked_note_id, &ServiceType::BlendNetwork),
             "the provider's note must be unlocked once withdrawn_epoch is reached"
@@ -907,25 +901,27 @@ mod tests {
             .retention_period;
         let target_epoch = withdrawn_epoch + retention_period + Epoch::new(1);
         for epoch in (withdrawn_epoch.into_inner() + 1)..target_epoch.into_inner() {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (sdp_ledger, _) = sdp_ledger
+            let new_epoch_state =
+                next_epoch_state(epoch.into(), sdp_snapshots.pop_front().unwrap());
+            (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
             last_epoch_state = new_epoch_state;
+            sdp_snapshots.push_back(ledger.clone());
         }
         assert!(
-            sdp_ledger.get_declaration(&declaration_id).is_some(),
+            ledger.get_declaration(&declaration_id).is_some(),
             "declaration must still exist because GC shouldn't remove it until snapshot_finalization + retention_period has passed"
         );
 
         // Move forward one more epoch. Now, `snapshot_finalization + retention_period`
         // has passed. Check that the declaration has been removed.
-        let new_epoch_state = next_epoch_state(target_epoch, last_epoch_state.clone());
-        (sdp_ledger, _) = sdp_ledger
+        let new_epoch_state = next_epoch_state(target_epoch, sdp_snapshots.pop_front().unwrap());
+        (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
         assert!(
-            sdp_ledger.get_declaration(&declaration_id).is_none(),
+            ledger.get_declaration(&declaration_id).is_none(),
             "declaration should have been removed"
         );
     }

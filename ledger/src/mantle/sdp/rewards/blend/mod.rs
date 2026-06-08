@@ -842,7 +842,7 @@ mod tests {
     /// it is too late to accept activity messages for the last epoch and
     /// we cannot verify activity proofs for the skipped epochs.
     #[test]
-    fn test_blend_multi_epoch_jump_transitions_to_without_target() {
+    fn test_blend_multi_epoch_jump() {
         let provider1 = create_provider_id(1);
         let config = create_service_parameters();
         let params = create_blend_rewards_params(864_000, 1);

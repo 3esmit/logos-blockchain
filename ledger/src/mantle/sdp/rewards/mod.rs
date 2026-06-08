@@ -46,11 +46,6 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     /// reward amounts for providers eligible for rewards in this epoch
     /// transition.
     ///
-    /// On multi-epoch jump where `last_epoch_state` is more than one epoch
-    /// behind `next_epoch_state`, the implementation should treat the last
-    /// epoch as the previous epoch, and should accept active messages for
-    /// the last epoch during the new epoch.
-    ///
     /// The internal calculation logic is opaque to the SDP ledger and
     /// determined by the service-specific implementation.
     fn update_epoch(

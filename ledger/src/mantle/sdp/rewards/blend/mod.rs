@@ -266,17 +266,17 @@ mod tests {
         quota::{ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     };
-    use lb_core::{
-        crypto::ZkHash,
-        sdp::{ServiceType, blend},
-    };
+    use lb_core::sdp::{ServiceType, blend};
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
 
     use super::*;
     use crate::mantle::sdp::rewards::{
         Rewards as _,
-        test_utils::{create_epoch_state, create_provider_id, create_service_parameters},
+        test_utils::{
+            create_epoch_state, create_provider_id, create_service_parameters,
+            new_epoch_state_with_same_snapshot,
+        },
     };
 
     fn create_blend_rewards_params(
@@ -305,6 +305,8 @@ mod tests {
         VerifiedProofOfSelection::from_bytes_unchecked([byte; _]).into()
     }
 
+    /// No reward should be calculated after epoch 0, since it is the first
+    /// epoch. The reward for epoch 0 is calculated at epoch transition 1->2.
     #[test]
     fn test_blend_no_reward_calculated_after_epoch0() {
         // Create epoch0 with providers
@@ -312,28 +314,31 @@ mod tests {
         let epoch0 = create_epoch_state(
             &[create_provider_id(1), create_provider_id(2)],
             ServiceType::BlendNetwork,
-            0.into(),
-            Fr::ZERO,
+            0,
+            0,
             &params,
         );
 
         // Create a reward tracker based on epoch0
         let rewards_tracker = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0);
+        assert!(matches!(
+            rewards_tracker,
+            Rewards::WithoutTargetEpoch { .. } // No target epoch yet since epoch 0 is the 1st
+        ));
 
         // Update epoch from 0 to 1
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
-        let (_, rewards) =
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
+        let (rewards_tracker, rewards) =
             rewards_tracker.update_epoch(&epoch0, &epoch1, &create_service_parameters(), &params);
+        assert!(matches!(rewards_tracker, Rewards::WithTargetEpoch { .. }));
 
         // No rewards should be returned yet because epoch0 just ended,
         // and the reward calculation for the epoch0 just began.
         assert_eq!(rewards.len(), 0);
     }
 
+    /// No reward should be returned if no activity proofs for epoch 0
+    /// have been submitted during epoch 1.
     #[test]
     fn test_rewards_with_no_activity_proofs() {
         // Create a reward tracker, and update epoch from 0 to 1.
@@ -342,28 +347,24 @@ mod tests {
         let epoch0 = create_epoch_state(
             &[create_provider_id(1), create_provider_id(2)],
             ServiceType::BlendNetwork,
-            0.into(),
-            Fr::ZERO,
+            0,
+            0,
             &params,
         );
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
         // Update epoch from 1 to 2 without any activity proofs submitted.
-        let epoch2 = EpochState {
-            epoch: 2.into(),
-            nonce: ZkHash::from(2),
-            ..epoch1.clone()
-        };
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
         assert_eq!(rewards.len(), 0);
     }
 
+    // Rewards should be calculated correctly at epoch transition 1->2
+    // based on the activity proofs for epoch 0 during epoch 1.
+    // Providers who submitted a valid activity message must receive rewards,
+    // and providers who didn't submit any message should receive no rewards.
     #[test]
     fn test_rewards_calculation() {
         let provider1 = create_provider_id(1);
@@ -378,15 +379,11 @@ mod tests {
         let epoch0 = create_epoch_state(
             &[provider1, provider2, provider3, provider4],
             ServiceType::BlendNetwork,
-            0.into(),
-            Fr::ZERO,
+            0,
+            0,
             &params,
         );
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .add_income(1000)
             .update_epoch(&epoch0, &epoch1, &config, &params);
@@ -438,11 +435,7 @@ mod tests {
         // provider4 doesn't submit an activity proof.
 
         // Update epoch from 1 to 2.
-        let epoch2 = EpochState {
-            epoch: 2.into(),
-            nonce: ZkHash::from(2),
-            ..epoch1.clone()
-        };
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (_, reward_utxos) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
 
         assert_eq!(reward_utxos.len(), 3); // except provider4
@@ -480,6 +473,7 @@ mod tests {
         assert_eq!(rewards.get(&provider4), None);
     }
 
+    // Any activity message with a duplicate epoch number must be rejected.
     #[test]
     fn test_blend_duplicate_active_messages() {
         let provider1 = create_provider_id(1);
@@ -487,18 +481,8 @@ mod tests {
         // Create a reward tracker, and update epoch from 0 to 1.
         let config = create_service_parameters();
         let params = create_blend_rewards_params(864_000, 1);
-        let epoch0 = create_epoch_state(
-            &[provider1],
-            ServiceType::BlendNetwork,
-            0.into(),
-            Fr::ZERO,
-            &params,
-        );
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
+        let epoch0 = create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0, 0, &params);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
@@ -539,6 +523,8 @@ mod tests {
         );
     }
 
+    /// Any activity message with an epoch number different from the target
+    /// epoch must be rejected.
     #[test]
     fn test_blend_invalid_epoch() {
         let provider1 = create_provider_id(1);
@@ -546,18 +532,8 @@ mod tests {
         // Create a reward tracker, and update epoch from 0 to 1.
         let config = create_service_parameters();
         let params = create_blend_rewards_params(864_000, 1);
-        let epoch0 = create_epoch_state(
-            &[provider1],
-            ServiceType::BlendNetwork,
-            0.into(),
-            Fr::ZERO,
-            &params,
-        );
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
+        let epoch0 = create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0, 0, &params);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
@@ -583,15 +559,46 @@ mod tests {
         );
 
         // No reward should be calculated after epoch 1.
-        let epoch2 = EpochState {
-            epoch: 2.into(),
-            nonce: ZkHash::from(2),
-            ..epoch1.clone()
-        };
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
         assert_eq!(rewards.len(), 0);
     }
 
+    /// An activity message from a provider that is not in the target epoch's
+    /// snapshot must be rejected.
+    #[test]
+    fn test_blend_active_message_from_unknown_provider() {
+        let provider1 = create_provider_id(1);
+        let unknown = create_provider_id(2);
+
+        let config = create_service_parameters();
+        let params = create_blend_rewards_params(864_000, 1);
+        // Only provider1 is in the snapshot.
+        let epoch0 = create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0, 0, &params);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
+        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+            .update_epoch(&epoch0, &epoch1, &config, &params);
+
+        // `unknown` was never declared, so target_epoch_state.providers
+        // does not contain it.
+        let err = rewards_tracker
+            .update_active(
+                unknown,
+                &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+                    epoch: 0.into(),
+                    proof_of_quota: new_proof_of_quota_unchecked(1),
+                    signing_key: new_signing_key(1),
+                    proof_of_selection: new_proof_of_selection_unchecked(1),
+                })),
+                &params,
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::UnknownProvider(_)));
+    }
+
+    // If the SDP snapshot of the target epoch has fewer providers than the
+    // minimum network size, all activity messages for the epoch must be
+    // rejected, and no rewards should be calculated at the next epoch transition.
     #[test]
     fn test_blend_network_too_small() {
         let provider1 = create_provider_id(1);
@@ -600,20 +607,14 @@ mod tests {
         let config = create_service_parameters();
         // Set minimum network size to 2
         let params = create_blend_rewards_params(864_000, 2);
-        let epoch0 = create_epoch_state(
-            &[provider1],
-            ServiceType::BlendNetwork,
-            0.into(),
-            Fr::ZERO,
-            &params,
-        );
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
+        let epoch0 = create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0, 0, &params);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
+        assert!(matches!(
+            rewards_tracker,
+            Rewards::WithoutTargetEpoch { .. }
+        ));
 
         // provider1 submits an activity proof, but it should be rejected
         // since the network is too small.
@@ -632,15 +633,212 @@ mod tests {
         assert_eq!(err, Error::TargetEpochNotSet);
 
         // No reward should be calculated after epoch 1.
-        let epoch2 = EpochState {
-            epoch: 2.into(),
-            nonce: ZkHash::from(2),
-            ..epoch1.clone()
-        };
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
         assert_eq!(rewards.len(), 0);
     }
 
+    /// When the network shrinks below `minimum_network_size` between epochs
+    /// E->E+1, the rewards state transitions from `WithTargetEpoch` to
+    /// `WithoutTargetEpoch`.
+    /// Rewards for epoch E-1 (proven during epoch E) are still
+    /// distributed, but income accumulated during epoch E is forfeited
+    /// because no eligible validator set can be formed for it.
+    #[test]
+    fn test_blend_network_shrinking() {
+        let provider1 = create_provider_id(1);
+        let provider2 = create_provider_id(2);
+
+        let config = create_service_parameters();
+        // minimum_network_size = 2
+        let params = create_blend_rewards_params(864_000, 2);
+
+        // Epoch 0: 2 providers — meets minimum.
+        let epoch0 = create_epoch_state(
+            &[provider1, provider2],
+            ServiceType::BlendNetwork,
+            0,
+            0,
+            &params,
+        );
+
+        // Accumulate income during epoch 0 (funds future target epoch 0).
+        let epoch0_income: Value = 1000;
+        let rewards_tracker =
+            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0).add_income(epoch0_income);
+
+        // Transition 0 → 1 with shrunk snapshot:
+        // - WithoutTargetEpoch → WithTargetEpoch (for epoch 0)
+        let epoch1 = create_epoch_state(
+            &[provider1], // less than minimum network size 2
+            ServiceType::BlendNetwork,
+            1,
+            1,
+            &params,
+        );
+        let (rewards_tracker, rewards) =
+            rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params);
+        assert!(
+            rewards.is_empty(),
+            "first transition should not produce rewards yet"
+        );
+        assert!(matches!(rewards_tracker, Rewards::WithTargetEpoch { .. }));
+
+        // During epoch 1: provider1 submits a proof for target epoch 0,
+        // and additional income accumulates (funds future target epoch 1,
+        // even though it will be forfeited because of minimum network size).
+        let rewards_tracker = rewards_tracker
+            .update_active(
+                provider1,
+                &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+                    epoch: 0.into(),
+                    proof_of_quota: new_proof_of_quota_unchecked(1),
+                    signing_key: new_signing_key(1),
+                    proof_of_selection: new_proof_of_selection_unchecked(1),
+                })),
+                &params,
+            )
+            .unwrap();
+        let epoch1_income: Value = 500;
+        let rewards_tracker = rewards_tracker.add_income(epoch1_income);
+
+        // Transition 1 → 2: WithTargetEpoch → WithoutTargetEpoch
+        // because epoch 1 snapshot has only 1 provider.
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
+        let (rewards_tracker, rewards) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        assert!(matches!(
+            rewards_tracker,
+            Rewards::WithoutTargetEpoch { .. }
+        ));
+
+        // Rewards for epoch0 activities must be distributed.
+        assert_eq!(rewards.len(), 1); // only for provider 1
+        let total_paid: Value = rewards.iter().map(|utxo| utxo.note.value).sum();
+        assert_eq!(total_paid, epoch0_income);
+    }
+
+    /// When the network grows from below minimum size to meeting minimum size
+    /// between epochs E->E+1, the reward tracker should start accepting
+    /// activity messages for epoch E during epoch E+1, and calculate
+    /// rewards at the next epoch transition.
+    #[test]
+    fn test_blend_network_growing() {
+        let provider1 = create_provider_id(1);
+        let provider2 = create_provider_id(2);
+
+        let config = create_service_parameters();
+        // minimum_network_size = 2
+        let params = create_blend_rewards_params(864_000, 2);
+
+        // Epoch 0: 1 provider — less than minimum.
+        let epoch0 = create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0, 0, &params);
+
+        // Create rewards tracker
+        let rewards_tracker = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0);
+
+        // Transition 0 → 1 with grown snapshot:
+        // - WithoutTargetEpoch → WithoutTargetEpoch (for epoch 0)
+        let epoch1 = create_epoch_state(
+            &[provider1, provider2], // meets minimum
+            ServiceType::BlendNetwork,
+            1,
+            1,
+            &params,
+        );
+        let (rewards_tracker, rewards) =
+            rewards_tracker.update_epoch(&epoch0, &epoch1, &config, &params);
+        assert!(
+            rewards.is_empty(),
+            "first transition should not produce rewards yet"
+        );
+        assert!(matches!(
+            rewards_tracker,
+            Rewards::WithoutTargetEpoch { .. }
+        ));
+
+        // Accumulate income during epoch 1 (funds future target epoch 1).
+        let epoch1_income: Value = 1000;
+        let rewards_tracker = rewards_tracker.add_income(epoch1_income);
+
+        // Transition 1 -> 2:
+        // - WithoutTargetEpoch -> WithTargetEpoch (for epoch 1)
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
+        let (rewards_tracker, rewards) =
+            rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
+        assert!(matches!(rewards_tracker, Rewards::WithTargetEpoch { .. }));
+        assert!(
+            rewards.is_empty(),
+            "epoch0 snapshot was smaller than minimum network size"
+        );
+
+        // Provider1 submits an activity message for epoch1 during epoch2.
+        let rewards_tracker = rewards_tracker
+            .update_active(
+                provider1,
+                &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+                    epoch: 1.into(),
+                    proof_of_quota: new_proof_of_quota_unchecked(1),
+                    signing_key: new_signing_key(1),
+                    proof_of_selection: new_proof_of_selection_unchecked(1),
+                })),
+                &params,
+            )
+            .unwrap();
+
+        // Transition 2 -> 3, and reward for provider1 is distributed
+        let epoch3 = new_epoch_state_with_same_snapshot(3, 3, &epoch2);
+        let (_, rewards) = rewards_tracker.update_epoch(&epoch2, &epoch3, &config, &params);
+        assert_eq!(rewards.len(), 1); // only for provider 1
+        let total_paid: Value = rewards.iter().map(|utxo| utxo.note.value).sum();
+        assert_eq!(total_paid, epoch1_income);
+    }
+
+    /// `update_epoch` must panic if `last` and `next` are the same epoch.
+    /// It should be called only when the epoch advances, as defined in the
+    /// [`crate::mantle::sdp::rewards::Rewards`] trait.
+    #[test]
+    #[should_panic(expected = "must be greater than")]
+    fn test_blend_update_epoch_panics_on_same_epoch() {
+        let config = create_service_parameters();
+        let params = create_blend_rewards_params(864_000, 1);
+        let epoch0 = create_epoch_state(
+            &[create_provider_id(1)],
+            ServiceType::BlendNetwork,
+            0,
+            0,
+            &params,
+        );
+        drop(
+            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+                .update_epoch(&epoch0, &epoch0, &config, &params),
+        );
+    }
+
+    /// `update_epoch` must panic if `last` and `next` are the same epoch.
+    /// It should be called only when the epoch advances, as defined in the
+    /// [`crate::mantle::sdp::rewards::Rewards`] trait.
+    #[test]
+    #[should_panic(expected = "must be greater than")]
+    fn test_blend_update_epoch_panics_on_decreasing_epoch() {
+        let config = create_service_parameters();
+        let params = create_blend_rewards_params(864_000, 1);
+        let epoch0 = create_epoch_state(
+            &[create_provider_id(1)],
+            ServiceType::BlendNetwork,
+            0,
+            0,
+            &params,
+        );
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
+        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
+            .update_epoch(&epoch0, &epoch1, &config, &params);
+        // Now try to "go back" from epoch 1 to epoch 0.
+        drop(rewards_tracker.update_epoch(&epoch1, &epoch0, &config, &params));
+    }
+
+    /// Any activity message with a Hamming distance larger than the activity
+    /// threshold must be rejected.
     #[test]
     fn test_blend_proof_distance_larger_than_activity_threshold() {
         let provider1 = create_provider_id(1);
@@ -648,18 +846,8 @@ mod tests {
         // Create a reward tracker, and update epoch from 0 to 1.
         let config = create_service_parameters();
         let params = create_blend_rewards_params(10, 1);
-        let epoch0 = create_epoch_state(
-            &[provider1],
-            ServiceType::BlendNetwork,
-            0.into(),
-            ZkHash::from(9999),
-            &params,
-        );
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
+        let epoch0 = create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0, 0, &params);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
@@ -679,15 +867,12 @@ mod tests {
         assert_eq!(err, Error::HammingDistanceTooLarge);
 
         // No reward should be calculated after epoch 1.
-        let epoch2 = EpochState {
-            epoch: 2.into(),
-            nonce: ZkHash::from(2),
-            ..epoch1.clone()
-        };
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
         assert_eq!(rewards.len(), 0);
     }
 
+    /// Any activity message with invalid PoQ/PoSel must be rejected.
     #[test]
     fn test_blend_invalid_proofs() {
         let provider1 = create_provider_id(1);
@@ -695,18 +880,8 @@ mod tests {
         // Create a reward tracker, and update epoch from 0 to 1.
         let config = create_service_parameters();
         let params = create_blend_rewards_params(1000, 1);
-        let epoch0 = create_epoch_state(
-            &[provider1],
-            ServiceType::BlendNetwork,
-            0.into(),
-            Fr::ZERO,
-            &params,
-        );
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
+        let epoch0 = create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0, 0, &params);
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<AlwaysFailureProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
@@ -726,15 +901,13 @@ mod tests {
         assert_eq!(err, Error::InvalidProof);
 
         // No reward should be calculated after epoch 1.
-        let epoch2 = EpochState {
-            epoch: 2.into(),
-            nonce: ZkHash::from(2),
-            ..epoch1.clone()
-        };
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (_, rewards) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
         assert_eq!(rewards.len(), 0);
     }
 
+    /// Check that the new proof verifier in the reward tracker is created
+    /// at an epoch transition and replaces the old one.
     #[test]
     fn test_blend_proof_verifier_after_epoch_update() {
         // Create a reward tracker, and update epoch from 0 to 1.
@@ -744,16 +917,11 @@ mod tests {
         let epoch0 = create_epoch_state(
             &[provider],
             ServiceType::BlendNetwork,
-            0.into(),
-            // Set 0 to epoch nonce, to make a proof verifier that always fails.
-            Fr::ZERO,
+            0,
+            0, // Set 0 to epoch nonce, to make a proof verifier that always fails.
             &params,
         );
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: Fr::ONE,
-            ..epoch0.clone()
-        };
+        let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
         let (rewards_tracker, _) = Rewards::<ZeroNonceFailureProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params);
 
@@ -774,11 +942,7 @@ mod tests {
         assert_eq!(err, Error::InvalidProof);
 
         // Update epoch from 1 to 2
-        let epoch2 = EpochState {
-            epoch: 2.into(),
-            nonce: ZkHash::from(2),
-            ..epoch1.clone()
-        };
+        let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (rewards_tracker, _) = rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params);
 
         // provider submits an activity proof again, and it should be accepted since the

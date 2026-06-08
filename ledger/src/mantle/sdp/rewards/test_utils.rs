@@ -1,11 +1,11 @@
 use lb_core::{
+    crypto::ZkHash,
     mantle::Note,
     sdp::{
         Declaration, DeclarationId, Locator, MinStake, ProviderId, ServiceParameters, ServiceType,
         locked_notes::LockedNotes,
     },
 };
-use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
@@ -19,8 +19,8 @@ use crate::{
 pub fn create_epoch_state(
     provider_ids: &[ProviderId],
     service_type: ServiceType,
-    epoch: Epoch,
-    nonce: Fr,
+    epoch: u32,
+    nonce: i32,
     params: &blend::RewardsParameters,
 ) -> EpochState {
     let mut declarations = rpds::RedBlackTreeMapSync::new_sync();
@@ -54,13 +54,13 @@ pub fn create_epoch_state(
     }
 
     let mut epoch_state = EpochState {
-        epoch,
-        nonce,
+        epoch: epoch.into(),
+        nonce: ZkHash::from(nonce),
         utxos: UtxoTree::default(),
         total_stake: 0,
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
-        sdp: SdpLedger::new(epoch),
+        sdp: SdpLedger::new(epoch.into()),
     };
 
     let ledger = SdpLedger {
@@ -72,10 +72,21 @@ pub fn create_epoch_state(
             }),
         ),
         locked_notes,
-        epoch,
+        epoch: epoch.into(),
     };
 
     epoch_state.sdp = ledger;
+    epoch_state
+}
+
+pub fn new_epoch_state_with_same_snapshot(
+    epoch: u32,
+    nonce: i32,
+    last_epoch_state: &EpochState,
+) -> EpochState {
+    let mut epoch_state = last_epoch_state.clone();
+    epoch_state.epoch = epoch.into();
+    epoch_state.nonce = ZkHash::from(nonce);
     epoch_state
 }
 

@@ -91,7 +91,7 @@ async fn sdp_blend_activity() {
         "At least one blend declaration should survive past the inactivity window. Activity proofs may not have been submitted/accepted"
     );
 
-    // Check that the survived declarations have the refreshed `active` epoch number.
+    // Check that the survived declarations have the refreshed `active` epoch.
     for (provider_id, declaration) in declarations_after {
         let old_active = declarations.get(&provider_id).unwrap().active;
         let new_active = declaration.active;

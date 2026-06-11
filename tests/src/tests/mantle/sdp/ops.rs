@@ -61,10 +61,6 @@ const LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
     clippy::large_futures,
     reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
 )]
-#[expect(
-    clippy::too_many_lines,
-    reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
-)]
 async fn sdp_ops_e2e() {
     let (
         _cluster,
@@ -94,66 +90,35 @@ async fn sdp_ops_e2e() {
 
     let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let provider_zk_key = ZkKey::from(BigUint::from(7u64));
-    let zk_id = provider_zk_key.to_public_key();
-    let locator: Locator = "/ip4/127.0.0.1/tcp/9100"
-        .parse()
-        .expect("Valid locator multiaddr");
-
     let declaration = DeclarationMessage {
         service_type: ServiceType::BlendNetwork,
-        locators: locator.into(),
+        locators: "/ip4/127.0.0.1/tcp/9100"
+            .parse::<Locator>()
+            .expect("Valid locator multiaddr")
+            .into(),
         provider_id: lb_core::sdp::ProviderId::try_from(
             provider_signing_key.public_key().to_bytes(),
         )
         .expect("provider signing key should yield a provider id"),
-        zk_id,
+        zk_id: provider_zk_key.to_public_key(),
         locked_note_id,
     };
     let declaration_id = declaration.id();
 
-    let (declare_mantle_tx, declare_signing_keys) = fund_sdp_transaction(
+    let declare_hash = submit_sdp_declare(
         &node0,
         &genesis_utxos,
         &funding_wallet,
-        Op::SDPDeclare(declaration),
+        &provider_signing_key,
+        &provider_zk_key,
+        &spare_note_secret_key,
+        declaration,
     )
     .await;
-    let declare_hash = declare_mantle_tx.hash();
-    let declare_ed25519_sig = Ed25519Signature::from_bytes(
-        &provider_signing_key
-            .sign_payload(declare_hash.as_signing_bytes().as_ref())
-            .to_bytes(),
+    assert!(
+        wait_for_transactions_inclusion(&node0, &[declare_hash], inclusion_timeout).await,
+        "declare transaction should be included"
     );
-    let declare_zk_sig = ZkKey::multi_sign(
-        &[spare_note_secret_key.clone(), provider_zk_key.clone()],
-        &declare_hash.to_fr(),
-    )
-    .expect("SDP declare zk proof should build");
-    let declare_transfer_proof = OpProof::ZkSig(
-        ZkKey::multi_sign(&declare_signing_keys, &declare_hash.to_fr())
-            .expect("transfer proof should build"),
-    );
-    let declare_tx = SignedMantleTx::new(
-        declare_mantle_tx,
-        vec![
-            OpProof::ZkAndEd25519Sigs {
-                zk_sig: declare_zk_sig,
-                ed25519_sig: declare_ed25519_sig,
-            },
-            declare_transfer_proof,
-        ],
-    )
-    .expect("funded SDP declare transaction should be valid");
-
-    node0
-        .submit_transaction(&declare_tx)
-        .await
-        .expect("submit declare transaction");
-
-    let declare_included =
-        wait_for_transactions_inclusion(&node0, &[declare_hash], inclusion_timeout).await;
-
-    assert!(declare_included, "declare transaction should be included");
 
     let declaration_state = wait_for_declaration(&node0, state_timeout, {
         let target_locked_note = locked_note_id;
@@ -365,34 +330,84 @@ async fn start_sdp_manual_cluster(
     u64,
     Duration,
 ) {
+    let spare_wallet =
+        WalletAccount::deterministic(1, 100, false).expect("spare locked-note wallet should build");
+    let (
+        cluster_harness,
+        node0_name,
+        node0_client,
+        genesis_utxos,
+        funding_wallet,
+        slots,
+        slot_duration,
+    ) = start_sdp_cluster(test_name, std::slice::from_ref(&spare_wallet)).await;
+    let spare_note_id = note_id_for(&genesis_utxos, &spare_wallet);
+    (
+        cluster_harness,
+        node0_name,
+        node0_client,
+        genesis_utxos,
+        funding_wallet,
+        spare_wallet.secret_key,
+        spare_note_id,
+        LOCK_PERIOD,
+        slots,
+        slot_duration,
+    )
+}
+
+/// Find the genesis note id owned by `wallet`.
+fn note_id_for(genesis_utxos: &[Utxo], wallet: &WalletAccount) -> NoteId {
+    genesis_utxos
+        .iter()
+        .find(|utxo| utxo.note.pk == wallet.public_key())
+        .expect("wallet-backed note should exist at genesis")
+        .id()
+}
+
+/// Start a single-node SDP manual cluster seeded with a funding wallet plus the
+/// given `spare_wallets` (each backing one lockable genesis note). Returns the
+/// harness, node-0 name/client, genesis UTXOs, the funding wallet, and the
+/// epoch timing (`slots_per_epoch`, `slot_duration`).
+#[expect(
+    clippy::large_futures,
+    reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
+)]
+async fn start_sdp_cluster(
+    test_name: &str,
+    spare_wallets: &[WalletAccount],
+) -> (
+    LocalManualClusterHarnessBase,
+    String,
+    NodeHttpClient,
+    Vec<Utxo>,
+    WalletAccount,
+    u64,
+    Duration,
+) {
     let slots_per_epoch = Arc::new(AtomicU64::new(0));
     let slot_duration = Arc::new(Mutex::new(Duration::ZERO));
     let funding_wallet =
         WalletAccount::deterministic(0, 2_000_000, false).expect("funding wallet should build");
 
-    let spare_wallet =
-        WalletAccount::deterministic(1, 100, false).expect("spare locked-note wallet should build");
+    let mut wallets = vec![funding_wallet.clone()];
+    wallets.extend(spare_wallets.iter().cloned());
 
     let cluster_harness = build_local_manual_cluster(
         test_name,
         "tf-sdp",
         DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(1))
-            .with_wallet_config(WalletConfig::new(vec![
-                funding_wallet.clone(),
-                spare_wallet.clone(),
-            ]))
+            .with_wallet_config(WalletConfig::new(wallets))
             .with_test_context(test_name),
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     );
-
-    let node0_persist_dir = cluster_harness.scenario_base_dir().join("node-0");
 
     let node0 = cluster_harness
         .cluster()
         .start_node_with(
             "0",
             StartNodeOptions::default()
-                .with_persist_dir(node0_persist_dir)
+                .with_persist_dir(cluster_harness.scenario_base_dir().join("node-0"))
                 .create_patch({
                     let slots_per_epoch = Arc::clone(&slots_per_epoch);
                     let slot_duration = Arc::clone(&slot_duration);
@@ -420,46 +435,25 @@ async fn start_sdp_manual_cluster(
         .await
         .expect("node-0 should produce the first block");
 
-    let genesis_utxos: Vec<_> = cluster_harness
+    let genesis_block = cluster_harness
         .deployment()
         .config
         .genesis_block
         .clone()
-        .expect("manual-cluster deployment should include genesis tx")
-        .genesis_tx()
+        .expect("manual-cluster deployment should include genesis tx");
+    let genesis_tx = genesis_block.genesis_tx();
+    let genesis_utxos: Vec<_> = genesis_tx
         .genesis_transfer()
         .outputs
-        .utxos(
-            cluster_harness
-                .deployment()
-                .config
-                .genesis_block
-                .as_ref()
-                .expect("manual-cluster deployment should include genesis tx")
-                .genesis_tx()
-                .genesis_transfer(),
-        )
+        .utxos(genesis_tx.genesis_transfer())
         .collect();
-
-    let spare_note_id = genesis_utxos
-        .iter()
-        .copied()
-        .find(|utxo| utxo.note.pk == spare_wallet.public_key())
-        .expect("wallet-backed spare note should exist at genesis")
-        .id();
-
-    let node0_name = node0.name;
-    let node0_client = node0.client;
 
     (
         cluster_harness,
-        node0_name,
-        node0_client,
+        node0.name,
+        node0.client,
         genesis_utxos,
         funding_wallet,
-        spare_wallet.secret_key,
-        spare_note_id,
-        LOCK_PERIOD,
         slots_per_epoch.load(Ordering::Relaxed),
         *slot_duration.lock().unwrap(),
     )
@@ -548,4 +542,179 @@ async fn fund_sdp_transaction(
             .expect("funded mixed-op builder should build"),
         signing_keys,
     )
+}
+
+/// AUDIT Finding 1 (High) — E2E REGRESSION TEST (fails until fixed): a Blend
+/// node must survive an SDP snapshot that contains two declarations sharing a
+/// `zk_id`.
+///
+/// Submits two SDP `Declare`s that share the same `zk_id` but differ in their
+/// locators and locked notes (so distinct `DeclarationId`s — both spec-valid:
+/// the SDP spec only requires `declaration_id` uniqueness, and the blend spec
+/// models core membership as a *set*). Today, once both sit in the SDP
+/// membership snapshot, `membership_info_from_epoch_state` builds the
+/// core-membership Merkle tree over the colliding `zk_ids` and `.expect()`s
+/// `MerkleTree::new_from_ordered(..) == Err(DuplicateKey)`; the panic hook
+/// (`log_and_exit_hook`) logs the payload and `std::process::exit(1)`s, so the
+/// node stops producing blocks.
+///
+/// This asserts the desired post-fix behavior — the node keeps producing
+/// blocks and never logs the Merkle panic — so it FAILS today and passes once
+/// `membership_info_from_epoch_state` dedupes duplicate `zk_ids` before
+/// building the tree.
+#[tokio::test]
+#[expect(
+    clippy::large_futures,
+    reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
+)]
+async fn blend_survives_duplicate_zk_id_declarations_e2e() {
+    let spare1 = WalletAccount::deterministic(1, 100, false)
+        .expect("spare locked-note wallet 1 should build");
+    let spare2 = WalletAccount::deterministic(2, 100, false)
+        .expect("spare locked-note wallet 2 should build");
+    let (
+        cluster_harness,
+        node0_name,
+        node0,
+        genesis_utxos,
+        funding_wallet,
+        slots_per_epoch,
+        slot_duration,
+    ) = start_sdp_cluster("dup-zkid-blend-panic", &[spare1.clone(), spare2.clone()]).await;
+    let spare1_note_id = note_id_for(&genesis_utxos, &spare1);
+    let spare2_note_id = note_id_for(&genesis_utxos, &spare2);
+
+    // One operator's keys, reused by BOTH declarations.
+    let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
+    let provider_zk_key = ZkKey::from(BigUint::from(7u64));
+    let zk_id = provider_zk_key.to_public_key();
+    let provider_id =
+        lb_core::sdp::ProviderId::try_from(provider_signing_key.public_key().to_bytes())
+            .expect("provider signing key should yield a provider id");
+
+    // Two declarations: SAME zk_id + provider_id, DIFFERENT locators + notes
+    // (so distinct DeclarationIds).
+    let declaration = |locator: &str, locked_note_id| DeclarationMessage {
+        service_type: ServiceType::BlendNetwork,
+        locators: locator.parse::<Locator>().expect("valid locator").into(),
+        provider_id,
+        zk_id,
+        locked_note_id,
+    };
+    let declaration_a = declaration("/ip4/127.0.0.1/tcp/9101", spare1_note_id);
+    let declaration_b = declaration("/ip4/127.0.0.1/tcp/9102", spare2_note_id);
+    assert_ne!(declaration_a.id(), declaration_b.id());
+
+    // Submit + include sequentially so the funding source for the second tx
+    // reflects the first tx's spend (no double-spend of the funding note).
+    // Inclusion implies the declaration was applied to SDP ledger state.
+    for (declaration, spare_secret_key, label) in [
+        (declaration_a, &spare1.secret_key, "first"),
+        (
+            declaration_b,
+            &spare2.secret_key,
+            "second (duplicate zk_id)",
+        ),
+    ] {
+        let hash = submit_sdp_declare(
+            &node0,
+            &genesis_utxos,
+            &funding_wallet,
+            &provider_signing_key,
+            &provider_zk_key,
+            spare_secret_key,
+            declaration,
+        )
+        .await;
+        assert!(
+            wait_for_transactions_inclusion(&node0, &[hash], Duration::from_mins(1)).await,
+            "{label} declare should be included"
+        );
+    }
+
+    let height_before = node0
+        .consensus_info()
+        .await
+        .expect("node should still be healthy before the epoch boundary")
+        .cryptarchia_info
+        .height;
+
+    // Wait across several epoch boundaries so a frozen SDP snapshot containing
+    // BOTH declarations feeds the per-epoch membership build.
+    let epoch_wall_time = u32::try_from(slots_per_epoch).unwrap() * slot_duration;
+    sleep(epoch_wall_time * 5).await;
+
+    // Desired (post-fix) behavior: the Blend membership build dedupes the
+    // duplicate zk_ids instead of `.expect()`-panicking, so the node keeps
+    // producing blocks across the epoch boundary. Fails today: the node panics
+    // in the membership build and exits, so it never reaches this height.
+    let advanced =
+        wait_for_manual_cluster_height(&node0, height_before + 3, Duration::from_secs(30)).await;
+    assert!(
+        advanced.is_ok(),
+        "node must keep producing blocks across the epoch boundary with \
+         duplicate zk_ids on chain (it must not panic in the membership build); \
+         height stuck near {height_before}"
+    );
+
+    // And it must not have logged the membership Merkle-tree panic.
+    let logs = read_manual_node_logs(cluster_harness.scenario_base_dir(), &node0_name);
+    assert!(
+        !logs.contains("Should not fail to build Merkle tree"),
+        "node must not panic building the membership Merkle tree over duplicate zk_ids"
+    );
+}
+
+/// Build, sign and submit a single SDP `Declare` transaction. Returns the tx
+/// hash. `locked_note_secret_key` is the secret key owning `locked_note_id`.
+async fn submit_sdp_declare(
+    node: &NodeHttpClient,
+    genesis_utxos: &[Utxo],
+    funding_wallet: &WalletAccount,
+    provider_signing_key: &Ed25519Key,
+    provider_zk_key: &ZkKey,
+    locked_note_secret_key: &ZkKey,
+    declaration: DeclarationMessage,
+) -> lb_core::mantle::TxHash {
+    let (mantle_tx, transfer_signing_keys) = fund_sdp_transaction(
+        node,
+        genesis_utxos,
+        funding_wallet,
+        Op::SDPDeclare(declaration),
+    )
+    .await;
+    let hash = mantle_tx.hash();
+
+    let ed25519_sig = Ed25519Signature::from_bytes(
+        &provider_signing_key
+            .sign_payload(hash.as_signing_bytes().as_ref())
+            .to_bytes(),
+    );
+    let zk_sig = ZkKey::multi_sign(
+        &[locked_note_secret_key.clone(), provider_zk_key.clone()],
+        &hash.to_fr(),
+    )
+    .expect("SDP declare zk proof should build");
+    let transfer_proof = OpProof::ZkSig(
+        ZkKey::multi_sign(&transfer_signing_keys, &hash.to_fr())
+            .expect("transfer proof should build"),
+    );
+
+    let tx = SignedMantleTx::new(
+        mantle_tx,
+        vec![
+            OpProof::ZkAndEd25519Sigs {
+                zk_sig,
+                ed25519_sig,
+            },
+            transfer_proof,
+        ],
+    )
+    .expect("funded SDP declare transaction should be valid");
+
+    node.submit_transaction(&tx)
+        .await
+        .expect("submit declare transaction");
+
+    hash
 }

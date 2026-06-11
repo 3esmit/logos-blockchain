@@ -792,6 +792,266 @@ mod tests {
         assert!(!declarations.contains_key(&declaration_id));
     }
 
+    /// AUDIT Finding 1 (High) — REGRESSION TEST (fails until fixed): the
+    /// per-epoch membership build must not panic on an SDP snapshot that
+    /// contains two declarations with the same `zk_id`.
+    ///
+    /// Root cause: `DeclarationId = Hash(service || provider_id || zk_id ||
+    /// locators)` does not bind `zk_id` uniqueness, so two declarations with
+    /// the *same* `zk_id` but *different* locators (hence different
+    /// `DeclarationId`s) can both be on chain. The harm: `membership_info_from
+    /// _epoch_state` feeds their `zk_id`s into
+    /// `sort_nodes_and_build_merkle_tree(..).expect("Should not fail to build
+    /// Merkle tree…")`, which returns `Err(DuplicateKey)` on the collision and
+    /// so panics every Blend node at the epoch boundary (and, once rewards are
+    /// re-enabled, halts consensus inside `try_apply_header`).
+    ///
+    /// This reproduces exactly that build and asserts it succeeds. The fix can
+    /// be either declare-side (reject duplicate `zk_id`) or build-side
+    /// (dedupe/skip) — both make this pass.
+    #[test]
+    fn membership_merkle_build_tolerates_duplicate_zk_ids() {
+        use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
+
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let (_sk_a, utxo_a) = utxo_with_sk();
+        let (_sk_b, utxo_b) = utxo_with_sk();
+
+        // Two declarations sharing the SAME zk_id, differing only in locators
+        // (and locked note) -> distinct DeclarationIds, identical zk_id.
+        let declare_a = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_a.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declare_b = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_b.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        assert_ne!(declare_a.id(), declare_b.id());
+        assert_eq!(declare_a.zk_id, declare_b.zk_id);
+
+        // Exactly what `membership_info_from_epoch_state` does with the snapshot:
+        // build the core-membership Merkle tree keyed by each declaration's
+        // zk_id. Production `.expect()`s this result.
+        let mut zk_ids = vec![declare_a.zk_id.into_inner(), declare_b.zk_id.into_inner()];
+        let result = sort_nodes_and_build_merkle_tree(&mut zk_ids, |zk_id| *zk_id);
+
+        // Desired (post-fix) behavior: the build succeeds (no `DuplicateKey`).
+        // Today it returns `Err(DuplicateKey)` — the value production `.expect()`s
+        // — so this fails, standing in for the network-wide panic.
+        assert!(
+            result.is_ok(),
+            "membership Merkle build must not error (and thus `.expect()`-panic) \
+             on duplicate zk_ids: {:?}",
+            result.err()
+        );
+    }
+
+    /// AUDIT Finding 3 (High, user funds) — REGRESSION TEST (fails until
+    /// fixed): when the inactivity GC removes a declaration it must also unlock
+    /// its note, so the stranded stake stays recoverable. With shipped-style
+    /// parameters (`lock_period=10`, `inactivity=1`, `retention=1`) a provider
+    /// that goes quiet is GC'd long before its lock expires; today the note
+    /// stays locked forever (`LockedNotes` only grows), withdraw is impossible
+    /// (declaration gone) and the note can never be re-declared. This test
+    /// asserts the fixed behavior: after GC the note is unlocked and re-usable.
+    #[test]
+    fn gc_unlocks_note_so_stake_is_recoverable() {
+        let config = setup(ServiceParameters {
+            lock_period: 10.into(),
+            inactivity_period: 1.into(),
+            retention_period: 1.into(),
+            epoch: 0.into(),
+        });
+
+        // Init ledger and advance to epoch 1.
+        let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
+        let mut ledger = epoch0.sdp.clone();
+        let mut last_epoch_state = epoch0.clone();
+        let epoch1 = EpochState {
+            epoch: 1.into(),
+            nonce: ZkHash::from(1),
+            ..epoch0
+        };
+        (ledger, _) = ledger
+            .try_apply_header(&config, &last_epoch_state, &epoch1)
+            .unwrap();
+        last_epoch_state = epoch1;
+
+        // Declare at epoch 1. created=1, active = created + 2 = 3.
+        let (_utxo_sk, utxo) = utxo_with_sk();
+        let note_id = utxo.id();
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let declare_op = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: note_id,
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id = declare_op.id();
+        let mut ledger = apply_declare_with_dummies(
+            &utxo_tree(vec![utxo]),
+            ledger,
+            &declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
+
+        // The note is locked for the service.
+        assert!(ledger.locked_notes().contains(&note_id));
+
+        // Advance epochs. is_active = active(3) + inactivity(1) + retention(1)
+        // >= current, i.e. GC removes the declaration once current >= 6.
+        for epoch in 2..=6 {
+            let new_epoch_state = EpochState {
+                epoch: epoch.into(),
+                nonce: ZkHash::from(epoch),
+                ..last_epoch_state.clone()
+            };
+            (ledger, _) = ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
+        }
+
+        // The declaration has been GC'd...
+        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        assert!(
+            !declarations.contains_key(&declaration_id),
+            "declaration should have been GC'd by epoch 6"
+        );
+
+        // Desired (post-fix) behavior: GC must also unlock the note so the
+        // stake is recoverable. Today GC leaves the note locked, so this
+        // assertion fails.
+        assert!(
+            !ledger.locked_notes().contains(&note_id),
+            "GC must unlock the note when it removes the declaration, \
+             otherwise the locked stake is stranded forever"
+        );
+
+        // And, with the note unlocked, the operator can re-declare it. Today
+        // this is rejected with `NoteAlreadyUsedForService`, so it fails too.
+        let result = apply_declare_with_dummies(
+            &utxo_tree(vec![utxo]),
+            ledger,
+            &declare_op,
+            &zk_key,
+            &config,
+        );
+        assert!(
+            result.is_ok(),
+            "once GC unlocks the note it must be re-declarable"
+        );
+    }
+
+    /// AUDIT Finding 2 (High, consensus hot path): the inactivity GC runs
+    /// unconditionally in `try_apply_header` (i.e. on *every block*), not just
+    /// on epoch boundaries. It rebuilds the whole declarations tree from
+    /// scratch — `self.declarations.iter().filter(..).map(|(id, d)| (*id,
+    /// d.clone())).collect()` — which destroys rpds structural sharing: every
+    /// `Declaration` is cloned into a fresh allocation even on a within-epoch
+    /// block where nothing expires.
+    ///
+    /// REGRESSION TEST (fails until fixed): we apply a header that does NOT
+    /// cross an epoch boundary (`last_epoch_state.epoch() ==
+    /// epoch_state.epoch()`) and assert the surviving `Declaration` lives
+    /// at the SAME heap address afterwards — i.e. the tree was
+    /// clone-shared, not rebuilt. With the recommended fix — gate the GC on
+    /// `last_epoch_state.epoch() < epoch_state.epoch()` — this holds. Today
+    /// the within-epoch block rebuilds the tree (reallocating every
+    /// `Declaration`), so the addresses differ and this assertion fails.
+    #[test]
+    fn gc_preserves_structural_sharing_on_within_epoch_block() {
+        // Long inactivity/retention so nothing is ever eligible for removal:
+        // the rebuild below is pure wasted work.
+        let config = setup(ServiceParameters {
+            lock_period: 10.into(),
+            inactivity_period: 100.into(),
+            retention_period: 100.into(),
+            epoch: 0.into(),
+        });
+
+        // Init ledger and advance to epoch 1.
+        let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
+        let mut ledger = epoch0.sdp.clone();
+        let epoch1 = EpochState {
+            epoch: 1.into(),
+            nonce: ZkHash::from(1),
+            ..epoch0.clone()
+        };
+        (ledger, _) = ledger.try_apply_header(&config, &epoch0, &epoch1).unwrap();
+
+        // Declare at epoch 1.
+        let (_utxo_sk, utxo) = utxo_with_sk();
+        let note_id = utxo.id();
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let declare_op = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: note_id,
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id = declare_op.id();
+        let ledger = apply_declare_with_dummies(
+            &utxo_tree(vec![utxo]),
+            ledger,
+            &declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
+
+        // Address of the Declaration inside the tree before the within-epoch block.
+        let addr_before = std::ptr::from_ref(
+            ledger
+                .get_declarations(ServiceType::BlendNetwork)
+                .unwrap()
+                .get(&declaration_id)
+                .unwrap(),
+        );
+
+        // Apply a header that stays in the SAME epoch (a regular within-epoch
+        // block). Keep the old ledger alive so addresses can't be reused.
+        let within_epoch_block = EpochState {
+            epoch: 1.into(),
+            nonce: ZkHash::from(42),
+            ..epoch1.clone()
+        };
+        let (ledger_after, _) = ledger
+            .try_apply_header(&config, &epoch1, &within_epoch_block)
+            .unwrap();
+
+        // The declaration still exists (nothing expired)...
+        let after = ledger_after
+            .get_declarations(ServiceType::BlendNetwork)
+            .unwrap();
+        assert!(after.contains_key(&declaration_id));
+        let addr_after = std::ptr::from_ref(after.get(&declaration_id).unwrap());
+
+        // Desired (post-fix) behavior: a within-epoch block must NOT rebuild the
+        // tree; structural sharing is preserved so the address is unchanged.
+        // Today the tree is rebuilt unconditionally, so the addresses differ and
+        // this assertion fails.
+        assert_eq!(
+            addr_before, addr_after,
+            "within-epoch block must not rebuild the declarations tree; \
+             GC should be gated on the epoch boundary to preserve sharing"
+        );
+    }
+
     #[test]
     fn test_withdraw_provider() {
         let config = setup(ServiceParameters {

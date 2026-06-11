@@ -401,6 +401,19 @@ mod tests {
 
     use super::*;
 
+    /// AUDIT Finding 6 (latent) — REGRESSION TEST (fails until fixed):
+    /// `Sub<NumberOfEpochs> for Epoch` does an unchecked `self - rhs.0` (which
+    /// bottoms out in cryptarchia-engine's unchecked `Epoch - Epoch`). It
+    /// should saturate to `Epoch(0)`; today computing e.g.
+    /// `current_epoch - lock_period` at an early epoch panics in debug / wraps
+    /// to a far-future epoch in release, so this assertion fails (panics).
+    #[test]
+    fn epoch_minus_number_of_epochs_saturates() {
+        let current = Epoch::new(0);
+        let lock_period = NumberOfEpochs::from(1u32);
+        assert_eq!(current - lock_period, Epoch::new(0));
+    }
+
     #[test]
     fn test_activity_metadata_empty_bytes() {
         let result = ActivityMetadata::from_metadata_bytes(&[]);

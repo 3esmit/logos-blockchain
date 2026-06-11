@@ -161,6 +161,71 @@ mod tests {
         assert_eq!(config.stake_distribution_snapshot(2.into()), 100.into());
     }
 
+    fn epoch_zero_test_config() -> super::Config {
+        let epoch_config = EpochConfig {
+            epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
+            epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
+            epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
+        };
+        let consensus_config = lb_cryptarchia_engine::Config::new(
+            NonZero::new(5).unwrap(),
+            NonNegativeRatio::new(1, 2.try_into().unwrap()),
+            1f64.try_into().expect("1 > 0"),
+        );
+        let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
+        super::Config {
+            epoch_config,
+            consensus_config,
+            sdp_config: crate::mantle::sdp::Config {
+                service_params: Arc::new(
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            lock_period: 10.into(),
+                            inactivity_period: 1.into(),
+                            retention_period: 1.into(),
+                            epoch: 0.into(),
+                        },
+                    )]
+                    .into(),
+                ),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: RewardsParameters {
+                        rounds_per_epoch: epoch_length.try_into().unwrap(),
+                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        num_blend_layers: NonZeroU64::new(3).unwrap(),
+                        minimum_network_size: NonZeroU64::new(1).unwrap(),
+                        data_replication_factor: 0,
+                        activity_threshold_sensitivity: 1,
+                    },
+                },
+                min_stake: MinStake {
+                    threshold: 1,
+                    timestamp: 0,
+                },
+            },
+            faucet_pk: None,
+        }
+    }
+
+    /// AUDIT Finding 5 (latent) — REGRESSION TEST (fails until fixed):
+    /// `stake_distribution_snapshot` does a bare `u32::from(epoch) - 1`, unlike
+    /// its sibling `nonce_snapshot` which uses `saturating_sub(1)`. It must
+    /// handle epoch 0 gracefully (saturating to slot 0). Today it panics in
+    /// debug / wraps to a far-future slot in release, so this assertion fails.
+    #[test]
+    fn stake_distribution_snapshot_saturates_at_epoch_zero() {
+        let config = epoch_zero_test_config();
+        assert_eq!(config.stake_distribution_snapshot(0.into()), 0.into());
+    }
+
+    /// Contrast: the sibling `nonce_snapshot` handles epoch 0 gracefully.
+    #[test]
+    fn nonce_snapshot_is_safe_at_epoch_zero() {
+        let config = epoch_zero_test_config();
+        assert_eq!(config.nonce_snapshot(0.into()), 60.into());
+    }
+
     #[test]
     fn slot_to_epoch() {
         let epoch_config = EpochConfig {

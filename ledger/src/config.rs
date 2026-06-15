@@ -39,18 +39,18 @@ impl Config {
     pub fn nonce_snapshot(&self, epoch: Epoch) -> Slot {
         let offset = self.nonce_contribution_period();
         let base =
-            u64::from(u32::from(epoch).saturating_sub(1)).saturating_mul(self.epoch_length());
-        base.saturating_add(offset).into()
+            u64::from(epoch.strict_sub(1.into()).into_inner()).strict_mul(self.epoch_length());
+        base.strict_add(offset).into()
     }
 
     /// The number of slots in Stake Distribution Snapshot + Buffer phases
     #[must_use]
     pub fn nonce_contribution_period(&self) -> u64 {
-        self.base_period_length().get().saturating_mul(
+        self.base_period_length().get().strict_mul(
             u64::from(NonZeroU64::from(
                 self.epoch_config.epoch_period_nonce_buffer,
             ))
-            .saturating_add(u64::from(NonZeroU64::from(
+            .strict_add(u64::from(NonZeroU64::from(
                 self.epoch_config.epoch_stake_distribution_stabilization,
             ))),
         )
@@ -76,7 +76,7 @@ impl Config {
     /// snapshotted, i.e., the first slot of the previous epoch.
     #[must_use]
     pub fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot {
-        (u64::from(u32::from(epoch) - 1) * self.epoch_length()).into()
+        (u64::from(epoch.strict_sub(1.into()).into_inner()) * self.epoch_length()).into()
     }
 
     #[must_use]
@@ -206,22 +206,18 @@ mod tests {
         }
     }
 
-    /// AUDIT Finding 5 (latent) — REGRESSION TEST (fails until fixed):
-    /// `stake_distribution_snapshot` does a bare `u32::from(epoch) - 1`, unlike
-    /// its sibling `nonce_snapshot` which uses `saturating_sub(1)`. It must
-    /// handle epoch 0 gracefully (saturating to slot 0). Today it panics in
-    /// debug / wraps to a far-future slot in release, so this assertion fails.
     #[test]
-    fn stake_distribution_snapshot_saturates_at_epoch_zero() {
+    #[should_panic(expected = "attempt to subtract with overflow")]
+    fn stake_distribution_snapshot_panics_at_epoch_zero() {
         let config = epoch_zero_test_config();
-        assert_eq!(config.stake_distribution_snapshot(0.into()), 0.into());
+        let _ = config.stake_distribution_snapshot(0.into());
     }
 
-    /// Contrast: the sibling `nonce_snapshot` handles epoch 0 gracefully.
     #[test]
-    fn nonce_snapshot_is_safe_at_epoch_zero() {
+    #[should_panic(expected = "attempt to subtract with overflow")]
+    fn nonce_snapshot_panics_at_epoch_zero() {
         let config = epoch_zero_test_config();
-        assert_eq!(config.nonce_snapshot(0.into()), 60.into());
+        let _ = config.nonce_snapshot(0.into());
     }
 
     #[test]

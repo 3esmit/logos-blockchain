@@ -732,10 +732,18 @@ mod tests {
         }
     }
 
+    fn ptr_declaration(ledger: &SdpLedger, declaration_id: &DeclarationId) -> *const Declaration {
+        std::ptr::from_ref(
+            ledger
+                .get_declaration(declaration_id)
+                .expect("declaration must be present in the ledger"),
+        )
+    }
+
     /// A provider that hasn't submit a new active message during
     /// `inactivity_period + retention_period` epochs must be removed.
     #[test]
-    fn gc_inactive_declaration() {
+    fn gc_inactive_declaration_with_structure_sharing() {
         let config = setup(ServiceParameters {
             // Set inactivity/retention periods very short to check that
             // declaration is NOT removed before an activity message is submitted.
@@ -814,6 +822,7 @@ mod tests {
 
         // Move forward to the epoch 6. The declaration should be still present
         // because the activity message was accepted at epoch 4.
+        let decl_addr_before = ptr_declaration(&ledger, &declaration_id);
         for epoch in 5..=6 {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             (ledger, _) = ledger
@@ -821,19 +830,28 @@ mod tests {
                 .unwrap();
             last_epoch_state = new_epoch_state;
         }
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
-        assert!(declarations.contains_key(&declaration_id));
+        assert_eq!(
+            ptr_declaration(&ledger, &declaration_id),
+            decl_addr_before,
+            "The declaration must be in the same memory location because GC must not rebuild the declaration tree"
+        );
 
         // Before moving to epoch 7 where declaration will be removed,
         // applying another header within the same epoch 6 must be a no-op
         // (GC and unlock are gated to epoch transitions only).
         let ledger_before = ledger.clone();
+        let decl_addr_before = ptr_declaration(&ledger, &declaration_id);
         (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &last_epoch_state)
             .unwrap();
         assert_eq!(
             ledger, ledger_before,
             "within-epoch try_apply_header must not change ledger state"
+        );
+        assert_eq!(
+            ptr_declaration(&ledger, &declaration_id),
+            decl_addr_before,
+            "within-epoch try_apply_header must not rebuild the declaration tree"
         );
 
         // Move forward to epoch 7 where declaration should be removed
@@ -998,102 +1016,6 @@ mod tests {
         assert!(
             result.is_ok(),
             "once GC unlocks the note it must be re-declarable"
-        );
-    }
-
-    /// AUDIT Finding 2 (High, consensus hot path): the inactivity GC runs
-    /// unconditionally in `try_apply_header` (i.e. on *every block*), not just
-    /// on epoch boundaries. It rebuilds the whole declarations tree from
-    /// scratch — `self.declarations.iter().filter(..).map(|(id, d)| (*id,
-    /// d.clone())).collect()` — which destroys rpds structural sharing: every
-    /// `Declaration` is cloned into a fresh allocation even on a within-epoch
-    /// block where nothing expires.
-    ///
-    /// REGRESSION TEST (fails until fixed): we apply a header that does NOT
-    /// cross an epoch boundary (`last_epoch_state.epoch() ==
-    /// epoch_state.epoch()`) and assert the surviving `Declaration` lives
-    /// at the SAME heap address afterwards — i.e. the tree was
-    /// clone-shared, not rebuilt. With the recommended fix — gate the GC on
-    /// `last_epoch_state.epoch() < epoch_state.epoch()` — this holds. Today
-    /// the within-epoch block rebuilds the tree (reallocating every
-    /// `Declaration`), so the addresses differ and this assertion fails.
-    #[test]
-    fn gc_preserves_structural_sharing_on_within_epoch_block() {
-        // Long inactivity/retention so nothing is ever eligible for removal:
-        // the rebuild below is pure wasted work.
-        let config = setup(ServiceParameters {
-            inactivity_period: 100.into(),
-            retention_period: 100.into(),
-            epoch: 0.into(),
-        });
-
-        // Init ledger and advance to epoch 1.
-        let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
-        let mut ledger = epoch0.sdp.clone();
-        let epoch1 = EpochState {
-            epoch: 1.into(),
-            nonce: ZkHash::from(1),
-            ..epoch0.clone()
-        };
-        (ledger, _) = ledger.try_apply_header(&config, &epoch0, &epoch1).unwrap();
-
-        // Declare at epoch 1.
-        let (_utxo_sk, utxo) = utxo_with_sk();
-        let note_id = utxo.id();
-        let signing_key = create_signing_key();
-        let zk_key = create_zk_key(1);
-        let declare_op = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: note_id,
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
-        };
-        let declaration_id = declare_op.id();
-        let ledger = apply_declare_with_dummies(
-            &utxo_tree(vec![utxo]),
-            ledger,
-            &declare_op,
-            &zk_key,
-            &config,
-        )
-        .unwrap();
-
-        // Address of the Declaration inside the tree before the within-epoch block.
-        let addr_before = std::ptr::from_ref(
-            ledger
-                .get_declarations(ServiceType::BlendNetwork)
-                .unwrap()
-                .get(&declaration_id)
-                .unwrap(),
-        );
-
-        // Apply a header that stays in the SAME epoch (a regular within-epoch
-        // block). Keep the old ledger alive so addresses can't be reused.
-        let within_epoch_block = EpochState {
-            epoch: 1.into(),
-            nonce: ZkHash::from(42),
-            ..epoch1.clone()
-        };
-        let (ledger_after, _) = ledger
-            .try_apply_header(&config, &epoch1, &within_epoch_block)
-            .unwrap();
-
-        // The declaration still exists (nothing expired)...
-        let after = ledger_after
-            .get_declarations(ServiceType::BlendNetwork)
-            .unwrap();
-        assert!(after.contains_key(&declaration_id));
-        let addr_after = std::ptr::from_ref(after.get(&declaration_id).unwrap());
-
-        // Desired (post-fix) behavior: a within-epoch block must NOT rebuild the
-        // tree; structural sharing is preserved so the address is unchanged.
-        // Today the tree is rebuilt unconditionally, so the addresses differ and
-        // this assertion fails.
-        assert_eq!(
-            addr_before, addr_after,
-            "within-epoch block must not rebuild the declarations tree; \
-             GC should be gated on the epoch boundary to preserve sharing"
         );
     }
 

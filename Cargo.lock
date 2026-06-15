@@ -5000,6 +5000,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "logos-blockchain-wallet",
@@ -5168,6 +5169,7 @@ name = "logos-blockchain-utils"
 version = "0.1.2"
 dependencies = [
  "async-trait",
+ "bincode",
  "blake2",
  "cipher",
  "const-hex",

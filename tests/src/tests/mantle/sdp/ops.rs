@@ -3,13 +3,14 @@ use std::{
     num::NonZero,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use lb_chain_service::Epoch;
+use lb_common_http_client::Error;
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
@@ -18,7 +19,10 @@ use lb_core::{
         tx::{GasPrices, MantleTxGasContext},
         tx_builder::MantleTxBuilder,
     },
-    sdp::{Declaration, DeclarationMessage, Locator, NumberOfEpochs, ServiceType, WithdrawMessage},
+    sdp::{
+        Declaration, DeclarationMessage, Locator, NumberOfEpochs, ProviderId, ServiceType,
+        WithdrawMessage,
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::{
@@ -34,7 +38,7 @@ use logos_blockchain_tests::{
         chain::wait_for_transactions_inclusion,
         manual_cluster::{
             LocalManualClusterHarnessBase, build_local_manual_cluster, read_manual_node_logs,
-            wait_for_height as wait_for_manual_cluster_height,
+            wait_for_height as wait_for_manual_cluster_height, wait_for_tip_slot,
         },
         wallet::{current_wallet_funding_source, fund_builder_from_wallet_source},
     },
@@ -44,13 +48,13 @@ use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
 
-const LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
+const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 
 /// High-level SDP flow covered by this E2E:
 /// - submit a `Declare` transaction backed by an unused genesis note and wait
 ///   for inclusion;
-/// - advance past the lock period, `Withdraw`, and verify the declaration
-///   disappears.
+/// - submit a `Withdraw` transaction, wait for the finalization delay and the
+///   retention period to pass, and check that the declaration disappears.
 ///
 /// Note: Activity testing requires the blend service to generate real proofs,
 /// which happens automatically for nodes that are declared as blend providers.
@@ -61,6 +65,7 @@ const LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
     clippy::large_futures,
     reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
 )]
+#[expect(clippy::too_many_lines, reason = "covers a long flow")]
 async fn sdp_ops_e2e() {
     let (
         _cluster,
@@ -70,13 +75,10 @@ async fn sdp_ops_e2e() {
         funding_wallet,
         spare_note_secret_key,
         spare_note_id,
-        lock_period,
         slots_per_epoch,
-        slot_duration,
     ) = start_sdp_manual_cluster("sdp-ops").await;
 
     let inclusion_timeout = Duration::from_mins(1);
-    let state_timeout = Duration::from_secs(45);
 
     let existing = wait_for_sdp_declarations(&node0, Duration::from_secs(30))
         .await
@@ -90,17 +92,18 @@ async fn sdp_ops_e2e() {
 
     let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let provider_zk_key = ZkKey::from(BigUint::from(7u64));
+    let provider_id = ProviderId::try_from(provider_signing_key.public_key().to_bytes())
+        .expect("provider signing key should yield a provider id");
+    let zk_id = provider_zk_key.to_public_key();
+    let locator: Locator = "/ip4/127.0.0.1/tcp/9100"
+        .parse()
+        .expect("Valid locator multiaddr");
+
     let declaration = DeclarationMessage {
         service_type: ServiceType::BlendNetwork,
-        locators: "/ip4/127.0.0.1/tcp/9100"
-            .parse::<Locator>()
-            .expect("Valid locator multiaddr")
-            .into(),
-        provider_id: lb_core::sdp::ProviderId::try_from(
-            provider_signing_key.public_key().to_bytes(),
-        )
-        .expect("provider signing key should yield a provider id"),
-        zk_id: provider_zk_key.to_public_key(),
+        locators: locator.into(),
+        provider_id,
+        zk_id,
         locked_note_id,
     };
     let declaration_id = declaration.id();
@@ -120,23 +123,16 @@ async fn sdp_ops_e2e() {
         "declare transaction should be included"
     );
 
-    let declaration_state = wait_for_declaration(&node0, state_timeout, {
-        let target_locked_note = locked_note_id;
-        move |decl| decl.locked_note_id == target_locked_note
-    })
-    .await
-    .expect("declaration should appear after submission");
+    let declaration_created = get_declaration(&node0, &provider_id)
+        .await
+        .expect("API must succeed")
+        .expect("declaration should appear after submission");
 
-    // Wait until we're past the lock period
-    let wait_lock_period = (Epoch::new(1) + lock_period).into_inner() // +1 buffer
-        * u32::try_from(slots_per_epoch).unwrap()
-        * slot_duration;
-    sleep(wait_lock_period).await;
-
+    // Submit an withdraw tx immediately.
     let withdraw_message = WithdrawMessage {
         declaration_id,
         locked_note_id,
-        nonce: declaration_state.nonce + 1,
+        nonce: declaration_created.nonce + 1,
     };
 
     let (withdraw_mantle_tx, withdraw_signing_keys) = fund_sdp_transaction(
@@ -175,8 +171,33 @@ async fn sdp_ops_e2e() {
         "withdraw transaction should be included"
     );
 
-    let removed = wait_for_declaration_absence(&node0, locked_note_id, state_timeout).await;
-    assert!(removed, "withdraw should remove the declaration");
+    let withdraw_epoch = get_declaration(&node0, &provider_id)
+        .await
+        .expect("API must succeed")
+        .expect("declaration must still exist even after withdrawal because GC shouldn't remove it immediately")
+        .withdrawn
+        .expect("withdraw epoch must be set after withdraw tx is accepted");
+
+    // Wait for the snapshot finalization delay and the retention period to pass.
+    wait_for_tip_slot(
+        &node0,
+        (u64::from((withdraw_epoch.strict_add(RETENTION_PERIOD).strict_add(Epoch::new(1))).into_inner())
+            * slots_per_epoch)
+            .into(),
+        Duration::from_mins(3),
+    )
+    .await
+    .expect("timed out to wait until the snapshot finalization delay and the retention period pass after withdraw");
+
+    // Check that the declaration has been removed
+    assert!(
+        !node0
+            .get_sdp_declarations()
+            .await
+            .unwrap()
+            .iter()
+            .any(|declaration| declaration.provider_id == provider_id)
+    );
 }
 
 /// Test that SDP declaration is correctly restored after validator restart.
@@ -245,54 +266,15 @@ async fn sdp_declaration_restoration_e2e() {
     );
 }
 
-async fn wait_for_declaration<F>(
+async fn get_declaration(
     node: &NodeHttpClient,
-    duration: Duration,
-    predicate: F,
-) -> Option<Declaration>
-where
-    F: Fn(&Declaration) -> bool + Send + Sync + 'static,
-{
-    timeout(duration, async {
-        loop {
-            if let Ok(declarations) = node.get_sdp_declarations().await
-                && let Some(declaration) = declarations.into_iter().find(|decl| predicate(decl))
-            {
-                break declaration;
-            }
-
-            sleep(Duration::from_millis(200)).await;
-        }
-    })
-    .await
-    .ok()
-}
-
-async fn wait_for_declaration_absence(
-    node: &NodeHttpClient,
-    locked_note_id: NoteId,
-    duration: Duration,
-) -> bool {
-    timeout(duration, async {
-        loop {
-            let present = node
-                .get_sdp_declarations()
-                .await
-                .map_or(true, |declarations| {
-                    declarations
-                        .into_iter()
-                        .any(|decl| decl.locked_note_id == locked_note_id)
-                });
-
-            if !present {
-                break;
-            }
-
-            sleep(Duration::from_millis(200)).await;
-        }
-    })
-    .await
-    .is_ok()
+    provider_id: &ProviderId,
+) -> Result<Option<Declaration>, Error> {
+    Ok(node
+        .get_sdp_declarations()
+        .await?
+        .into_iter()
+        .find(|declaration| &declaration.provider_id == provider_id))
 }
 
 async fn wait_for_sdp_declarations(
@@ -326,21 +308,12 @@ async fn start_sdp_manual_cluster(
     WalletAccount,
     ZkKey,
     NoteId,
-    NumberOfEpochs,
     u64,
-    Duration,
 ) {
     let spare_wallet =
         WalletAccount::deterministic(1, 100, false).expect("spare locked-note wallet should build");
-    let (
-        cluster_harness,
-        node0_name,
-        node0_client,
-        genesis_utxos,
-        funding_wallet,
-        slots,
-        slot_duration,
-    ) = start_sdp_cluster(test_name, std::slice::from_ref(&spare_wallet)).await;
+    let (cluster_harness, node0_name, node0_client, genesis_utxos, funding_wallet, slots) =
+        start_sdp_cluster(test_name, std::slice::from_ref(&spare_wallet)).await;
     let spare_note_id = note_id_for(&genesis_utxos, &spare_wallet);
     (
         cluster_harness,
@@ -350,9 +323,7 @@ async fn start_sdp_manual_cluster(
         funding_wallet,
         spare_wallet.secret_key,
         spare_note_id,
-        LOCK_PERIOD,
         slots,
-        slot_duration,
     )
 }
 
@@ -365,10 +336,12 @@ fn note_id_for(genesis_utxos: &[Utxo], wallet: &WalletAccount) -> NoteId {
         .id()
 }
 
+const SLOT_DURATION: Duration = Duration::from_secs(1);
+
 /// Start a single-node SDP manual cluster seeded with a funding wallet plus the
 /// given `spare_wallets` (each backing one lockable genesis note). Returns the
 /// harness, node-0 name/client, genesis UTXOs, the funding wallet, and the
-/// epoch timing (`slots_per_epoch`, `slot_duration`).
+/// epoch timing (`slots_per_epoch`, `SLOT_DURATION`).
 #[expect(
     clippy::large_futures,
     reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
@@ -383,10 +356,8 @@ async fn start_sdp_cluster(
     Vec<Utxo>,
     WalletAccount,
     u64,
-    Duration,
 ) {
     let slots_per_epoch = Arc::new(AtomicU64::new(0));
-    let slot_duration = Arc::new(Mutex::new(Duration::ZERO));
     let funding_wallet =
         WalletAccount::deterministic(0, 2_000_000, false).expect("funding wallet should build");
 
@@ -410,14 +381,12 @@ async fn start_sdp_cluster(
                 .with_persist_dir(cluster_harness.scenario_base_dir().join("node-0"))
                 .create_patch({
                     let slots_per_epoch = Arc::clone(&slots_per_epoch);
-                    let slot_duration = Arc::clone(&slot_duration);
                     move |config| {
                         let config = patch_sdp_manual_cluster_config(config);
                         slots_per_epoch.store(
                             config.deployment.cryptarchia.slots_per_epoch(),
                             Ordering::Relaxed,
                         );
-                        *slot_duration.lock().unwrap() = config.deployment.time.slot_duration;
                         Ok::<_, DynError>(config)
                     }
                 }),
@@ -455,12 +424,11 @@ async fn start_sdp_cluster(
         genesis_utxos,
         funding_wallet,
         slots_per_epoch.load(Ordering::Relaxed),
-        *slot_duration.lock().unwrap(),
     )
 }
 
 fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
-    config.deployment.time.slot_duration = Duration::from_secs(1);
+    config.deployment.time.slot_duration = SLOT_DURATION;
     config
         .user
         .cryptarchia
@@ -484,9 +452,8 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
         .service_params
         .get_mut(&ServiceType::BlendNetwork)
         .expect("blend network params should exist");
-    service_params.lock_period = LOCK_PERIOD;
     service_params.inactivity_period = 10.into();
-    service_params.retention_period = 10.into();
+    service_params.retention_period = RETENTION_PERIOD;
 
     config.deployment.blend.common.num_blend_layers = 1.try_into().unwrap();
     config.deployment.blend.common.minimum_network_size = MinimumNetworkSize::try_new(2).unwrap();
@@ -572,15 +539,8 @@ async fn blend_survives_duplicate_zk_id_declarations_e2e() {
         .expect("spare locked-note wallet 1 should build");
     let spare2 = WalletAccount::deterministic(2, 100, false)
         .expect("spare locked-note wallet 2 should build");
-    let (
-        cluster_harness,
-        node0_name,
-        node0,
-        genesis_utxos,
-        funding_wallet,
-        slots_per_epoch,
-        slot_duration,
-    ) = start_sdp_cluster("dup-zkid-blend-panic", &[spare1.clone(), spare2.clone()]).await;
+    let (cluster_harness, node0_name, node0, genesis_utxos, funding_wallet, slots_per_epoch) =
+        start_sdp_cluster("dup-zkid-blend-panic", &[spare1.clone(), spare2.clone()]).await;
     let spare1_note_id = note_id_for(&genesis_utxos, &spare1);
     let spare2_note_id = note_id_for(&genesis_utxos, &spare2);
 
@@ -588,9 +548,8 @@ async fn blend_survives_duplicate_zk_id_declarations_e2e() {
     let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let provider_zk_key = ZkKey::from(BigUint::from(7u64));
     let zk_id = provider_zk_key.to_public_key();
-    let provider_id =
-        lb_core::sdp::ProviderId::try_from(provider_signing_key.public_key().to_bytes())
-            .expect("provider signing key should yield a provider id");
+    let provider_id = ProviderId::try_from(provider_signing_key.public_key().to_bytes())
+        .expect("provider signing key should yield a provider id");
 
     // Two declarations: SAME zk_id + provider_id, DIFFERENT locators + notes
     // (so distinct DeclarationIds).
@@ -641,7 +600,7 @@ async fn blend_survives_duplicate_zk_id_declarations_e2e() {
 
     // Wait across several epoch boundaries so a frozen SDP snapshot containing
     // BOTH declarations feeds the per-epoch membership build.
-    let epoch_wall_time = u32::try_from(slots_per_epoch).unwrap() * slot_duration;
+    let epoch_wall_time = u32::try_from(slots_per_epoch).unwrap() * SLOT_DURATION;
     sleep(epoch_wall_time * 5).await;
 
     // Desired (post-fix) behavior: the Blend membership build dedupes the

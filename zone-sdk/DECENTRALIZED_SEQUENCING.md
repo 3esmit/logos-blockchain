@@ -5,7 +5,7 @@ A user guide for zone developers using the Zone SDK to operate a channel with mu
 
 ## What "decentralized sequencing" means here
 
-A **channel** on Bedrock can be operated by a single sequencer (centralized) or by a committee of accredited sequencers that await their slot windows to publish inscriptions (decentralized). The on-chain rotation is enforced by Bedrock itself: at any block slot, exactly one accredited key is *authorized* to write, derived deterministically from the channel's configuration plus the current slot. Other sequencers' inscriptions in that slot are rejected.
+A **channel** on Logos Blockchain can be operated by a single sequencer (centralized) or by a committee of accredited sequencers that await their slot windows to publish inscriptions (decentralized). The on-chain rotation is enforced by Logos Blockchain itself: at any block slot, exactly one accredited key is *authorized* to write, derived deterministically from the channel's configuration plus the current slot. Other sequencers' inscriptions in that slot are rejected.
 
 Two committees are tracked per channel:
 
@@ -63,20 +63,31 @@ We also have some caveats:
   slots.
 - `posting_timeframe = 0`, `posting_timeout > 0`: cadence is governed by timeout 
   slots.
-- `posting_timeframe = 0`, `posting_timeout  = 0`: no automatic cadence; current 
-  leader (tip_sequencer) stays forever unless external state update changes it.
+- `posting_timeframe = 0`, `posting_timeout = 0`: no rotation at all — only the 
+  first accredited key (`accredited_keys[0]`) is authorized to publish inscriptions, 
+  with no slot window constraints. The configuration must be updated to change this.
 
 **Note:** The Mantle spec is the source of truth for the exact algorithm.
 
-A worked example: a channel with three accredited keys and `posting_timeframe = 2` rotates as
+### Sizing `posting_timeframe` and `posting_timeout`
+
+`posting_timeframe` must be **at least the average slots-per-block** of the host chain. A turn shorter than one block means multiple sequencers can become authorized within the same block (since a block-producing leader picks up whatever the mempool has at proposal time), defeating the purpose of rotation. As a rule of thumb pick a multiple — e.g. with a ~20 slots/block average, use `posting_timeframe = 60` to give each sequencer roughly three blocks of "owned" leadership per turn.
+
+`posting_timeout` should be ≥ `posting_timeframe`. Smaller values dominate the rotation cadence the moment the authorized sequencer goes silent (see the zero/non-zero cases above).
+
+### Worked example
+
+A channel with three accredited keys, `posting_timeframe = 60`, and `posting_timeout = 180` (so a silent sequencer is skipped after three full turn windows of inactivity):
 
 ```
-slots 0–1   → index 0
-slots 2–3   → index 1
-slots 4–5   → index 2
-slots 6–7   → index 0
+slots 0–59     → index 0
+slots 60–119   → index 1
+slots 120–179  → index 2
+slots 180–239  → index 0
 ...
 ```
+
+If index 1's turn elapses without a publish, the on-chain validator advances past it once the `posting_timeout` window is reached, so index 2 becomes authorized without waiting for the full `posting_timeframe` to expire.
 
 The SDK exposes the current rotation state to your sequencer in two forms:
 
@@ -171,10 +182,10 @@ let new_keys = Keys::from(vec![
 
 let (result, checkpoint, signed_tx) = sequencer.handle().channel_config(
     new_keys,
-    SlotTimeframe::from(2),   // 2 slots per turn
-    SlotTimeout::from(10),    // skip after 10 slots of inactivity
-    1,                         // configuration_threshold (still single-admin)
-    1,                         // withdraw_threshold
+    SlotTimeframe::from(60),   // ~3 blocks per turn at 20 slots/block
+    SlotTimeout::from(180),    // skip after 3 turn windows of inactivity
+    1,                          // configuration_threshold (still single-admin)
+    1,                          // withdraw_threshold
 )?;
 ```
 

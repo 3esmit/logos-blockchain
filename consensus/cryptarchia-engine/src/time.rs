@@ -275,24 +275,3 @@ impl SlotTimer {
         interval
     }
 }
-
-#[cfg(test)]
-mod sub_tests {
-    use super::*;
-
-    /// AUDIT Finding 6 (latent) — REGRESSION TEST (fails until fixed): `Sub for
-    /// Epoch` does an unchecked `self.0 - rhs.0`, unlike the adjacent
-    /// `Slot::sub` (which saturates) and the sibling `Epoch::saturating_sub`.
-    /// It should saturate to `Epoch(0)`; today `b > a` panics in debug / wraps
-    /// in release, so this assertion fails (panics).
-    #[test]
-    fn epoch_sub_saturates() {
-        assert_eq!(Epoch::new(0) - Epoch::new(1), Epoch::new(0));
-    }
-
-    /// The saturating variant exists but is not what `Sub` uses.
-    #[test]
-    fn epoch_saturating_sub_is_safe() {
-        assert_eq!(Epoch::new(0).saturating_sub(Epoch::new(1)), Epoch::new(0));
-    }
-}

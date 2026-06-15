@@ -1,11 +1,11 @@
 # Decentralized Sequencing for Channels
 
-A user guide for zone developers using the Zone SDK to operate a channel with multiple sequencers taking turns to publish.
+A user guide for zone developers using the Zone SDK to operate a channel with multiple sequencers, with round-robin style publish slot windows.
 
 
 ## What "decentralized sequencing" means here
 
-A **channel** on Bedrock can be operated by a single sequencer (centralized) or by a committee of accredited sequencers that take turns publishing inscriptions (decentralized). The on-chain rotation is enforced by Bedrock itself: at any block slot, exactly one accredited key is *authorized* to write, derived deterministically from the channel's configuration plus the current slot. Other sequencers' inscriptions in that slot are rejected.
+A **channel** on Bedrock can be operated by a single sequencer (centralized) or by a committee of accredited sequencers that await their slot windows to publish inscriptions (decentralized). The on-chain rotation is enforced by Bedrock itself: at any block slot, exactly one accredited key is *authorized* to write, derived deterministically from the channel's configuration plus the current slot. Other sequencers' inscriptions in that slot are rejected.
 
 Two committees are tracked per channel:
 
@@ -41,7 +41,32 @@ These fields are read by the on-chain `round_robin(slot)` function to compute wh
 
 The Zone SDK currently supports **round-robin** as the rotation scheme. Other scheduling mechanisms (e.g., First-Write-Wins) may be added later; for now, every decentralized channel rotates round-robin.
 
-Round-robin assigns turns in order through the `accredited_keys` list. Each sequencer holds its turn for `posting_timeframe` slots before rotation advances to the next index, wrapping back to 0 after the last sequencer. If the authorized sequencer fails to publish for `posting_timeout` slots, the on-chain validator advances rotation past it so the channel does not stall on an inactive participant. The Mantle spec is the source of truth for the exact algorithm.
+Round-robin assigns turns in order through the `accredited_keys` list. In a _normal_ 
+setup, each sequencer holds its turn for `posting_timeframe` slots before rotation 
+advances to the next index, wrapping back to 0 after the last sequencer. 
+
+A busy channel will have cadence (turn-to-write rotation) every `posting_timeframe` 
+slots. With silence, the current turn-to-write can be extended up to `posting_timeout` slots, 
+after which the cadence will change to `posting_timeout` slots, until some sequencer 
+publish in turn, then cadence will be reset to `posting_timeframe` slots again.
+
+We also have some caveats: 
+**Non-zero cases**
+- `posting_timeout > posting_timeframe`: as discussed above - cadence is governed 
+   by timeframe only until first timeout threshold is reached; after that, timeout 
+   branch has priority, so effective cadence is governed by timeout windows (until a 
+   write resets baseline).
+- `0 < posting_timeout < posting_timeframe`: cadence is governed by timeout slots 
+  (timeout branch dominates as soon as it can fire).
+**Zero cases**
+- `posting_timeframe > 0`, `posting_timeout = 0`: cadence is governed by timeframe 
+  slots.
+- `posting_timeframe = 0`, `posting_timeout > 0`: cadence is governed by timeout 
+  slots.
+- `posting_timeframe = 0`, `posting_timeout  = 0`: no automatic cadence; current 
+  leader (tip_sequencer) stays forever unless external state update changes it.
+
+**Note:** The Mantle spec is the source of truth for the exact algorithm.
 
 A worked example: a channel with three accredited keys and `posting_timeframe = 2` rotates as
 
@@ -133,7 +158,7 @@ The committee is changed by submitting a `ChannelConfig` op — same primitive u
 
 ### Single-admin: `configuration_threshold == 1`
 
-The current sole admin can rotate in / out other sequencers, set the rotation parameters, and adjust thresholds in one call:
+Currently only the signing key at the first index (`keys[0]`) - the channel administrator key - is authorized (hard-coded) to change the channel configuration. The `ChannelConfigOp` operation overwrites the entire key list - include the admin key at the first index again if it should remain authorized as the channel administrator key.
 
 ```rust
 use lb_core::mantle::channel::{Keys, SlotTimeframe, SlotTimeout};
@@ -174,7 +199,7 @@ let own_key_index = view.own_key_index.ok_or("not an accredited key")?;
 
 // 2. Build the unsigned config tx and get this sequencer's own signature.
 let config = ChannelConfigOp {
-    channel_id,
+    channel,
     keys: new_keys,
     posting_timeframe,
     posting_timeout,
@@ -207,7 +232,7 @@ let (result, checkpoint) = sequencer
     .submit_signed_tx(signed_tx, msg_id)?;
 ```
 
-The multi-admin flow is not currently exercised by integration tests; treat it as the reference path until SDK support lands.
+The multi-admin flow is not currently exercised by integration tests (see `tests/cucumber_tests/features/zone.feature` in the repo); treat it as the reference path until SDK support lands.
 
 
 ## Competing writes and republish

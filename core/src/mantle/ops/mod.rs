@@ -11,6 +11,7 @@ use std::sync::LazyLock;
 
 use channel::{
     config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+    lottery_config::ChannelLotteryConfigOp, stake::ChannelStakeOp, unstake::ChannelUnstakeOp,
     withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -64,6 +65,9 @@ const CHANNEL_CONFIG: u8 = 0x10;
 const INSCRIBE: u8 = 0x11;
 const CHANNEL_DEPOSIT: u8 = 0x12;
 const CHANNEL_WITHDRAW: u8 = 0x13;
+const CHANNEL_STAKE: u8 = 0x14;
+const CHANNEL_UNSTAKE: u8 = 0x15;
+const CHANNEL_LOTTERY_CONFIG: u8 = 0x16;
 const SDP_DECLARE: u8 = 0x20;
 const SDP_WITHDRAW: u8 = 0x21;
 const SDP_ACTIVE: u8 = 0x22;
@@ -84,6 +88,9 @@ pub enum Op {
     ChannelConfig(ChannelConfigOp),
     ChannelDeposit(DepositOp),
     ChannelWithdraw(ChannelWithdrawOp),
+    ChannelStake(ChannelStakeOp),
+    ChannelUnstake(ChannelUnstakeOp),
+    ChannelLotteryConfig(ChannelLotteryConfigOp),
     SDPDeclare(SDPDeclareOp),
     SDPWithdraw(SDPWithdrawOp),
     SDPActive(SDPActiveOp),
@@ -146,6 +153,15 @@ impl NomEncode for Op {
             Self::ChannelWithdraw(op) => {
                 bytes.extend(op.encode());
             }
+            Self::ChannelStake(op) => {
+                bytes.extend(op.encode());
+            }
+            Self::ChannelUnstake(op) => {
+                bytes.extend(op.encode());
+            }
+            Self::ChannelLotteryConfig(op) => {
+                bytes.extend(op.encode());
+            }
             // TODO: Use `.encode()` once implemented for all other ops
             Self::SDPDeclare(op) => {
                 bytes.extend(encode_sdp_declare(op));
@@ -178,6 +194,11 @@ impl NomDecode for Op {
             CHANNEL_CONFIG => map(ChannelConfigOp::decode, Self::ChannelConfig).parse(input),
             CHANNEL_DEPOSIT => map(DepositOp::decode, Self::ChannelDeposit).parse(input),
             CHANNEL_WITHDRAW => map(ChannelWithdrawOp::decode, Self::ChannelWithdraw).parse(input),
+            CHANNEL_STAKE => map(ChannelStakeOp::decode, Self::ChannelStake).parse(input),
+            CHANNEL_UNSTAKE => map(ChannelUnstakeOp::decode, Self::ChannelUnstake).parse(input),
+            CHANNEL_LOTTERY_CONFIG => {
+                map(ChannelLotteryConfigOp::decode, Self::ChannelLotteryConfig).parse(input)
+            }
             // TODO: Use `.decode()` once implemented for all other ops
             SDP_DECLARE => map(decode_sdp_declare, Self::SDPDeclare).parse(input),
             SDP_WITHDRAW => map(decode_sdp_withdraw, Self::SDPWithdraw).parse(input),
@@ -197,6 +218,9 @@ impl Op {
             Self::ChannelConfig(_) => "ChannelConfig",
             Self::ChannelDeposit(_) => "ChannelDeposit",
             Self::ChannelWithdraw(_) => "ChannelWithdraw",
+            Self::ChannelStake(_) => "ChannelStake",
+            Self::ChannelUnstake(_) => "ChannelUnstake",
+            Self::ChannelLotteryConfig(_) => "ChannelLotteryConfig",
             Self::SDPDeclare(_) => "SDPDeclare",
             Self::SDPWithdraw(_) => "SDPWithdraw",
             Self::SDPActive(_) => "SDPActive",
@@ -212,6 +236,9 @@ impl Op {
             Self::ChannelConfig(_) => Constants::CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => Constants::CHANNEL_DEPOSIT,
             Self::ChannelWithdraw(_) => Constants::CHANNEL_WITHDRAW,
+            Self::ChannelStake(_) => Constants::CHANNEL_STAKE,
+            Self::ChannelUnstake(_) => Constants::CHANNEL_UNSTAKE,
+            Self::ChannelLotteryConfig(_) => Constants::CHANNEL_LOTTERY_CONFIG,
             Self::SDPDeclare(_) => Constants::SDP_DECLARE,
             Self::SDPWithdraw(_) => Constants::SDP_WITHDRAW,
             Self::SDPActive(_) => Constants::SDP_ACTIVE,
@@ -226,6 +253,9 @@ impl Op {
             Self::ChannelConfig(_) => CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
             Self::ChannelWithdraw(_) => CHANNEL_WITHDRAW,
+            Self::ChannelStake(_) => CHANNEL_STAKE,
+            Self::ChannelUnstake(_) => CHANNEL_UNSTAKE,
+            Self::ChannelLotteryConfig(_) => CHANNEL_LOTTERY_CONFIG,
             Self::SDPDeclare(_) => SDP_DECLARE,
             Self::SDPWithdraw(_) => SDP_WITHDRAW,
             Self::SDPActive(_) => SDP_ACTIVE,
@@ -245,4 +275,12 @@ pub enum OpProof {
     },
     PoC(Groth16LeaderClaimProof),
     ChannelMultiSigProof(ChannelMultiSigProof),
+    /// Proof for an inscription on a lottery channel (Variant A, transparent):
+    /// names the staked note claiming the win, plus the posting key's signature
+    /// over the tx hash. The win itself is checked by re-deriving the public
+    /// ticket in [`crate::mantle::channel::ChannelState::lottery_wins`].
+    LotteryWin {
+        note_id: crate::mantle::NoteId,
+        sig: Ed25519Signature,
+    },
 }

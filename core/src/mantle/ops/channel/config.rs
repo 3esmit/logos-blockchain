@@ -169,6 +169,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
                     withdraw_threshold: self.withdraw_threshold,
                     withdrawal_nonce: 0,
                     posting_timeout: self.posting_timeout.clone(),
+                    lottery: None,
                 },
             );
         }

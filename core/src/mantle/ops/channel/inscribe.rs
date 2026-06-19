@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded_vec::UpperBoundedVec;
 use nom::IResult;
@@ -12,7 +13,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::Events,
     mantle::{
-        TxHash,
+        NoteId, TxHash,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
         nom::{NomBoundedVec, NomDecode, NomEncode},
@@ -80,6 +81,12 @@ pub struct InscriptionValidationContext<'a> {
     pub tx_hash: &'a TxHash,
     pub inscribe_sig: &'a Ed25519Signature,
     pub block_slot: Slot,
+    /// `(epoch, epoch_nonce)` — the frozen Cryptarchia epoch randomness of the
+    /// including block. Only consulted for lottery channels.
+    pub beacon: (Epoch, Fr),
+    /// For lottery channels: the staked note claiming the win, carried in
+    /// [`crate::mantle::ops::OpProof::LotteryWin`]. `None` for round-robin.
+    pub lottery_note_id: Option<NoteId>,
 }
 
 pub struct InscriptionExecutionContext {
@@ -107,8 +114,22 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 });
             }
 
-            // Check that the signer is the authorized one
-            if self.signer
+            // Check that the signer is the authorized one. This is the single
+            // permissioned/permissionless gate: round-robin channels check the
+            // signer against the scheduled accredited key; lottery channels
+            // check that the named staked note won the slot (design doc §3.5).
+            if channel.lottery.is_some() {
+                let note_id = ctx.lottery_note_id.ok_or(Error::MissingLotteryProof {
+                    channel_id: self.channel_id,
+                })?;
+                channel.lottery_wins(
+                    &self.channel_id,
+                    &note_id,
+                    &self.signer,
+                    ctx.block_slot,
+                    &ctx.beacon,
+                )?;
+            } else if self.signer
                 != channel.accredited_keys[channel.round_robin(ctx.block_slot).0 as usize]
             {
                 return Err(Error::UnauthorizedSigner {
@@ -125,12 +146,22 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             });
         }
 
-        // Check the signature
-        if self
-            .signer
-            .verify(ctx.tx_hash.as_signing_bytes().as_ref(), ctx.inscribe_sig)
-            .is_err()
-        {
+        // Check the signature. For lottery channels the won note id travels in
+        // the proof (outside the signed tx hash), so it is appended to the
+        // signed message here — otherwise a relayer could swap in a different
+        // note staked under the same posting key without invalidating the
+        // signature. This also makes a `LotteryWin` proof fail on a round-robin
+        // channel (and vice-versa), since the two sign different messages.
+        let signing_bytes = ctx.tx_hash.as_signing_bytes();
+        let verified = ctx.lottery_note_id.map_or_else(
+            || self.signer.verify(signing_bytes.as_ref(), ctx.inscribe_sig),
+            |note_id| {
+                let mut msg = signing_bytes.as_ref().to_vec();
+                msg.extend(note_id.encode());
+                self.signer.verify(&msg, ctx.inscribe_sig)
+            },
+        );
+        if verified.is_err() {
             return Err(Error::InvalidSignature);
         }
 
@@ -159,13 +190,22 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 withdraw_threshold: crate::mantle::channel::DEFAULT_WITHDRAW_THRESHOLD,
                 withdrawal_nonce: 0,
                 posting_timeout: 0.into(),
+                // A channel is born permissioned; it flips to lottery mode via
+                // CHANNEL_CONFIG (design doc §2.2).
+                lottery: None,
             });
 
-        // Update the channel sequencer, its starting slot, the tip message and the tip
-        // slot
-        let (new_sequencer, new_starting_slot) = channel.round_robin(ctx.block_slot);
-        ctx.channels.channels = ctx.channels.channels.insert(
-            self.channel_id,
+        // Advance the tip. Lottery channels have no sequencer cursor to rotate,
+        // so only the hash chain (tip_message) and tip_slot move; round-robin
+        // channels also advance the sequencer position.
+        let updated = if channel.lottery.is_some() {
+            ChannelState {
+                tip_message: self.id(),
+                tip_slot: ctx.block_slot,
+                ..channel
+            }
+        } else {
+            let (new_sequencer, new_starting_slot) = channel.round_robin(ctx.block_slot);
             ChannelState {
                 tip_message: self.id(),
                 accredited_keys: Arc::clone(&channel.accredited_keys),
@@ -173,8 +213,9 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 tip_sequencer_starting_slot: new_starting_slot,
                 tip_slot: ctx.block_slot,
                 ..channel
-            },
-        );
+            }
+        };
+        ctx.channels.channels = ctx.channels.channels.insert(self.channel_id, updated);
         Ok((ctx, Events::new()))
     }
 }

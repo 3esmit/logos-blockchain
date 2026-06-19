@@ -567,11 +567,36 @@ impl LedgerState {
                 // as you only need the signer's public key and tx hash
                 // Callers are expected to validate the proof before calling this function.
                 (Op::ChannelInscribe(op), OpProof::Ed25519Sig(sig)) => {
+                    let beacon = {
+                        let es = self.cryptarchia_ledger.epoch_state();
+                        (es.epoch(), *es.nonce())
+                    };
                     let (result, events) = self.mantle_ledger.try_apply_channel_inscription(
                         op,
                         sig,
                         tx_hash,
                         self.cryptarchia_ledger.slot,
+                        beacon,
+                        None,
+                    )?;
+                    self.mantle_ledger = result;
+                    tx_events.extend(events);
+                }
+                (Op::ChannelInscribe(op), OpProof::LotteryWin { note_id, sig }) => {
+                    // Permissionless (lottery) channel inscription. The beacon
+                    // (frozen epoch nonce) and the claimed note feed the
+                    // `lottery_wins` check inside the inscription validation.
+                    let beacon = {
+                        let es = self.cryptarchia_ledger.epoch_state();
+                        (es.epoch(), *es.nonce())
+                    };
+                    let (result, events) = self.mantle_ledger.try_apply_channel_inscription(
+                        op,
+                        sig,
+                        tx_hash,
+                        self.cryptarchia_ledger.slot,
+                        beacon,
+                        Some(*note_id),
                     )?;
                     self.mantle_ledger = result;
                     tx_events.extend(events);
@@ -714,6 +739,40 @@ impl LedgerState {
                     balance = balance
                         .checked_add(transfer_balance)
                         .ok_or(LedgerError::BalanceOverflow)?;
+                    tx_events.extend(events);
+                }
+                (
+                    Op::ChannelStake(op),
+                    OpProof::ZkAndEd25519Sigs {
+                        zk_sig,
+                        ed25519_sig,
+                    },
+                ) => {
+                    let epoch = self.cryptarchia_ledger.epoch_state().epoch();
+                    let (result, events) = self.mantle_ledger.try_apply_channel_stake(
+                        op,
+                        zk_sig,
+                        ed25519_sig,
+                        self.cryptarchia_ledger.latest_utxos(),
+                        &tx_hash,
+                        epoch,
+                    )?;
+                    self.mantle_ledger = result;
+                    tx_events.extend(events);
+                }
+                (Op::ChannelUnstake(op), OpProof::ZkSig(sig)) => {
+                    let epoch = self.cryptarchia_ledger.epoch_state().epoch();
+                    let (result, events) =
+                        self.mantle_ledger
+                            .try_apply_channel_unstake(op, sig, &tx_hash, epoch)?;
+                    self.mantle_ledger = result;
+                    tx_events.extend(events);
+                }
+                (Op::ChannelLotteryConfig(op), OpProof::ChannelMultiSigProof(sigs)) => {
+                    let (result, events) = self
+                        .mantle_ledger
+                        .try_apply_channel_lottery_config(op, sigs, &tx_hash)?;
+                    self.mantle_ledger = result;
                     tx_events.extend(events);
                 }
                 _ => {
@@ -1599,5 +1658,494 @@ mod tests {
                 .get_pending_rewards()
         );
         assert!(events.is_empty());
+    }
+
+    // ===================================================================
+    // Step A (permissionless-sequencer e2e roadmap): drive the whole
+    // on-chain lottery path at the ledger level — no nodes/cluster.
+    //
+    // Creates a channel permissioned, flips it to lottery mode, stakes a
+    // funded note, then exercises the winning inscription (forced via
+    // threshold widening at a matured epoch) and the rejection paths the
+    // design calls out (immature stake, wrong posting key, bad signature).
+    // ===================================================================
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a single linear end-to-end scenario; splitting it hurts readability"
+    )]
+    fn lottery_channel_full_on_chain_path() {
+        use lb_core::mantle::ops::channel::{
+            lottery_config::ChannelLotteryConfigOp, stake::ChannelStakeOp,
+        };
+        use lb_cryptarchia_engine::Epoch;
+        use lb_utils::math::NonNegativeRatio;
+
+        use crate::{
+            cryptarchia::tests::utxo_with_sk,
+            mantle::{Error as MantleError, channel::Error as ChannelError},
+        };
+
+        let config = config();
+
+        // A funded note the staker owns, plus a UTXO tree holding it.
+        let (staker_zk, staker_utxo) = utxo_with_sk();
+        let note_id = staker_utxo.id();
+        let utxo_tree: UtxoTree = UtxoTree::default().insert(note_id, staker_utxo).0;
+        // Canonical 32-byte note-id encoding appended to the lottery signing
+        // message — equal to `NoteId::encode()` (gotcha #1).
+        let note_id_bytes = lb_groth16::fr_to_bytes(&note_id.0);
+
+        // Start from a fresh (empty-channels) mantle ledger.
+        let mantle = LedgerState::from_utxos([staker_utxo], &config).mantle_ledger;
+
+        let cid = ChannelId::from([7u8; 32]);
+        let incumbent = Ed25519Key::from_bytes(&[1u8; 32]); // channel creator + config multisig
+        let posting = Ed25519Key::from_bytes(&[2u8; 32]); // bound lottery posting key
+        let nonce = Fr::from(99u64);
+
+        // 1. Create the channel permissioned (first inscription, parent == root).
+        let create_op = InscriptionOp {
+            channel_id: cid,
+            inscription: b"genesis".into(),
+            parent: MsgId::root(),
+            signer: incumbent.public_key(),
+        };
+        let create_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(create_op.clone())]));
+        let create_hash = create_tx.hash();
+        let create_sig = incumbent.sign_payload(create_hash.as_signing_bytes().as_ref());
+        let (mantle, _) = mantle
+            .try_apply_channel_inscription(
+                &create_op,
+                &create_sig,
+                create_hash,
+                Slot::new(1),
+                (Epoch::new(0), nonce),
+                None,
+            )
+            .expect("permissioned channel creation");
+        assert!(
+            mantle.channels().channel_state(&cid).unwrap().lottery.is_none(),
+            "a channel is born permissioned"
+        );
+
+        // 2. Flip the channel into lottery mode (configuration_threshold == 1,
+        //    signed by accredited key 0 == the incumbent creator).
+        let lottery_cfg = ChannelLotteryConfigOp {
+            channel: cid,
+            f_c: NonNegativeRatio::new(1, 1_000_000.try_into().unwrap()),
+            posting_timeout: 1u32.into(),
+            min_stake: 1,
+            unbonding_epochs: 2,
+        };
+        let cfg_tx =
+            MantleTx(Ops::new_unchecked(vec![Op::ChannelLotteryConfig(lottery_cfg.clone())]));
+        let cfg_hash = cfg_tx.hash();
+        let cfg_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
+            0,
+            incumbent.sign_payload(cfg_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+        let (mantle, _) = mantle
+            .try_apply_channel_lottery_config(&lottery_cfg, &cfg_proof, &cfg_hash)
+            .expect("enable lottery mode");
+        assert!(mantle.channels().channel_state(&cid).unwrap().lottery.is_some());
+
+        // 3. Stake the funded note at epoch 0 (effective at STAKE_MATURITY == 2).
+        //    The staker proves note ownership (zk) and posting-key control (ed).
+        let stake_op = ChannelStakeOp {
+            channel_id: cid,
+            note_id,
+            posting_key: posting.public_key(),
+        };
+        let stake_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelStake(stake_op.clone())]));
+        let stake_hash = stake_tx.hash();
+        let stake_zk =
+            ZkKey::multi_sign(std::slice::from_ref(&staker_zk), &stake_hash.to_fr()).unwrap();
+        let stake_ed = posting.sign_payload(stake_hash.as_signing_bytes().as_ref());
+        let (mantle, _) = mantle
+            .try_apply_channel_stake(
+                &stake_op,
+                &stake_zk,
+                &stake_ed,
+                &utxo_tree,
+                &stake_hash,
+                Epoch::new(0),
+            )
+            .expect("stake the note");
+        assert!(
+            mantle.locked_notes().contains(&note_id),
+            "a staked note must be locked from spending"
+        );
+
+        // Build a winning inscription extending the current tip (== creation id;
+        // staking does not splice the hash chain).
+        let tip = mantle.channels().channel_state(&cid).unwrap().tip_message;
+        let inscribe_op = InscriptionOp {
+            channel_id: cid,
+            inscription: b"hello".into(),
+            parent: tip,
+            signer: posting.public_key(),
+        };
+        let inscribe_tx =
+            MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op.clone())]));
+        let inscribe_hash = inscribe_tx.hash();
+        // LotteryWin proof: the posting key signs `tx_hash || note_id` (gotcha #1).
+        let mut win_msg = inscribe_hash.as_signing_bytes().as_ref().to_vec();
+        win_msg.extend_from_slice(&note_id_bytes);
+        let win_sig = posting.sign_payload(&win_msg);
+        // The signed wire form must verify (validators check this before the
+        // ledger sees the op). This also confirms our signing-message bytes
+        // match `NoteId::encode()`.
+        SignedMantleTx::new(
+            inscribe_tx,
+            vec![OpProof::LotteryWin {
+                note_id,
+                sig: win_sig,
+            }],
+        )
+        .expect("LotteryWin proof must verify (signs tx_hash || note_id)");
+
+        // 4a. Rejected before maturity: beacon epoch 1 < effective_from (2).
+        let err = mantle
+            .clone()
+            .try_apply_channel_inscription(
+                &inscribe_op,
+                &win_sig,
+                inscribe_hash,
+                Slot::new(100_000),
+                (Epoch::new(1), nonce),
+                Some(note_id),
+            )
+            .expect_err("an immature stake must be rejected");
+        assert!(matches!(
+            err,
+            MantleError::Channel(ChannelError::StakeNotYetEffective { .. })
+        ));
+
+        // 4b. Wins at the matured epoch 2: a large slot vs tip_slot widens the
+        //     threshold to saturation, so any ticket wins deterministically.
+        let (mantle_win, _) = mantle
+            .clone()
+            .try_apply_channel_inscription(
+                &inscribe_op,
+                &win_sig,
+                inscribe_hash,
+                Slot::new(100_000),
+                (Epoch::new(2), nonce),
+                Some(note_id),
+            )
+            .expect("winning inscription must apply");
+        assert_eq!(
+            mantle_win.channels().channel_state(&cid).unwrap().tip_message,
+            inscribe_op.id(),
+            "tip must advance to the new inscription"
+        );
+
+        // 4c. Wrong signer (not the bound posting key) -> WrongPostingKey, even
+        //     in an otherwise-winning slot.
+        let wrong_op = InscriptionOp {
+            channel_id: cid,
+            inscription: b"hello".into(),
+            parent: tip,
+            signer: incumbent.public_key(),
+        };
+        let wrong_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(wrong_op.clone())]));
+        let wrong_hash = wrong_tx.hash();
+        let mut wrong_msg = wrong_hash.as_signing_bytes().as_ref().to_vec();
+        wrong_msg.extend_from_slice(&note_id_bytes);
+        let wrong_sig = incumbent.sign_payload(&wrong_msg);
+        let err = mantle
+            .clone()
+            .try_apply_channel_inscription(
+                &wrong_op,
+                &wrong_sig,
+                wrong_hash,
+                Slot::new(100_000),
+                (Epoch::new(2), nonce),
+                Some(note_id),
+            )
+            .expect_err("an inscription from a non-staking key must be rejected");
+        assert!(matches!(
+            err,
+            MantleError::Channel(ChannelError::WrongPostingKey { .. })
+        ));
+
+        // 4d. Correct winner identity but a bad signature -> InvalidSignature.
+        let bad_sig = incumbent.sign_payload(&win_msg); // wrong key over the right message
+        let err = mantle
+            .try_apply_channel_inscription(
+                &inscribe_op,
+                &bad_sig,
+                inscribe_hash,
+                Slot::new(100_000),
+                (Epoch::new(2), nonce),
+                Some(note_id),
+            )
+            .expect_err("a bad posting-key signature must be rejected");
+        assert!(matches!(
+            err,
+            MantleError::Channel(ChannelError::InvalidSignature)
+        ));
+    }
+
+    // ===================================================================
+    // Multi-sequencer lottery simulation (ledger-level, no nodes).
+    //
+    // Stakes N notes (N "sequencers") on one lottery channel, then walks the
+    // slots exactly as an off-chain sequencer would: for each slot, evaluate the
+    // public `lottery_wins` predicate for every staked note (the winners are
+    // precomputable from the epoch beacon — the transparency property of
+    // Variant A), and let a winner extend the tip. Demonstrates:
+    //   * stake-weighted participation (multiple sequencers win across slots),
+    //   * passive liveness via threshold widening (after a long silence every
+    //     eligible note wins), and
+    //   * first-valid-write-wins serialisation between co-winners of one slot.
+    // ===================================================================
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a single end-to-end multi-sequencer simulation; splitting hurts readability"
+    )]
+    fn lottery_multi_sequencer_simulation() {
+        use lb_core::mantle::{
+            Note,
+            ops::channel::{lottery_config::ChannelLotteryConfigOp, stake::ChannelStakeOp},
+        };
+        use lb_cryptarchia_engine::{Epoch, Slot};
+        use lb_utils::math::NonNegativeRatio;
+
+        use crate::{
+            cryptarchia::tests::utxo,
+            mantle::{Error as MantleError, channel::Error as ChannelError},
+        };
+
+        struct Sequencer {
+            zk: ZkKey,
+            posting: Ed25519Key,
+            note_id: NoteId,
+            utxo: Utxo,
+        }
+
+        let config = config();
+        let cid = ChannelId::from([42u8; 32]);
+        let incumbent = Ed25519Key::from_bytes(&[1u8; 32]);
+        let nonce = Fr::from(0x00C0_FFEEu64);
+
+        // Three sequencers with distinct staking (zk) and posting keys and
+        // comparable stake. Distinct `op_id`s give distinct note ids.
+        let stake_values = [5_000u64, 4_000, 3_000];
+        let seqs: Vec<Sequencer> = (0..3u8)
+            .map(|i| {
+                let zk = ZkKey::from(BigUint::from(u64::from(i) + 1));
+                let posting = Ed25519Key::from_bytes(&[10 + i; 32]);
+                let mut op_id = [0u8; 32];
+                op_id[0] = i + 1;
+                let utxo = Utxo::new(op_id, 0, Note::new(stake_values[i as usize], zk.to_public_key()));
+                Sequencer {
+                    note_id: utxo.id(),
+                    zk,
+                    posting,
+                    utxo,
+                }
+            })
+            .collect();
+        let utxo_tree: UtxoTree = seqs
+            .iter()
+            .fold(UtxoTree::default(), |t, s| t.insert(s.note_id, s.utxo).0);
+
+        let mut mantle = LedgerState::from_utxos([utxo()], &config).mantle_ledger;
+
+        // 1. Create the channel permissioned, then flip it to lottery mode.
+        let create_op = InscriptionOp {
+            channel_id: cid,
+            inscription: b"genesis".into(),
+            parent: MsgId::root(),
+            signer: incumbent.public_key(),
+        };
+        let create_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(create_op.clone())]));
+        let create_hash = create_tx.hash();
+        let create_sig = incumbent.sign_payload(create_hash.as_signing_bytes().as_ref());
+        mantle = mantle
+            .try_apply_channel_inscription(
+                &create_op,
+                &create_sig,
+                create_hash,
+                Slot::new(1),
+                (Epoch::new(0), nonce),
+                None,
+            )
+            .expect("channel creation")
+            .0;
+
+        // f_c = 1/2 gives a healthy per-slot win rate; posting_timeout = 8 is the
+        // widening period (the passive-liveness safety net).
+        let lottery_cfg = ChannelLotteryConfigOp {
+            channel: cid,
+            f_c: NonNegativeRatio::new(1, 2.try_into().unwrap()),
+            posting_timeout: 8u32.into(),
+            min_stake: 1,
+            unbonding_epochs: 2,
+        };
+        let cfg_tx =
+            MantleTx(Ops::new_unchecked(vec![Op::ChannelLotteryConfig(lottery_cfg.clone())]));
+        let cfg_hash = cfg_tx.hash();
+        let cfg_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
+            0,
+            incumbent.sign_payload(cfg_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+        mantle = mantle
+            .try_apply_channel_lottery_config(&lottery_cfg, &cfg_proof, &cfg_hash)
+            .expect("enable lottery mode")
+            .0;
+
+        // 2. Stake every sequencer's note at epoch 0 (effective at epoch 2).
+        for seq in &seqs {
+            let stake_op = ChannelStakeOp {
+                channel_id: cid,
+                note_id: seq.note_id,
+                posting_key: seq.posting.public_key(),
+            };
+            let stake_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelStake(stake_op.clone())]));
+            let stake_hash = stake_tx.hash();
+            let stake_zk =
+                ZkKey::multi_sign(std::slice::from_ref(&seq.zk), &stake_hash.to_fr()).unwrap();
+            let stake_ed = seq.posting.sign_payload(stake_hash.as_signing_bytes().as_ref());
+            mantle = mantle
+                .try_apply_channel_stake(
+                    &stake_op,
+                    &stake_zk,
+                    &stake_ed,
+                    &utxo_tree,
+                    &stake_hash,
+                    Epoch::new(0),
+                )
+                .expect("stake")
+                .0;
+        }
+
+        // Helper: build + sign a lottery inscription for `seq` extending `parent`.
+        let build = |seq: &Sequencer, parent: MsgId| {
+            let op = InscriptionOp {
+                channel_id: cid,
+                inscription: b"msg".into(),
+                parent,
+                signer: seq.posting.public_key(),
+            };
+            let tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(op.clone())]));
+            let hash = tx.hash();
+            let mut msg = hash.as_signing_bytes().as_ref().to_vec();
+            msg.extend_from_slice(&lb_groth16::fr_to_bytes(&seq.note_id.0));
+            let sig = seq.posting.sign_payload(&msg);
+            (op, hash, sig)
+        };
+
+        // 3. Walk the slots within the matured epoch. The win schedule is a pure
+        //    function of the public beacon, so this mirrors what an off-chain
+        //    sequencer precomputes. The lowest-index winner posts (a deterministic
+        //    tie-break standing in for the leader's in-block tx order).
+        let beacon = (Epoch::new(2), nonce);
+        let mut posts_by_seq = [0u32; 3];
+        for slot in 2u64..402 {
+            let (winner, parent) = {
+                let channel = mantle.channels().channel_state(&cid).unwrap();
+                let winner = (0..seqs.len()).find(|&i| {
+                    channel
+                        .lottery_wins(
+                            &cid,
+                            &seqs[i].note_id,
+                            &seqs[i].posting.public_key(),
+                            Slot::new(slot),
+                            &beacon,
+                        )
+                        .is_ok()
+                });
+                (winner, channel.tip_message)
+            };
+            let Some(i) = winner else { continue };
+            let (op, hash, sig) = build(&seqs[i], parent);
+            mantle = mantle
+                .try_apply_channel_inscription(
+                    &op,
+                    &sig,
+                    hash,
+                    Slot::new(slot),
+                    beacon,
+                    Some(seqs[i].note_id),
+                )
+                .expect("a winning inscription must apply")
+                .0;
+            posts_by_seq[i] += 1;
+        }
+        let total_posts: u32 = posts_by_seq.iter().sum();
+        println!("lottery sim over 400 slots: posts_by_seq={posts_by_seq:?} total={total_posts}");
+
+        // Liveness: the lottery advanced the channel.
+        assert!(total_posts > 0, "the lottery must produce posts");
+        // Participation: more than one sequencer won the right to post (the
+        // mechanism is stake-weighted, not a single-winner monopoly).
+        let distinct = posts_by_seq.iter().filter(|&&c| c > 0).count();
+        assert!(
+            distinct >= 2,
+            "multiple sequencers should win across slots, got {posts_by_seq:?}"
+        );
+
+        // 4. Passive liveness via widening: at a slot far past the last post the
+        //    threshold saturates, so EVERY eligible sequencer wins.
+        let saturated_slot = Slot::new(1_000_000);
+        let parent = {
+            let channel = mantle.channels().channel_state(&cid).unwrap();
+            for seq in &seqs {
+                assert!(
+                    channel
+                        .lottery_wins(
+                            &cid,
+                            &seq.note_id,
+                            &seq.posting.public_key(),
+                            saturated_slot,
+                            &beacon
+                        )
+                        .is_ok(),
+                    "widening must let every eligible sequencer win after a long silence"
+                );
+            }
+            channel.tip_message
+        };
+
+        // 5. First-valid-write-wins: two co-winners extend the SAME tip in one
+        //    slot; the first applied lands, the second fails InvalidParent (and
+        //    on a real chain would be dropped at proposal, paying nothing).
+        let (op_a, hash_a, sig_a) = build(&seqs[0], parent);
+        let (op_b, hash_b, sig_b) = build(&seqs[1], parent);
+        mantle = mantle
+            .try_apply_channel_inscription(
+                &op_a,
+                &sig_a,
+                hash_a,
+                saturated_slot,
+                beacon,
+                Some(seqs[0].note_id),
+            )
+            .expect("first co-winner lands")
+            .0;
+        assert_eq!(
+            mantle.channels().channel_state(&cid).unwrap().tip_message,
+            op_a.id()
+        );
+        let err = mantle
+            .try_apply_channel_inscription(
+                &op_b,
+                &sig_b,
+                hash_b,
+                saturated_slot,
+                beacon,
+                Some(seqs[1].note_id),
+            )
+            .expect_err("the co-winner with the now-stale parent must be rejected");
+        assert!(matches!(
+            err,
+            MantleError::Channel(ChannelError::InvalidParent { .. })
+        ));
     }
 }

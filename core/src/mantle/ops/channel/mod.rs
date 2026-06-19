@@ -1,6 +1,9 @@
 pub mod config;
 pub mod deposit;
 pub mod inscribe;
+pub mod lottery_config;
+pub mod stake;
+pub mod unstake;
 pub mod withdraw;
 
 use std::fmt::{Display, Formatter};

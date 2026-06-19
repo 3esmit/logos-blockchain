@@ -119,6 +119,8 @@ pub enum WalletServiceError {
 
     #[error("Failed to fetch Channel Withdraw proof for op index {0} from the TxBuilder")]
     ChannelMultiSigProofNotFound(usize),
+    #[error("Operation {0} is not yet supported by the wallet service signer")]
+    UnsupportedOp(&'static str),
 }
 
 #[derive(Debug)]
@@ -801,6 +803,18 @@ where
                 Op::Transfer(transfer_op) => {
                     Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
                         .await?
+                }
+                // Permissionless-sequencing ops are built and signed by the
+                // zone-sdk sequencer (off-chain), which holds the staking and
+                // posting keys; the node wallet service does not sign them yet.
+                Op::ChannelStake(_) => {
+                    return Err(WalletServiceError::UnsupportedOp("ChannelStake"));
+                }
+                Op::ChannelUnstake(_) => {
+                    return Err(WalletServiceError::UnsupportedOp("ChannelUnstake"));
+                }
+                Op::ChannelLotteryConfig(_) => {
+                    return Err(WalletServiceError::UnsupportedOp("ChannelLotteryConfig"));
                 }
             };
             ops_proofs.push(proof);

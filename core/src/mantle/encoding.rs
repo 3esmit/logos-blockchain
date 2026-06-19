@@ -245,11 +245,27 @@ fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], Vec<O
 
 fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
     match op {
-        // Ed25519SigProof = Ed25519Signature
-        Op::ChannelInscribe(_) => map(decode_ed25519_signature, OpProof::Ed25519Sig).parse(input),
+        // Inscription proofs are self-describing via a 1-byte kind tag, since a
+        // ChannelInscribe op can carry either an Ed25519 signature (round-robin
+        // channels) or a LotteryWin proof (lottery channels) and the decoder
+        // cannot tell the channel's mode from the op alone.
+        //   0x00 => Ed25519SigProof   = Ed25519Signature
+        //   0x01 => LotteryWinProof   = NoteId Ed25519Signature
+        Op::ChannelInscribe(_) => {
+            let (input, tag) = u8::decode(input)?;
+            match tag {
+                0 => map(decode_ed25519_signature, OpProof::Ed25519Sig).parse(input),
+                1 => {
+                    let (input, note_id) = NoteId::decode(input)?;
+                    let (input, sig) = decode_ed25519_signature(input)?;
+                    Ok((input, OpProof::LotteryWin { note_id, sig }))
+                }
+                _ => Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
+            }
+        }
 
         // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
-        Op::SDPDeclare(_) => {
+        Op::SDPDeclare(_) | Op::ChannelStake(_) => {
             let (input, zk_sig) = decode_zk_signature(input)?;
             let (input, ed25519_sig) = decode_ed25519_signature(input)?;
             Ok((
@@ -262,9 +278,11 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         }
 
         // ZkSigProof = ZkSignature
-        Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_) => {
-            map(decode_zk_signature, OpProof::ZkSig).parse(input)
-        }
+        Op::SDPWithdraw(_)
+        | Op::SDPActive(_)
+        | Op::Transfer(_)
+        | Op::ChannelDeposit(_)
+        | Op::ChannelUnstake(_) => map(decode_zk_signature, OpProof::ZkSig).parse(input),
 
         // ProofOfClaimProof = Groth16
         Op::LeaderClaim(leader_claim_op) => map(decode_groth16, |proof| {
@@ -275,8 +293,9 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         })
         .parse(input),
 
-        // ChannelMultiSigProof — also used by ChannelConfig (threshold sigs)
-        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => map(
+        // ChannelMultiSigProof — also used by ChannelConfig and
+        // ChannelLotteryConfig (threshold sigs)
+        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) | Op::ChannelLotteryConfig(_) => map(
             decode_channel_multi_sig_proof,
             OpProof::ChannelMultiSigProof,
         )
@@ -624,16 +643,28 @@ pub fn encode_transfer_op(op: &TransferOp) -> Vec<u8> {
 /// Encode proofs
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     match (proof, op) {
-        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_)) => encode_ed25519_signature(sig),
-        (OpProof::ChannelMultiSigProof(proof), Op::ChannelWithdraw(_) | Op::ChannelConfig(_)) => {
-            encode_channel_multi_sig_proof(proof)
+        // Inscription proofs carry a 1-byte kind tag (see `decode_op_proof`).
+        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_)) => {
+            let mut bytes = vec![0u8];
+            bytes.extend(encode_ed25519_signature(sig));
+            bytes
         }
+        (OpProof::LotteryWin { note_id, sig }, Op::ChannelInscribe(_)) => {
+            let mut bytes = vec![1u8];
+            bytes.extend(note_id.encode());
+            bytes.extend(encode_ed25519_signature(sig));
+            bytes
+        }
+        (
+            OpProof::ChannelMultiSigProof(proof),
+            Op::ChannelWithdraw(_) | Op::ChannelConfig(_) | Op::ChannelLotteryConfig(_),
+        ) => encode_channel_multi_sig_proof(proof),
         (
             OpProof::ZkAndEd25519Sigs {
                 zk_sig,
                 ed25519_sig,
             },
-            Op::SDPDeclare(_),
+            Op::SDPDeclare(_) | Op::ChannelStake(_),
         ) => {
             let mut bytes = encode_zk_signature(zk_sig);
             bytes.extend(encode_ed25519_signature(ed25519_sig));
@@ -641,7 +672,11 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
         }
         (
             OpProof::ZkSig(sig),
-            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
+            Op::SDPWithdraw(_)
+            | Op::SDPActive(_)
+            | Op::Transfer(_)
+            | Op::ChannelDeposit(_)
+            | Op::ChannelUnstake(_),
         ) => encode_zk_signature(sig),
         (OpProof::PoC(poc), Op::LeaderClaim(_)) => encode_poc(poc),
         _ => {
@@ -679,8 +714,11 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
         .ops()
         .iter()
         .map(|op| match op {
-            // Ed25519SigProof = Ed25519Signature
-            Op::ChannelInscribe(_) => ED25519_SIG_BYTES,
+            // Tag byte + Ed25519SigProof. A LotteryWin proof is larger (adds a
+            // 32-byte note id) but is indistinguishable from the op alone;
+            // under-prediction is harmless while storage gas is 0. TODO: tighten
+            // before enabling non-zero storage gas prices.
+            Op::ChannelInscribe(_) => 1 + ED25519_SIG_BYTES,
 
             // ChannelMultiSigProof — for an existing channel, threshold sigs;
             // for a new channel (just-in-time created here), no sigs required.
@@ -693,13 +731,23 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
                 calculate_channel_multi_sig_proof_byte_size(threshold)
             }
 
+            // ChannelMultiSigProof (configuration threshold)
+            Op::ChannelLotteryConfig(operation) => {
+                let threshold = context
+                    .configuration_threshold(&operation.channel)
+                    .unwrap_or(0);
+                calculate_channel_multi_sig_proof_byte_size(threshold)
+            }
+
             // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
-            Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
+            Op::SDPDeclare(_) | Op::ChannelStake(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
 
             // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
-            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) => {
-                GROTH16_BYTES
-            }
+            Op::SDPWithdraw(_)
+            | Op::SDPActive(_)
+            | Op::LeaderClaim(_)
+            | Op::Transfer(_)
+            | Op::ChannelUnstake(_) => GROTH16_BYTES,
 
             // ChannelMultiSigProof
             Op::ChannelWithdraw(operation) => {
@@ -867,6 +915,7 @@ mod tests {
             + "68656c6c6f"                                                       // Inscription
             + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // Parent (32Byte)
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
+            + "00"                                                               // Inscription proof kind tag (0x00 = Ed25519)
             + "4ec789fc67b7f7bfba02f8cc7f3f671a107225faefbe60ca0b8e9e7e8e43e8db" // Signature (64Byte)
             + "835075aed539fac37e0fdc03acc2aba873e43eef8a835476c4c6bdaaba866901";
 
@@ -1046,6 +1095,63 @@ mod tests {
         // Verify
         assert!(remaining.is_empty());
         assert_eq!(original_tx, decoded_tx);
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip_lottery_win_proof() {
+        // A lottery-channel inscription carries an `OpProof::LotteryWin`, which
+        // is encoded behind a 1-byte kind tag (0x01). Round-trip it to confirm
+        // the tagged proof survives encode/decode.
+        let inscribe = InscriptionOp {
+            channel_id: ChannelId::from([7u8; 32]),
+            inscription: b"hi".into(),
+            parent: MsgId::from([0u8; 32]),
+            signer: Ed25519Key::from_bytes(&[1u8; 32]).public_key(),
+        };
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe)]));
+
+        // `decode_signed_mantle_tx` verifies proofs, so this must be a real
+        // signature. A `LotteryWin` proof binds the won note: the posting key
+        // (== signer) signs `tx_hash || note_id` (see `verify_ops_proofs`).
+        let note_id = NoteId(BigUint::from(99u64).into());
+        let mut msg = mantle_tx.hash().as_signing_bytes().as_ref().to_vec();
+        msg.extend(note_id.encode());
+        let proof = OpProof::LotteryWin {
+            note_id,
+            sig: Ed25519Key::from_bytes(&[1u8; 32]).sign_payload(&msg),
+        };
+        let original = SignedMantleTx::new(mantle_tx, vec![proof]).unwrap();
+
+        let encoded = encode_signed_mantle_tx(&original);
+        let (remaining, decoded) = decode_signed_mantle_tx(&encoded).unwrap();
+
+        assert!(remaining.is_empty());
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip_round_robin_inscription_proof() {
+        // The round-robin inscription proof (Ed25519Sig) is tagged 0x00.
+        // `decode_signed_mantle_tx` verifies proofs (it builds via
+        // `SignedMantleTx::new`), so the proof must carry a real signature over
+        // the tx hash — a dummy signature would be rejected on decode.
+        let signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
+        let inscribe = InscriptionOp {
+            channel_id: ChannelId::from([7u8; 32]),
+            inscription: b"hi".into(),
+            parent: MsgId::from([0u8; 32]),
+            signer: signing_key.public_key(),
+        };
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe)]));
+        let proof =
+            OpProof::Ed25519Sig(signing_key.sign_payload(&mantle_tx.hash().as_signing_bytes()));
+        let original = SignedMantleTx::new(mantle_tx, vec![proof]).unwrap();
+
+        let encoded = encode_signed_mantle_tx(&original);
+        let (remaining, decoded) = decode_signed_mantle_tx(&encoded).unwrap();
+
+        assert!(remaining.is_empty());
+        assert_eq!(original, decoded);
     }
 
     #[test]

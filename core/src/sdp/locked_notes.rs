@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    mantle::{Note, NoteId},
+    mantle::{Note, NoteId, ops::channel::ChannelId},
     sdp::{MinStake, ServiceType},
 };
 
@@ -23,6 +23,16 @@ pub enum Error {
         note_id: NoteId,
         service_type: ServiceType,
     },
+    #[error("Note {note_id:?} already staked in channel {channel_id:?}")]
+    NoteAlreadyLockedForChannel {
+        note_id: NoteId,
+        channel_id: ChannelId,
+    },
+    #[error("Note {note_id:?} not locked for channel {channel_id:?}")]
+    NoteNotLockedForChannel {
+        note_id: NoteId,
+        channel_id: ChannelId,
+    },
     #[error("Note is not locked: {0:?}")]
     NoteNotLocked(NoteId),
 }
@@ -36,6 +46,19 @@ pub struct LockedNotes {
 struct LockedNote {
     note: Note,
     services: HashSet<ServiceType>,
+    /// Channels the note is staked in for permissionless sequencing. A note is
+    /// spendable only once it is locked for neither any service nor any
+    /// channel. See [`super`] module docs and design doc §2.4.
+    #[serde(default)]
+    channels: HashSet<ChannelId>,
+}
+
+impl LockedNote {
+    /// Whether this note holds no locks at all and can be dropped from the map
+    /// (so the spend gate stops rejecting it).
+    fn is_unlocked(&self) -> bool {
+        self.services.is_empty() && self.channels.is_empty()
+    }
 }
 
 impl LockedNotes {
@@ -80,12 +103,77 @@ impl LockedNotes {
             locked.services.insert(service_type);
         } else {
             let services = [service_type].into();
-            self.locked_notes = self
-                .locked_notes
-                .insert(*note_id, LockedNote { note, services });
+            self.locked_notes = self.locked_notes.insert(
+                *note_id,
+                LockedNote {
+                    note,
+                    services,
+                    channels: HashSet::new(),
+                },
+            );
         }
 
         Ok(self)
+    }
+
+    /// Lock `note` so it cannot be spent while it is staked in `channel_id`
+    /// (permissionless sequencing, design doc §2.4). Mirrors [`Self::lock`] but
+    /// keyed per-channel; reuses the same map so the single spend gate
+    /// ([`crate::mantle::ledger::Inputs::validate`]) stays unchanged.
+    pub fn lock_for_channel(
+        mut self,
+        channel_id: ChannelId,
+        note: Note,
+        note_id: &NoteId,
+    ) -> Result<Self, Error> {
+        if let Some(locked) = self.locked_notes.get_mut(note_id) {
+            if !locked.channels.insert(channel_id) {
+                return Err(Error::NoteAlreadyLockedForChannel {
+                    note_id: *note_id,
+                    channel_id,
+                });
+            }
+        } else {
+            self.locked_notes = self.locked_notes.insert(
+                *note_id,
+                LockedNote {
+                    note,
+                    services: HashSet::new(),
+                    channels: [channel_id].into(),
+                },
+            );
+        }
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn is_locked_for_channel(&self, note_id: &NoteId, channel_id: &ChannelId) -> bool {
+        self.locked_notes
+            .get(note_id)
+            .is_some_and(|locked| locked.channels.contains(channel_id))
+    }
+
+    /// Release a channel stake lock. The note becomes spendable again once it
+    /// holds no further locks.
+    pub fn unlock_for_channel(
+        &mut self,
+        channel_id: &ChannelId,
+        note_id: &NoteId,
+    ) -> Result<Note, Error> {
+        let Some(locked) = self.locked_notes.get_mut(note_id) else {
+            return Err(Error::NoteNotLocked(*note_id));
+        };
+        if !locked.channels.remove(channel_id) {
+            return Err(Error::NoteNotLockedForChannel {
+                note_id: *note_id,
+                channel_id: *channel_id,
+            });
+        }
+        let note = locked.note;
+        if locked.is_unlocked() {
+            self.locked_notes = self.locked_notes.remove(note_id);
+        }
+        Ok(note)
     }
 
     #[must_use]
@@ -108,7 +196,7 @@ impl LockedNotes {
                 });
             }
             let res = note.note;
-            if note.services.is_empty() {
+            if note.is_unlocked() {
                 self.locked_notes = self.locked_notes.remove(note_id);
             }
 

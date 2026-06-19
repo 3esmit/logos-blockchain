@@ -197,8 +197,15 @@ impl WalletChainState {
             }
             Op::SDPDeclare(declaration) => self.lock_note(declaration.locked_note_id),
             Op::SDPWithdraw(withdrawal) => self.unlock_note(withdrawal.locked_note_id),
+            // A channel stake locks its note (like an SDP declaration). Unstake
+            // does not unlock it in this first pass (the note stays locked until
+            // the unbonding sweep, which is not yet wired), so it is a no-op
+            // here.
+            Op::ChannelStake(stake) => self.lock_note(stake.note_id),
             Op::ChannelConfig(_)
             | Op::ChannelInscribe(_)
+            | Op::ChannelUnstake(_)
+            | Op::ChannelLotteryConfig(_)
             | Op::SDPActive(_)
             | Op::LeaderClaim(_) => {}
         }

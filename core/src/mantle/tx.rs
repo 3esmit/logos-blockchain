@@ -20,6 +20,7 @@ use crate::{
         },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+        nom::NomEncode as _,
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
@@ -426,6 +427,18 @@ impl SignedMantleTx {
                     inscribe_op
                         .signer
                         .verify(tx_hash_bytes.as_ref(), sig)
+                        .map_err(|_| VerificationError::InvalidSignature { op_index: idx })?;
+                }
+                (Op::ChannelInscribe(inscribe_op), OpProof::LotteryWin { note_id, sig }) => {
+                    // Lottery-channel inscription: the bound posting key (==
+                    // signer) signs `tx_hash || note_id`, binding the won note
+                    // into the signature (it otherwise lives only in the proof).
+                    // The win itself is checked by the ledger against the note.
+                    let mut msg = tx_hash_bytes.as_ref().to_vec();
+                    msg.extend(note_id.encode());
+                    inscribe_op
+                        .signer
+                        .verify(&msg, sig)
                         .map_err(|_| VerificationError::InvalidSignature { op_index: idx })?;
                 }
                 v @ (Op::ChannelInscribe(_), OpProof::ZkSig(_)) => {

@@ -17,6 +17,17 @@ use lb_core::{
                 inscribe::{
                     InscriptionExecutionContext, InscriptionOp, InscriptionValidationContext,
                 },
+                lottery_config::{
+                    ChannelLotteryConfigExecutionContext, ChannelLotteryConfigOp,
+                    ChannelLotteryConfigValidationContext,
+                },
+                stake::{
+                    ChannelStakeExecutionContext, ChannelStakeOp, ChannelStakeValidationContext,
+                },
+                unstake::{
+                    ChannelUnstakeExecutionContext, ChannelUnstakeOp,
+                    ChannelUnstakeValidationContext,
+                },
             },
             leader_claim::{LeaderClaimError, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
@@ -26,7 +37,8 @@ use lb_core::{
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
@@ -161,6 +173,8 @@ impl LedgerState {
         inscription_sig: &Ed25519Signature,
         tx_hash: TxHash,
         block_slot: Slot,
+        beacon: (Epoch, Fr),
+        lottery_note_id: Option<NoteId>,
     ) -> Result<(Self, Events), Error> {
         //validate the inscription
         inscription_op.validate(&InscriptionValidationContext {
@@ -168,6 +182,8 @@ impl LedgerState {
             tx_hash: &tx_hash,
             inscribe_sig: inscription_sig,
             block_slot,
+            beacon,
+            lottery_note_id,
         })?;
 
         // Execute the inscription
@@ -206,6 +222,91 @@ impl LedgerState {
             })
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
+            )?;
+        self.channels = result.channels;
+
+        Ok((self, events))
+    }
+
+    pub fn try_apply_channel_stake(
+        mut self,
+        stake_op: &ChannelStakeOp,
+        stake_zk_sig: &ZkSignature,
+        stake_ed_sig: &Ed25519Signature,
+        utxo_tree: &UtxoTree,
+        tx_hash: &TxHash,
+        epoch: Epoch,
+    ) -> Result<(Self, Events), Error> {
+        stake_op.validate(&ChannelStakeValidationContext {
+            channels: &self.channels,
+            utxos: utxo_tree,
+            locked_notes: self.sdp.locked_notes(),
+            tx_hash,
+            stake_zk_sig,
+            stake_ed_sig,
+        })?;
+
+        let (result, events) = stake_op
+            .execute(ChannelStakeExecutionContext {
+                channels: self.channels,
+                utxos: utxo_tree.clone(),
+                locked_notes: self.sdp.locked_notes().clone(),
+                epoch,
+            })
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel stake message"),
+            )?;
+        self.channels = result.channels;
+        self.sdp.set_locked_notes(result.locked_notes);
+
+        Ok((self, events))
+    }
+
+    pub fn try_apply_channel_unstake(
+        mut self,
+        unstake_op: &ChannelUnstakeOp,
+        unstake_zk_sig: &ZkSignature,
+        tx_hash: &TxHash,
+        epoch: Epoch,
+    ) -> Result<(Self, Events), Error> {
+        unstake_op.validate(&ChannelUnstakeValidationContext {
+            channels: &self.channels,
+            locked_notes: self.sdp.locked_notes(),
+            tx_hash,
+            unstake_zk_sig,
+        })?;
+
+        let (result, events) = unstake_op
+            .execute(ChannelUnstakeExecutionContext {
+                channels: self.channels,
+                epoch,
+            })
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel unstake message"),
+            )?;
+        self.channels = result.channels;
+
+        Ok((self, events))
+    }
+
+    pub fn try_apply_channel_lottery_config(
+        mut self,
+        config_op: &ChannelLotteryConfigOp,
+        config_sigs: &ChannelMultiSigProof,
+        tx_hash: &TxHash,
+    ) -> Result<(Self, Events), Error> {
+        config_op.validate(&ChannelLotteryConfigValidationContext {
+            channels: &self.channels,
+            tx_hash,
+            config_sigs,
+        })?;
+
+        let (result, events) = config_op
+            .execute(ChannelLotteryConfigExecutionContext {
+                channels: self.channels,
+            })
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel lottery config message"),
             )?;
         self.channels = result.channels;
 

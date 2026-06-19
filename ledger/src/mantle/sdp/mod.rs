@@ -552,6 +552,13 @@ impl SdpLedger {
         &self.locked_notes
     }
 
+    /// Replace the locked-notes overlay. Used by channel stake ops, which lock
+    /// notes for permissionless sequencing through the same global overlay
+    /// (design doc §2.4).
+    pub fn set_locked_notes(&mut self, locked_notes: LockedNotes) {
+        self.locked_notes = locked_notes;
+    }
+
     /// Declarations of all services, which have been accumulated until the
     /// current block.
     #[must_use]

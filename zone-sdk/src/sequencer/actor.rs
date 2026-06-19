@@ -686,6 +686,7 @@ mod tests {
                         balance: 0,
                         withdrawal_nonce: 0,
                         withdraw_threshold: 1,
+                        lottery: None,
                     }),
                 },
                 rx,
@@ -1099,6 +1100,7 @@ mod tests {
             balance: 0,
             withdrawal_nonce: 0,
             withdraw_threshold: 1,
+            lottery: None,
         });
 
         let node = ColdStartMockNode {

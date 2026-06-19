@@ -165,6 +165,16 @@ pub trait GasConstants {
     /// Verify the withdrawal signature.
     const CHANNEL_WITHDRAW: Gas;
 
+    /// Verify the stake's note-ownership (zk) and posting-key (Ed25519)
+    /// signatures.
+    const CHANNEL_STAKE: Gas;
+
+    /// Verify the unstake's note-ownership signature.
+    const CHANNEL_UNSTAKE: Gas;
+
+    /// Verify the lottery-config administrator multisig.
+    const CHANNEL_LOTTERY_CONFIG: Gas;
+
     /// Verify the proof of ownership.
     const SDP_DECLARE: Gas;
 
@@ -186,6 +196,12 @@ impl GasConstants for MainnetGasConstants {
     const CHANNEL_CONFIG: Gas = Gas(56);
     const CHANNEL_DEPOSIT: Gas = Gas(590);
     const CHANNEL_WITHDRAW: Gas = Gas(56);
+    // Dual sig (zk note-ownership + Ed25519 posting key), like SDP_DECLARE.
+    const CHANNEL_STAKE: Gas = Gas(646);
+    // Single zk sig, like SDP_WITHDRAW.
+    const CHANNEL_UNSTAKE: Gas = Gas(590);
+    // Multisig, like CHANNEL_CONFIG.
+    const CHANNEL_LOTTERY_CONFIG: Gas = Gas(56);
     const SDP_DECLARE: Gas = Gas(646);
     const SDP_WITHDRAW: Gas = Gas(590);
     const SDP_ACTIVE: Gas = Gas(590);

@@ -20,11 +20,11 @@ use crate::{
 /// Binds a note to an Ed25519 posting key in a lottery channel's per-channel
 /// stake registry. SDP_DECLARE-shaped: the note stays in the UTXO tree but is
 /// blocked from spending via [`LockedNotes`], and a registry entry records the
-/// operational key. See design doc §3.2.
+/// operational key.
 ///
 /// The note becomes eligible to win [`STAKE_MATURITY`] epochs later
 /// (`effective_from = current_epoch + STAKE_MATURITY`); this is the
-/// grinding-resistance lag, not just snapshot hygiene (design doc §3.4).
+/// grinding-resistance lag, not just snapshot hygiene.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ChannelStakeOp {
     pub channel_id: ChannelId,

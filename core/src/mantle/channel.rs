@@ -41,7 +41,7 @@ static CHAN_LEAD_V1: LazyLock<Fr> = LazyLock::new(|| {
 /// knew the epoch nonce could mint candidate notes and stake only the winners.
 /// Requiring staking to complete `STAKE_MATURITY` epochs before eligibility
 /// means note ids are committed before the seed they would be ground against
-/// exists. See design doc §3.4.
+/// exists.
 pub const STAKE_MATURITY: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -238,18 +238,17 @@ pub struct ChannelState {
     // (the default, permissioned mode). `Some(..)` => the channel is sequenced by
     // a stake lottery (see [`ChannelState::lottery_wins`]); the round-robin cursor
     // fields above are then unused, but `accredited_keys`/`configuration_threshold`
-    // remain live for config and bridging (design doc §2.3).
+    // remain live for config and bridging.
     //
-    // NOTE: the production design (§3.1) replaces the four round-robin cursor
-    // fields with a `Sequencing` enum. This first pass keeps the fields and
-    // adds the lottery state additively to avoid rippling an enum refactor
-    // through the zone-sdk, tui, and every test; the on-chain mechanism is the
-    // same either way.
+    // The lottery state is stored additively, alongside the (then-unused)
+    // round-robin cursor fields, rather than behind a dedicated sequencing
+    // enum — so enabling the lottery does not ripple a refactor through every
+    // `ChannelState` consumer. The on-chain mechanism is the same either way.
     #[serde(default)]
     pub lottery: Option<LotteryState>,
 }
 
-/// Per-channel state for the permissionless stake lottery (design doc §3.1).
+/// Per-channel state for the permissionless stake lottery.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LotteryState {
     /// `note_id -> stake entry`. rpds map: cheap per-fork clone, like
@@ -257,7 +256,7 @@ pub struct LotteryState {
     pub stakes: rpds::HashTrieMapSync<NoteId, StakeEntry>,
     /// Channel-local active-slot coefficient: the target posting rate per
     /// staked unit (e.g. `1/2` => one expected post per 2 slots for the whole
-    /// channel at full participation). Set via `CHANNEL_CONFIG`.
+    /// channel at full participation). Set via `CHANNEL_LOTTERY_CONFIG`.
     pub f_c: NonNegativeRatio,
     /// Liveness: the win threshold doubles every `posting_timeout` slots without
     /// a post (`0` = no widening). The round-robin timeout analogue.
@@ -269,7 +268,7 @@ pub struct LotteryState {
     pub unbonding_epochs: u32,
 }
 
-/// A single staked note bound to an Ed25519 posting key (design doc §3.1).
+/// A single staked note bound to an Ed25519 posting key.
 ///
 /// Entries are immutable once written; removals are flagged (`unstaked_at`)
 /// rather than deleted, so "the registry as of epoch e" is reconstructible by
@@ -284,8 +283,8 @@ pub struct StakeEntry {
     pub posting_key: Ed25519PublicKey,
     /// First epoch in which this stake may win (`stake_epoch + STAKE_MATURITY`).
     pub effective_from: Epoch,
-    /// Set by `CHANNEL_UNSTAKE`; ineligible immediately, unlocked after
-    /// `unbonding_epochs`.
+    /// Set by `CHANNEL_UNSTAKE`; the entry is then ineligible to win, and is
+    /// pruned (with its note unlocked) once the unbonding delay elapses.
     pub unstaked_at: Option<Epoch>,
 }
 
@@ -381,9 +380,9 @@ impl ChannelState {
     /// randomness, read from the including block's epoch state. `channel_id` is
     /// passed in because it is the map key, not a field of [`ChannelState`].
     ///
-    /// See design doc §3.3. The ticket is public (no secret input), so anyone
-    /// can precompute every winning slot for the epoch the moment the nonce
-    /// freezes — the transparency/predictability trade of Variant A (§3.7).
+    /// The ticket is public (no secret input), so anyone can precompute every
+    /// winning slot for the epoch the moment the nonce freezes — the
+    /// transparency/predictability trade-off of a transparent lottery.
     pub fn lottery_wins(
         &self,
         channel_id: &ChannelId,
@@ -433,7 +432,7 @@ impl ChannelState {
         // 3. The ticket — public, same shape as PoL's
         //    `Poseidon2(LEAD_V1, nonce, slot, note_id, sk)` minus the secret
         //    `sk` (a transparent variant cannot include a secret the validator
-        //    can't see; see §3.7).
+        //    can't see).
         let ticket = Poseidon2Bn254Hasher::digest(&[
             *CHAN_LEAD_V1,
             *epoch_nonce,
@@ -495,7 +494,7 @@ impl ChannelState {
     /// Once `doublings` is large enough that `base << doublings >= p`, the
     /// threshold saturates at `p - 1` ("every staked note wins every slot"), so
     /// liveness needs only one online staker and no takeover message — exactly
-    /// like round-robin's timeout. See design doc §3.3.
+    /// like round-robin's timeout.
     fn widen(base: Fr, doublings: u64) -> BigUint {
         let max = &*P - BigUint::from(1u32);
         let base = Self::fr_to_biguint(base);

@@ -20,12 +20,12 @@ use crate::{
 /// Flips a channel into permissionless (stake-lottery) sequencing mode, or
 /// reconfigures its lottery parameters. Authorized by the same incumbent
 /// `configuration_threshold` multisig as [`super::config::ChannelConfigOp`], so
-/// the governance story is unchanged (design doc §2.2): a channel is born
-/// permissioned and its incumbents opt it into the lottery.
+/// the governance story is unchanged: a channel is born permissioned and its
+/// incumbents opt it into the lottery.
 ///
-/// This first pass only *enables/reconfigures* lottery mode; an existing stake
-/// registry is preserved across reconfiguration. Flipping a channel back to
-/// round-robin (which would need to unlock staked notes) is out of scope here.
+/// This op only enables or reconfigures lottery mode; an existing stake
+/// registry is preserved across reconfiguration. It does not flip a channel
+/// back to round-robin (which would require unlocking the staked notes).
 ///
 /// Unlike `CHANNEL_CONFIG`, this op does NOT splice `tip_message` — it is a
 /// sequencing-mode change, not a channel message, so it must not break the

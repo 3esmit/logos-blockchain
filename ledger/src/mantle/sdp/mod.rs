@@ -553,8 +553,7 @@ impl SdpLedger {
     }
 
     /// Replace the locked-notes overlay. Used by channel stake ops, which lock
-    /// notes for permissionless sequencing through the same global overlay
-    /// (design doc §2.4).
+    /// notes for permissionless sequencing through the same global overlay.
     pub fn set_locked_notes(&mut self, locked_notes: LockedNotes) {
         self.locked_notes = locked_notes;
     }

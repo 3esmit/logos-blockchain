@@ -17,16 +17,13 @@ use crate::{
 
 /// `CHANNEL_UNSTAKE` (opcode `0x15`).
 ///
-/// Flags a staked note as exiting. The entry becomes ineligible to win
-/// immediately (the latest-root analogue: stake that has left must not keep
-/// winning, design doc §3.4). The note remains locked until the unbonding
-/// delay elapses.
+/// Flags a staked note as exiting: the entry becomes ineligible to win
+/// immediately, so stake that has left can no longer keep winning.
 ///
-/// NOTE (first pass): the unbonding sweep that actually unlocks the note and
-/// prunes the entry once `current_epoch > unstaked_at + unbonding_epochs` is
-/// not yet wired into the epoch-boundary handler (`try_apply_header`). Until it
-/// is, an unstaked note stays locked — conservative and safe, but the stake is
-/// not yet reclaimable. See design doc §3.2.
+/// The note stays locked through the unbonding delay. Once
+/// `current_epoch >= unstaked_at + unbonding_epochs`, the epoch-boundary
+/// unbonding sweep prunes the entry and unlocks the note, making it spendable
+/// again.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ChannelUnstakeOp {
     pub channel_id: ChannelId,
@@ -138,8 +135,8 @@ impl Operation<ChannelUnstakeValidationContext<'_>> for ChannelUnstakeOp {
             channel_id: self.channel_id,
             note_id: self.note_id,
         })?;
-        // Ineligible from now (the latest-root analogue). The note is unlocked
-        // and the entry pruned later, after the unbonding delay.
+        // Mark the entry as exiting: ineligible to win from now on. The note
+        // stays locked until the epoch-boundary unbonding sweep releases it.
         entry.unstaked_at = Some(ctx.epoch);
         lottery.stakes = lottery.stakes.insert(self.note_id, entry);
 

@@ -48,7 +48,7 @@ struct LockedNote {
     services: HashSet<ServiceType>,
     /// Channels the note is staked in for permissionless sequencing. A note is
     /// spendable only once it is locked for neither any service nor any
-    /// channel. See [`super`] module docs and design doc §2.4.
+    /// channel. See [`super`] module docs.
     #[serde(default)]
     channels: HashSet<ChannelId>,
 }
@@ -117,7 +117,7 @@ impl LockedNotes {
     }
 
     /// Lock `note` so it cannot be spent while it is staked in `channel_id`
-    /// (permissionless sequencing, design doc §2.4). Mirrors [`Self::lock`] but
+    /// (permissionless sequencing). Mirrors [`Self::lock`] but
     /// keyed per-channel; reuses the same map so the single spend gate
     /// ([`crate::mantle::ledger::Inputs::validate`]) stays unchanged.
     pub fn lock_for_channel(

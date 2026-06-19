@@ -716,8 +716,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
         .map(|op| match op {
             // Tag byte + Ed25519SigProof. A LotteryWin proof is larger (adds a
             // 32-byte note id) but is indistinguishable from the op alone;
-            // under-prediction is harmless while storage gas is 0. TODO: tighten
-            // before enabling non-zero storage gas prices.
+            // under-prediction is harmless while storage gas is 0.
             Op::ChannelInscribe(_) => 1 + ED25519_SIG_BYTES,
 
             // ChannelMultiSigProof — for an existing channel, threshold sigs;

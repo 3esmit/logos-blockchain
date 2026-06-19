@@ -275,10 +275,6 @@ pub enum OpProof {
     },
     PoC(Groth16LeaderClaimProof),
     ChannelMultiSigProof(ChannelMultiSigProof),
-    /// Proof for an inscription on a lottery channel (Variant A, transparent):
-    /// names the staked note claiming the win, plus the posting key's signature
-    /// over the tx hash. The win itself is checked by re-deriving the public
-    /// ticket in [`crate::mantle::channel::ChannelState::lottery_wins`].
     LotteryWin {
         note_id: crate::mantle::NoteId,
         sig: Ed25519Signature,

@@ -117,7 +117,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             // Check that the signer is the authorized one. This is the single
             // permissioned/permissionless gate: round-robin channels check the
             // signer against the scheduled accredited key; lottery channels
-            // check that the named staked note won the slot (design doc §3.5).
+            // check that the named staked note won the slot.
             if channel.lottery.is_some() {
                 let note_id = ctx.lottery_note_id.ok_or(Error::MissingLotteryProof {
                     channel_id: self.channel_id,
@@ -191,7 +191,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 withdrawal_nonce: 0,
                 posting_timeout: 0.into(),
                 // A channel is born permissioned; it flips to lottery mode via
-                // CHANNEL_CONFIG (design doc §2.2).
+                // CHANNEL_LOTTERY_CONFIG.
                 lottery: None,
             });
 

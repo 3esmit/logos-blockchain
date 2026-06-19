@@ -164,7 +164,61 @@ impl LedgerState {
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
+
+        // On an epoch boundary, release any lottery stakes whose unbonding delay
+        // has elapsed: prune the registry entry and unlock the note.
+        if epoch_state.epoch > last_epoch_state.epoch {
+            self.sweep_unbonded_stakes(epoch_state.epoch);
+        }
+
         Ok((self, reward_utxos))
+    }
+
+    /// Release stakes whose unbonding delay has elapsed.
+    ///
+    /// For every lottery channel, an entry that was unstaked at least
+    /// `unbonding_epochs` ago (`current_epoch >= unstaked_at + unbonding_epochs`)
+    /// is removed from the stake registry and its note is unlocked, becoming
+    /// spendable again. Run once per epoch boundary from [`Self::try_apply_header`].
+    pub(crate) fn sweep_unbonded_stakes(&mut self, current_epoch: Epoch) {
+        let mut locked_notes = self.sdp.locked_notes().clone();
+        let mut released = false;
+
+        let channel_ids: Vec<_> = self.channels.channels.iter().map(|(id, _)| *id).collect();
+        for channel_id in channel_ids {
+            let Some(channel) = self.channels.channels.get_mut(&channel_id) else {
+                continue;
+            };
+            let Some(lottery) = channel.lottery.as_mut() else {
+                continue;
+            };
+            let unbonding = lottery.unbonding_epochs;
+
+            // Entries whose unbonding window has closed by `current_epoch`. The
+            // threshold is computed with a saturating add so a large
+            // `unbonding_epochs` can never panic block application.
+            let due: Vec<NoteId> = lottery
+                .stakes
+                .iter()
+                .filter_map(|(note_id, entry)| {
+                    let unstaked_at = entry.unstaked_at?;
+                    let release_at = u32::from(unstaked_at).saturating_add(unbonding);
+                    (u32::from(current_epoch) >= release_at).then_some(*note_id)
+                })
+                .collect();
+
+            for note_id in &due {
+                lottery.stakes = lottery.stakes.remove(note_id);
+                // A note free of this lock (e.g. never locked) is a no-op, not
+                // an error.
+                let _ = locked_notes.unlock_for_channel(&channel_id, note_id);
+                released = true;
+            }
+        }
+
+        if released {
+            self.sdp.set_locked_notes(locked_notes);
+        }
     }
 
     pub fn try_apply_channel_inscription(

@@ -3,8 +3,8 @@
     reason = "`ZoneSequencer`'s public API lives in zone_sequencer.rs; internal handlers live here."
 )]
 
-use lb_common_http_client::{ProcessedBlockEvent, Slot};
-use lb_core::mantle::channel::ChannelState;
+use lb_common_http_client::{Epoch, ProcessedBlockEvent, Slot};
+use lb_core::mantle::{NoteId, channel::ChannelState};
 use tracing::{debug, error, warn};
 
 use super::{
@@ -186,8 +186,33 @@ where
         self.own_key_index = channel
             .as_ref()
             .and_then(|channel| self.own_key_index_for(channel));
+        self.own_lottery_note = channel
+            .as_ref()
+            .and_then(|channel| self.own_lottery_note_for(channel));
+        // For lottery channels, cache the frozen epoch beacon used to re-derive
+        // wins. It is constant within an epoch, so refetching each block is
+        // cheap and self-corrects at epoch boundaries.
+        if channel.as_ref().is_some_and(|c| c.lottery.is_some()) {
+            match self.node.epoch_beacon().await {
+                Ok(beacon) => self.beacon = Some((Epoch::new(beacon.epoch), beacon.nonce)),
+                Err(err) => warn!(target: TARGET, "Failed to fetch epoch beacon: {err}"),
+            }
+        }
         self.channel_state = channel;
         Ok(())
+    }
+
+    /// For a lottery channel, the staked note whose `posting_key` is ours — the
+    /// credential we post wins with. `None` for round-robin channels or if we
+    /// have no (matured) stake registered.
+    fn own_lottery_note_for(&self, channel: &ChannelState) -> Option<NoteId> {
+        let lottery = channel.lottery.as_ref()?;
+        let our_pk = self.signing_key.public_key();
+        lottery
+            .stakes
+            .iter()
+            .find(|(_, entry)| entry.posting_key == our_pk)
+            .map(|(note_id, _)| *note_id)
     }
 
     fn channel_view(&self) -> SequencerChannelView {
@@ -342,6 +367,25 @@ where
             return true;
         };
 
+        // Lottery channels: we may post iff our staked note wins this slot,
+        // re-derived from the public beacon exactly as validators do.
+        if channel.lottery.is_some() {
+            let (Some(note_id), Some(beacon)) = (self.own_lottery_note, self.beacon.as_ref())
+            else {
+                return false;
+            };
+            return channel
+                .lottery_wins(
+                    &self.channel_id,
+                    &note_id,
+                    &self.signing_key.public_key(),
+                    current_slot,
+                    beacon,
+                )
+                .is_ok();
+        }
+
+        // Round-robin channels: it is our turn when the rotation lands on us.
         let Some(own_idx) = self.own_key_index else {
             return false;
         };
@@ -554,6 +598,7 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
+    use lb_groth16::Fr;
     use lb_http_api_common::queries::BlocksStreamQuery;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;
@@ -829,6 +874,15 @@ mod tests {
             })
         }
 
+        async fn epoch_beacon(
+            &self,
+        ) -> Result<lb_common_http_client::EpochBeacon, lb_common_http_client::Error> {
+            Ok(lb_common_http_client::EpochBeacon {
+                epoch: 0,
+                nonce: Fr::from(0u64),
+            })
+        }
+
         async fn channel_state(
             &self,
             _channel_id: ChannelId,
@@ -951,6 +1005,15 @@ mod tests {
                 genesis_time_unix_ms: 0,
                 current_slot: 0,
                 current_epoch: 0,
+            })
+        }
+
+        async fn epoch_beacon(
+            &self,
+        ) -> Result<lb_common_http_client::EpochBeacon, lb_common_http_client::Error> {
+            Ok(lb_common_http_client::EpochBeacon {
+                epoch: 0,
+                nonce: Fr::from(0u64),
             })
         }
 

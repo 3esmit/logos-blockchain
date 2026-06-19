@@ -184,6 +184,17 @@ pub struct ChainServiceInfo {
     pub mode: ChainServiceMode,
 }
 
+/// The frozen Cryptarchia epoch randomness `(epoch, nonce)` for the current epoch.
+///
+/// The same beacon Proof-of-Leadership and the channel stake-lottery verify
+/// against; exposed over HTTP so off-chain sequencers can re-derive lottery wins.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EpochBeacon {
+    pub epoch: u32,
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub nonce: lb_groth16::Fr,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

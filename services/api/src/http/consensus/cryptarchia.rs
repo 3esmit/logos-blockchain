@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use futures::{StreamExt as _, TryStreamExt as _};
-use lb_chain_service::{ChainServiceInfo, ConsensusMsg, CryptarchiaConsensus};
+use lb_chain_service::{ChainServiceInfo, ConsensusMsg, CryptarchiaConsensus, EpochBeacon};
 use lb_core::{header::HeaderId, mantle::SignedMantleTx};
 use lb_ledger::LedgerState;
 use lb_storage_service::backends::rocksdb::RocksBackend;
@@ -31,6 +31,38 @@ where
         .map_err(|(e, _)| e)?;
 
     Ok(receiver.await?)
+}
+
+/// The current epoch beacon `(epoch, nonce)`, derived from the epoch state for
+/// the tip's slot. Mirrors what validators use to verify lottery inscriptions.
+pub async fn epoch_beacon<RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<EpochBeacon, DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let ChainServiceInfo {
+        cryptarchia_info, ..
+    } = cryptarchia_info(handle).await?;
+
+    let relay = handle.relay().await?;
+    let (sender, receiver) = oneshot::channel();
+    relay
+        .send(ConsensusMsg::GetEpochState {
+            slot: cryptarchia_info.slot,
+            reply_channel: sender,
+        })
+        .await
+        .map_err(|(e, _)| e)?;
+
+    let epoch_state = receiver
+        .await?
+        .map_err(|e| -> DynError { e.to_string().into() })?;
+    Ok(EpochBeacon {
+        epoch: u32::from(epoch_state.epoch),
+        nonce: epoch_state.nonce,
+    })
 }
 
 const HEADERS_LIMIT: usize = 512;

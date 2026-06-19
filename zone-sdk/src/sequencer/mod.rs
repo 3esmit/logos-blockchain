@@ -59,6 +59,7 @@ mod zone_sequencer;
 pub(super) const TARGET: &str = lb_log_targets::zone_sdk::SEQUENCER;
 
 pub use handle::SequencerHandle;
+pub use tx_builder::create_stake_tx;
 pub use types::{
     AtomicWithdrawInfo, ChannelUpdate, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
     InscriptionId, InscriptionInfo, OrphanedTx, PendingTx, PublishResult, SequencerChannelView,

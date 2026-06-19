@@ -7,16 +7,17 @@ use std::{
 };
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
-use lb_common_http_client::{ProcessedBlockEvent, Slot};
+use lb_common_http_client::{Epoch, ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction as _,
+        NoteId, Op, SignedMantleTx, Transaction as _,
         channel::ChannelState,
         ops::channel::{ChannelId, MsgId, inscribe::Inscription},
         tx::TxHash,
     },
 };
+use lb_groth16::Fr;
 use lb_key_management_system_service::keys::Ed25519Key;
 use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
@@ -56,6 +57,12 @@ pub struct ZoneSequencer<Node> {
     pub(super) slot_clock: Option<SlotClock>,
     pub(super) channel_state: Option<ChannelState>,
     pub(super) own_key_index: Option<u16>,
+    // Lottery channels: the staked note bound to our posting key (the one we
+    // post wins with), and the frozen epoch beacon `(epoch, nonce)` used to
+    // re-derive lottery wins. Both refreshed alongside `channel_state`; `None`
+    // for round-robin channels or before our stake matures.
+    pub(super) own_lottery_note: Option<NoteId>,
+    pub(super) beacon: Option<(Epoch, Fr)>,
 
     // Block stream
     pub(super) blocks_stream: Option<BoxStream<ProcessedBlockEvent>>,
@@ -204,6 +211,8 @@ where
             slot_clock: None,
             channel_state: None,
             own_key_index: None,
+            own_lottery_note: None,
+            beacon: None,
             blocks_stream: None,
             connected: false,
             resubmit_interval,

@@ -3,8 +3,8 @@ use std::{collections::HashMap, pin::Pin};
 use async_trait::async_trait;
 use futures::{Stream, stream};
 use lb_common_http_client::{
-    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, EventPayload, Events,
-    ProcessedBlockEvent, Slot, TimeInfo,
+    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, EpochBeacon, Error, Event,
+    EventPayload, Events, ProcessedBlockEvent, Slot, TimeInfo,
 };
 use lb_core::{
     crypto::Hash,
@@ -32,6 +32,8 @@ pub trait Node {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, Error>;
 
     async fn time_info(&self) -> Result<TimeInfo, Error>;
+
+    async fn epoch_beacon(&self) -> Result<EpochBeacon, Error>;
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error>;
 
@@ -91,6 +93,10 @@ impl Node for NodeHttpClient {
 
     async fn time_info(&self) -> Result<TimeInfo, Error> {
         self.client.time_info(self.base_url.clone()).await
+    }
+
+    async fn epoch_beacon(&self) -> Result<EpochBeacon, Error> {
+        self.client.epoch_beacon(self.base_url.clone()).await
     }
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error> {

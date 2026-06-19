@@ -354,6 +354,15 @@ mod tests {
             })
         }
 
+        async fn epoch_beacon(
+            &self,
+        ) -> Result<lb_common_http_client::EpochBeacon, lb_common_http_client::Error> {
+            Ok(lb_common_http_client::EpochBeacon {
+                epoch: 0,
+                nonce: Fr::from(0u64),
+            })
+        }
+
         async fn channel_state(
             &self,
             _channel_id: ChannelId,

@@ -91,11 +91,20 @@ where
         self.ensure_ready()?;
 
         let parent = self.compute_publish_parent();
+        // On a lottery channel, name our staked note so the inscription carries
+        // a `LotteryWin` proof; `None` keeps round-robin's `Ed25519Sig`.
+        let lottery_note_id = self
+            .sequencer
+            .channel_state
+            .as_ref()
+            .filter(|channel| channel.lottery.is_some())
+            .and(self.sequencer.own_lottery_note);
         let (signed_tx, new_msg_id) = create_inscribe_tx(
             self.sequencer.channel_id,
             &self.sequencer.signing_key,
             data.clone(),
             parent,
+            lottery_note_id,
         );
         let id = signed_tx.mantle_tx.hash();
 

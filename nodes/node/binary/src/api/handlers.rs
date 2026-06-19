@@ -483,6 +483,16 @@ where
     make_request_and_return_response!(consensus::cryptarchia_info::<RuntimeServiceId>(&handle))
 }
 
+pub async fn epoch_beacon<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(consensus::epoch_beacon::<RuntimeServiceId>(&handle))
+}
+
 #[utoipa::path(
     get,
     path = paths::TIME_INFO,

@@ -2291,4 +2291,376 @@ mod tests {
             MantleError::Channel(ChannelError::InvalidParent { .. })
         ));
     }
+
+    // ===================================================================
+    // Lottery edge cases (ledger-level). Shared helpers below build a
+    // lottery channel, stake notes, and post lottery inscriptions, each
+    // returning a Result so both accept and reject paths are assertable.
+    // ===================================================================
+    use crate::mantle::{Error as LotteryLedgerError, LedgerState as LotteryMantleLedger};
+
+    /// A funded note owned by a deterministic zk key (distinct `seed` → distinct
+    /// key, note id, and posting domain).
+    fn lottery_note(seed: u8, value: u64) -> (ZkKey, Utxo) {
+        let zk = ZkKey::from(BigUint::from(u64::from(seed) + 1));
+        let mut op_id = [0u8; 32];
+        op_id[0] = seed;
+        let utxo = Utxo::new(op_id, 0, Note::new(value, zk.to_public_key()));
+        (zk, utxo)
+    }
+
+    /// Create a channel permissioned, then flip it to lottery mode with the given
+    /// parameters. Returns the mantle ledger ready for staking.
+    fn lottery_setup(
+        config: &Config,
+        cid: ChannelId,
+        incumbent: &Ed25519Key,
+        f_c: (u32, u32),
+        posting_timeout: u32,
+        min_stake: u64,
+    ) -> LotteryMantleLedger {
+        use lb_core::mantle::ops::channel::lottery_config::ChannelLotteryConfigOp;
+
+        let mantle = LedgerState::from_utxos([utxo()], config).mantle_ledger;
+
+        let create_op = InscriptionOp {
+            channel_id: cid,
+            inscription: b"genesis".into(),
+            parent: MsgId::root(),
+            signer: incumbent.public_key(),
+        };
+        let create_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(create_op.clone())]));
+        let create_hash = create_tx.hash();
+        let create_sig = incumbent.sign_payload(create_hash.as_signing_bytes().as_ref());
+        let (mantle, _) = mantle
+            .try_apply_channel_inscription(
+                &create_op,
+                &create_sig,
+                create_hash,
+                Slot::new(1),
+                (lb_cryptarchia_engine::Epoch::new(0), Fr::from(0u64)),
+                None,
+            )
+            .expect("create channel");
+
+        let cfg = ChannelLotteryConfigOp {
+            channel: cid,
+            f_c: lb_utils::math::NonNegativeRatio::new(f_c.0, f_c.1.try_into().unwrap()),
+            posting_timeout: posting_timeout.into(),
+            min_stake,
+            unbonding_epochs: 2,
+        };
+        let cfg_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelLotteryConfig(cfg.clone())]));
+        let cfg_hash = cfg_tx.hash();
+        let cfg_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
+            0,
+            incumbent.sign_payload(cfg_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+        mantle
+            .try_apply_channel_lottery_config(&cfg, &cfg_proof, &cfg_hash)
+            .expect("enable lottery")
+            .0
+    }
+
+    /// Apply a `CHANNEL_STAKE` (zk over the note + Ed25519 over the posting key).
+    fn lottery_stake(
+        mantle: LotteryMantleLedger,
+        cid: ChannelId,
+        zk: &ZkKey,
+        posting: &Ed25519Key,
+        note_id: NoteId,
+        utxo_tree: &UtxoTree,
+        epoch: u32,
+    ) -> Result<LotteryMantleLedger, LotteryLedgerError> {
+        use lb_core::mantle::ops::channel::stake::ChannelStakeOp;
+
+        let op = ChannelStakeOp {
+            channel_id: cid,
+            note_id,
+            posting_key: posting.public_key(),
+        };
+        let tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelStake(op.clone())]));
+        let hash = tx.hash();
+        let zk_sig = ZkKey::multi_sign(std::slice::from_ref(zk), &hash.to_fr()).unwrap();
+        let ed_sig = posting.sign_payload(hash.as_signing_bytes().as_ref());
+        mantle
+            .try_apply_channel_stake(
+                &op,
+                &zk_sig,
+                &ed_sig,
+                utxo_tree,
+                &hash,
+                lb_cryptarchia_engine::Epoch::new(epoch),
+            )
+            .map(|(m, _)| m)
+    }
+
+    /// Apply a lottery inscription. `note_id == None` omits the `LotteryWin`
+    /// proof (used to exercise the missing-proof path).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test helper threading the channel, parent, slot and beacon"
+    )]
+    fn lottery_inscribe(
+        mantle: LotteryMantleLedger,
+        cid: ChannelId,
+        posting: &Ed25519Key,
+        note_id: Option<NoteId>,
+        parent: MsgId,
+        slot: u64,
+        epoch: u32,
+        nonce: Fr,
+    ) -> Result<(LotteryMantleLedger, MsgId), LotteryLedgerError> {
+        let op = InscriptionOp {
+            channel_id: cid,
+            inscription: b"msg".into(),
+            parent,
+            signer: posting.public_key(),
+        };
+        let tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(op.clone())]));
+        let hash = tx.hash();
+        let mut msg = hash.as_signing_bytes().as_ref().to_vec();
+        if let Some(nid) = note_id {
+            msg.extend_from_slice(&lb_groth16::fr_to_bytes(&nid.0));
+        }
+        let sig = posting.sign_payload(&msg);
+        mantle
+            .try_apply_channel_inscription(
+                &op,
+                &sig,
+                hash,
+                Slot::new(slot),
+                (lb_cryptarchia_engine::Epoch::new(epoch), nonce),
+                note_id,
+            )
+            .map(|(m, _)| (m, op.id()))
+    }
+
+    #[test]
+    fn lottery_stake_below_minimum_is_rejected() {
+        use crate::mantle::channel::Error as ChErr;
+
+        let config = config();
+        let cid = ChannelId::from([21u8; 32]);
+        let incumbent = Ed25519Key::from_bytes(&[1u8; 32]);
+        let posting = Ed25519Key::from_bytes(&[2u8; 32]);
+        let mantle = lottery_setup(&config, cid, &incumbent, (1, 2), 0, 5_000);
+
+        let (zk_low, utxo_low) = lottery_note(10, 4_999); // below min_stake
+        let (zk_ok, utxo_ok) = lottery_note(11, 5_000); // exactly min_stake
+        let tree: UtxoTree = [utxo_low, utxo_ok]
+            .into_iter()
+            .fold(UtxoTree::default(), |t, u| t.insert(u.id(), u).0);
+
+        let err = lottery_stake(mantle.clone(), cid, &zk_low, &posting, utxo_low.id(), &tree, 0)
+            .expect_err("a stake below min_stake must be rejected");
+        assert!(matches!(
+            err,
+            LotteryLedgerError::Channel(ChErr::StakeBelowMinimum { .. })
+        ));
+
+        // The gate is `value < min_stake`, so a note exactly at the floor passes.
+        lottery_stake(mantle, cid, &zk_ok, &posting, utxo_ok.id(), &tree, 0)
+            .expect("a stake exactly at min_stake must be accepted");
+    }
+
+    #[test]
+    fn lottery_stake_inexistent_or_locked_note_is_rejected() {
+        use crate::mantle::channel::Error as ChErr;
+
+        let config = config();
+        let cid = ChannelId::from([22u8; 32]);
+        let incumbent = Ed25519Key::from_bytes(&[1u8; 32]);
+        let posting = Ed25519Key::from_bytes(&[2u8; 32]);
+        let mantle = lottery_setup(&config, cid, &incumbent, (1, 2), 0, 1);
+
+        let (zk, utxo) = lottery_note(30, 1_000);
+        let note_id = utxo.id();
+        let tree: UtxoTree = UtxoTree::default().insert(note_id, utxo).0;
+
+        // A note absent from the UTXO tree cannot be staked.
+        let (zk_missing, utxo_missing) = lottery_note(31, 1_000);
+        let err = lottery_stake(
+            mantle.clone(),
+            cid,
+            &zk_missing,
+            &posting,
+            utxo_missing.id(),
+            &tree,
+            0,
+        )
+        .expect_err("staking a note absent from the UTXO tree must be rejected");
+        assert!(matches!(
+            err,
+            LotteryLedgerError::Channel(ChErr::InexistingNote { .. })
+        ));
+
+        // Stake once; the note is now locked, so a second stake of it is rejected.
+        let mantle = lottery_stake(mantle, cid, &zk, &posting, note_id, &tree, 0)
+            .expect("first stake succeeds");
+        let err = lottery_stake(mantle, cid, &zk, &posting, note_id, &tree, 0)
+            .expect_err("re-staking a locked note must be rejected");
+        assert!(matches!(
+            err,
+            LotteryLedgerError::Channel(ChErr::NoteAlreadyLocked { .. })
+        ));
+    }
+
+    #[test]
+    fn lottery_below_threshold_loses_and_needs_widening() {
+        use crate::mantle::channel::Error as ChErr;
+
+        let config = config();
+        let incumbent = Ed25519Key::from_bytes(&[1u8; 32]);
+        let posting = Ed25519Key::from_bytes(&[2u8; 32]);
+        let nonce = Fr::from(7u64);
+        let (zk, utxo) = lottery_note(40, 1_000);
+        let note_id = utxo.id();
+        let tree: UtxoTree = UtxoTree::default().insert(note_id, utxo).0;
+
+        // Tiny f_c, NO widening (posting_timeout == 0): the threshold stays at its
+        // (tiny) base forever, so no slot — however far in the future — can win.
+        let cid0 = ChannelId::from([41u8; 32]);
+        let mantle0 = lottery_setup(&config, cid0, &incumbent, (1, 1_000_000), 0, 1);
+        let mantle0 = lottery_stake(mantle0, cid0, &zk, &posting, note_id, &tree, 0).expect("stake");
+        let tip0 = mantle0.channels().channel_state(&cid0).unwrap().tip_message;
+        let err = lottery_inscribe(mantle0, cid0, &posting, Some(note_id), tip0, 1_000_000, 2, nonce)
+            .expect_err("below threshold with no widening must lose");
+        assert!(matches!(
+            err,
+            LotteryLedgerError::Channel(ChErr::NotAWinner { .. })
+        ));
+
+        // Same tiny f_c, but WITH widening (posting_timeout == 4): a fresh slot
+        // still loses, yet a long silence widens the threshold into a win.
+        let cid1 = ChannelId::from([42u8; 32]);
+        let mantle1 = lottery_setup(&config, cid1, &incumbent, (1, 1_000_000), 4, 1);
+        let mantle1 = lottery_stake(mantle1, cid1, &zk, &posting, note_id, &tree, 0).expect("stake");
+        let tip1 = mantle1.channels().channel_state(&cid1).unwrap().tip_message;
+        let err =
+            lottery_inscribe(mantle1.clone(), cid1, &posting, Some(note_id), tip1, 3, 2, nonce)
+                .expect_err("a fresh slot below the (un-widened) threshold must lose");
+        assert!(matches!(
+            err,
+            LotteryLedgerError::Channel(ChErr::NotAWinner { .. })
+        ));
+        let (mantle1, _) =
+            lottery_inscribe(mantle1, cid1, &posting, Some(note_id), tip1, 1_000_000, 2, nonce)
+                .expect("widening after a long silence must win");
+        assert_ne!(
+            mantle1.channels().channel_state(&cid1).unwrap().tip_message,
+            tip1,
+            "the winning inscription advances the tip"
+        );
+    }
+
+    #[test]
+    fn lottery_multiple_winners_first_write_wins_and_chaining() {
+        use crate::mantle::channel::Error as ChErr;
+
+        let config = config();
+        let cid = ChannelId::from([50u8; 32]);
+        let incumbent = Ed25519Key::from_bytes(&[1u8; 32]);
+        // High f_c, NO widening → genuine (not widening-forced) multi-winner slots.
+        let mantle = lottery_setup(&config, cid, &incumbent, (1, 2), 0, 1);
+
+        let (zk_a, utxo_a) = lottery_note(60, 5_000);
+        let (zk_b, utxo_b) = lottery_note(61, 5_000);
+        let post_a = Ed25519Key::from_bytes(&[60u8; 32]);
+        let post_b = Ed25519Key::from_bytes(&[61u8; 32]);
+        let id_a = utxo_a.id();
+        let id_b = utxo_b.id();
+        let tree: UtxoTree = [utxo_a, utxo_b]
+            .into_iter()
+            .fold(UtxoTree::default(), |t, u| t.insert(u.id(), u).0);
+        let mantle = lottery_stake(mantle, cid, &zk_a, &post_a, id_a, &tree, 0).expect("stake A");
+        let mantle = lottery_stake(mantle, cid, &zk_b, &post_b, id_b, &tree, 0).expect("stake B");
+
+        let nonce = Fr::from(0x5151u64);
+        let beacon = (lb_cryptarchia_engine::Epoch::new(2), nonce);
+
+        // Find a slot where BOTH notes genuinely win (no widening involved).
+        let (both_win_slot, tip) = {
+            let channel = mantle.channels().channel_state(&cid).unwrap();
+            let slot = (2u64..2_000)
+                .find(|&s| {
+                    channel
+                        .lottery_wins(&cid, &id_a, &post_a.public_key(), Slot::new(s), &beacon)
+                        .is_ok()
+                        && channel
+                            .lottery_wins(&cid, &id_b, &post_b.public_key(), Slot::new(s), &beacon)
+                            .is_ok()
+                })
+                .expect("with f_c=1/2 and two equal stakers some slot has two winners");
+            (slot, channel.tip_message)
+        };
+
+        // First-valid-write-wins: A and B both win this slot and extend the same
+        // tip; the first applied lands, the second fails InvalidParent (on a real
+        // chain it is dropped at proposal, paying nothing).
+        let (mantle_after_a, msg_a) =
+            lottery_inscribe(mantle, cid, &post_a, Some(id_a), tip, both_win_slot, 2, nonce)
+                .expect("winner A lands");
+        let err = lottery_inscribe(
+            mantle_after_a.clone(),
+            cid,
+            &post_b,
+            Some(id_b),
+            tip,
+            both_win_slot,
+            2,
+            nonce,
+        )
+        .expect_err("winner B with the now-stale parent is rejected");
+        assert!(matches!(
+            err,
+            LotteryLedgerError::Channel(ChErr::InvalidParent { .. })
+        ));
+
+        // Chaining: B still posts in the SAME slot by extending A's fresh message,
+        // so both winners land in one slot.
+        let (mantle_chained, msg_b) = lottery_inscribe(
+            mantle_after_a,
+            cid,
+            &post_b,
+            Some(id_b),
+            msg_a,
+            both_win_slot,
+            2,
+            nonce,
+        )
+        .expect("winner B chains onto A in the same slot");
+        assert_eq!(
+            mantle_chained.channels().channel_state(&cid).unwrap().tip_message,
+            msg_b,
+            "the chained inscription advances the tip to B's message"
+        );
+        assert_ne!(msg_a, msg_b);
+    }
+
+    #[test]
+    fn lottery_inscription_without_proof_is_rejected() {
+        use crate::mantle::channel::Error as ChErr;
+
+        let config = config();
+        let cid = ChannelId::from([70u8; 32]);
+        let incumbent = Ed25519Key::from_bytes(&[1u8; 32]);
+        let posting = Ed25519Key::from_bytes(&[2u8; 32]);
+        let mantle = lottery_setup(&config, cid, &incumbent, (1, 2), 4, 1);
+        let (zk, utxo) = lottery_note(80, 1_000);
+        let note_id = utxo.id();
+        let tree: UtxoTree = UtxoTree::default().insert(note_id, utxo).0;
+        let mantle = lottery_stake(mantle, cid, &zk, &posting, note_id, &tree, 0).expect("stake");
+        let tip = mantle.channels().channel_state(&cid).unwrap().tip_message;
+
+        // A lottery-channel inscription that names no won note (LotteryWin proof
+        // absent) is rejected before the win is even evaluated.
+        let err = lottery_inscribe(mantle, cid, &posting, None, tip, 1_000_000, 2, Fr::from(1u64))
+            .expect_err("a lottery inscription without a LotteryWin proof is rejected");
+        assert!(matches!(
+            err,
+            LotteryLedgerError::Channel(ChErr::MissingLotteryProof { .. })
+        ));
+    }
 }

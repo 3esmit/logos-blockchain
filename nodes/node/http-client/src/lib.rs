@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
-pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
+pub use lb_chain_service::{
+    ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Epoch, EpochBeacon, Slot, State,
+};
 pub use lb_core::events::{Event, EventPayload, Events};
 use lb_core::{
     block::MAX_BLOCK_SIZE,
@@ -24,8 +26,8 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
-        BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX,
-        SDP_POST_DECLARATION, TIME_INFO,
+        BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, EPOCH_BEACON,
+        MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -304,6 +306,15 @@ impl CommonHttpClient {
             .join(TIME_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), TimeInfo>(request_url, None).await
+    }
+
+    /// Get the current epoch beacon (epoch index + frozen nonce) used to
+    /// re-derive channel lottery wins off-chain.
+    pub async fn epoch_beacon(&self, base_url: Url) -> Result<EpochBeacon, Error> {
+        let request_url = base_url
+            .join(EPOCH_BEACON.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), EpochBeacon>(request_url, None).await
     }
 
     /// Get channel state for a specific channel id.

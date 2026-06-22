@@ -678,12 +678,25 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
         if deserializer.is_human_readable() {
             #[derive(Deserialize)]
             struct SignedMantleTxHelper {
+                // `Serialize` emits `id` for human-readable formats, but it is
+                // derived from the tx contents and recomputed in `Self::new`.
+                // It is consumed and discarded here so the human-readable form
+                // round-trips and strict loaders that reject unconsumed fields
+                // (`serde_ignored` / `OnUnknownKeys::Fail`, used for the genesis
+                // block config) accept it. `default` keeps bodies that omit it
+                // deserializable.
+                #[serde(default, alias = "id")]
+                _id: TxHash,
                 mantle_tx: MantleTx,
                 ops_proofs: Vec<OpProof>,
             }
 
-            let helper = SignedMantleTxHelper::deserialize(deserializer)?;
-            Self::new(helper.mantle_tx, helper.ops_proofs).map_err(serde::de::Error::custom)
+            let SignedMantleTxHelper {
+                mantle_tx,
+                ops_proofs,
+                ..
+            } = SignedMantleTxHelper::deserialize(deserializer)?;
+            Self::new(mantle_tx, ops_proofs).map_err(serde::de::Error::custom)
         } else {
             let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
             decode_signed_mantle_tx(bytes.as_slice())
@@ -970,6 +983,37 @@ mod tests {
 
         let deserialized: SignedMantleTx = serde_json::from_value(value).unwrap();
         assert_eq!(deserialized, signed_tx);
+    }
+
+    #[test]
+    fn test_signed_mantle_tx_human_readable_has_no_ignored_fields() {
+        // The genesis block config embeds `SignedMantleTx`es and is loaded with
+        // a strict `serde_ignored` check (`OnUnknownKeys::Fail`) that aborts on
+        // any field the `Deserialize` impl does not consume. Every field emitted
+        // by `Serialize` (notably `id`) must therefore be consumed on the way
+        // back in, or the node fails to start.
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let inscribe_op = create_test_inscribe_op(&signing_key);
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
+
+        let tx_hash = mantle_tx.hash();
+        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+
+        let signed_tx =
+            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]).unwrap();
+
+        let value: serde_json::Value = serde_json::to_value(&signed_tx).unwrap();
+
+        let mut ignored = Vec::new();
+        let _: SignedMantleTx = serde_ignored::deserialize(value, |path| {
+            ignored.push(path.to_string());
+        })
+        .unwrap();
+
+        assert!(
+            ignored.is_empty(),
+            "human-readable serialization emits fields not consumed by deserialization: {ignored:?}"
+        );
     }
 
     #[test]

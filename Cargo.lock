@@ -4439,6 +4439,7 @@ dependencies = [
  "rand 0.8.6",
  "rpds",
  "serde",
+ "serde_ignored",
  "serde_json",
  "strum",
  "thiserror 2.0.18",

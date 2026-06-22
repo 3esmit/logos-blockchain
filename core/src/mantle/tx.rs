@@ -654,10 +654,12 @@ impl Serialize for SignedMantleTx {
         if serializer.is_human_readable() {
             #[derive(Serialize)]
             pub struct SignedMantleTxHelper<'a> {
+                pub id: TxHash,
                 pub mantle_tx: &'a MantleTx,
                 pub ops_proofs: &'a [OpProof],
             }
             SignedMantleTxHelper {
+                id: self.hash(),
                 mantle_tx: &self.mantle_tx,
                 ops_proofs: &self.ops_proofs,
             }
@@ -1104,6 +1106,72 @@ mod tests {
                 op_index: 0,
                 signature_index: 0
             })
+        );
+    }
+
+    /// Builds a `SignedMantleTx` carrying a single `ChannelConfig` op and
+    /// prints the human-readable (serde_json) body that the `POST
+    /// /mempool/add/tx` endpoint expects. Run with:
+    ///
+    ///   cargo test -p nomos-core build_channel_config_tx_json -- --nocapture
+    /// --include-ignored
+    ///
+    /// then paste the printed JSON into a curl `-d` payload.
+    #[test]
+    #[ignore = "prints a ready-to-curl JSON body, not a real assertion"]
+    fn build_channel_config_tx_json() {
+        use crate::mantle::ops::channel::config::ChannelConfigOp;
+
+        // ----- fill these in -----
+        // 32-byte channel id (serialized as 64 lowercase hex chars).
+        let channel = ChannelId::from([0x11; 32]);
+        // Accredited keys for the channel. Non-empty. Here derived from seed
+        // bytes; in practice use the real Ed25519 public keys.
+        let keys = [
+            Ed25519Key::from_bytes(&[1; 32]).public_key(),
+            Ed25519Key::from_bytes(&[2; 32]).public_key(),
+        ];
+        let posting_timeframe = 10u32;
+        let posting_timeout = 5u32;
+        let configuration_threshold = 1u16; // must be >= 1
+        let withdraw_threshold = 1u16; // must be >= 1
+        // -------------------------
+
+        let config_op = ChannelConfigOp {
+            channel,
+            keys: keys.into(),
+            posting_timeframe: posting_timeframe.into(),
+            posting_timeout: posting_timeout.into(),
+            configuration_threshold,
+            withdraw_threshold,
+        };
+
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelConfig(config_op)]);
+
+        // For a brand-new channel the config proof is not verified (neither at
+        // deserialization nor at ledger execution), so an empty multi-sig proof
+        // is a valid placeholder. The proofs count must still match the ops
+        // count. Reconfiguring an existing channel instead requires real
+        // signatures here.
+        let placeholder_proof = OpProof::ChannelMultiSigProof(
+            ChannelMultiSigProof::new(vec![]).expect("empty proof is well-formed"),
+        );
+
+        let signed_tx = SignedMantleTx::new(mantle_tx, vec![placeholder_proof])
+            .expect("config op + placeholder proof must pass construction-time verification");
+
+        // serde_json is human-readable, which is exactly what the axum
+        // `Json<SignedMantleTx>` extractor consumes.
+        let json = serde_json::to_string_pretty(&signed_tx).expect("serialize to json");
+
+        // Sanity check: the body round-trips back through the same path the
+        // endpoint uses.
+        let roundtrip: SignedMantleTx =
+            serde_json::from_str(&json).expect("body must deserialize like the endpoint does");
+        assert_eq!(roundtrip, signed_tx);
+
+        println!(
+            "\n===== POST /mempool/add/tx body =====\n{json}\n=====================================\n"
         );
     }
 }

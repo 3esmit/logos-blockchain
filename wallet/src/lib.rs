@@ -36,16 +36,37 @@ pub use crate::voucher::{Voucher, Vouchers};
 
 const LOG_TARGET: &str = wallet::CORE;
 
-/// A lightweight block information necessary for wallet
+/// A lightweight projection of a `Block<Tx>` carrying only what the wallet
+/// needs to mirror the ledger's effect on UTXOs and the SDP lock set.
+///
+/// The structure preserves the tx order that the ledger executes,
+/// because later txs (or ops) may depend on earlier ones.
 pub struct WalletBlock {
     pub id: HeaderId,
     pub parent: HeaderId,
     pub epoch: Epoch,
     pub voucher_cm: VoucherCm,
-    pub spent_notes: Vec<NoteId>,
-    pub transfers: Vec<TransferOp>,
-    pub locked_notes: HashSet<NoteId>,
-    pub unlocked_notes: HashSet<NoteId>,
+    pub txs: Vec<WalletTx>,
+}
+
+/// Wallet-relevant content of one transaction, in source order.
+#[derive(Clone, Debug, Default)]
+pub struct WalletTx {
+    pub ops: Vec<WalletOp>,
+}
+
+/// A wallet-relevant operation extracted from a block. Each variant
+/// carries exactly what `apply_block` needs to mirror the ledger's effect.
+#[derive(Clone, Debug)]
+pub enum WalletOp {
+    /// Spend `inputs`, create `outputs`.
+    Transfer(TransferOp),
+    /// Spend the depositted notes.
+    ChannelDeposit(Vec<NoteId>),
+    /// Mark this note as locked.
+    Lock(NoteId),
+    /// Mark this note as unlocked.
+    Unlock(NoteId),
 }
 
 impl WalletBlock {
@@ -55,41 +76,37 @@ impl WalletBlock {
         Tx: AuthenticatedMantleTx,
     {
         // TODO: handle inputs/outputs of ALL operations: https://github.com/logos-blockchain/logos-blockchain/issues/2627
-        let mut spent_notes = Vec::new();
-        let mut transfers = Vec::new();
-        let mut locked_notes = HashSet::new();
-        let mut unlocked_notes = HashSet::new();
-
-        for auth_tx in block.transactions() {
-            for op in auth_tx.mantle_tx().ops() {
-                match op {
-                    Op::ChannelDeposit(deposit) => {
-                        spent_notes.extend(deposit.inputs.iter().copied());
-                    }
-                    Op::Transfer(transfer) => {
-                        spent_notes.extend(transfer.inputs.iter().copied());
-                        transfers.push(transfer.clone());
-                    }
-                    Op::SDPDeclare(declaration) => {
-                        locked_notes.insert(declaration.locked_note_id);
-                    }
-                    Op::SDPWithdraw(withdrawal) => {
-                        unlocked_notes.insert(withdrawal.locked_note_id);
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let txs = block
+            .transactions()
+            .map(|auth_tx| {
+                let ops = auth_tx
+                    .mantle_tx()
+                    .ops()
+                    .iter()
+                    .filter_map(|op| match op {
+                        Op::Transfer(transfer) => Some(WalletOp::Transfer(transfer.clone())),
+                        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(
+                            deposit.inputs.iter().copied().collect(),
+                        )),
+                        Op::SDPDeclare(declaration) => {
+                            Some(WalletOp::Lock(declaration.locked_note_id))
+                        }
+                        Op::SDPWithdraw(withdrawal) => {
+                            Some(WalletOp::Unlock(withdrawal.locked_note_id))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                WalletTx { ops }
+            })
+            .collect();
 
         Self {
             id: block.header().id(),
             parent: block.header().parent(),
             epoch,
             voucher_cm: *block.header().leader_proof().voucher_cm(),
-            spent_notes,
-            transfers,
-            locked_notes,
-            unlocked_notes,
+            txs,
         }
     }
 }
@@ -243,34 +260,49 @@ impl WalletState {
         let mut pk_index = self.pk_index.clone();
         let mut locked_notes = self.locked_notes.clone();
 
-        for spent_id in &block.spent_notes {
-            remove_spent_utxo(spent_id, &mut utxos, &mut pk_index);
-        }
+        // Apply each tx & op in source order, as the same as how ledger processes them.
+        for tx in &block.txs {
+            for op in &tx.ops {
+                match op {
+                    WalletOp::Transfer(transfer) => {
+                        // When removing spent notes, we don't check if the notes are owned
+                        // by the wallet because they will be ignored automatically.
+                        for input_id in transfer.inputs.iter() {
+                            remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
+                        }
+                        for utxo in transfer.outputs.utxos(transfer) {
+                            if known_keys.contains_key(&utxo.note.pk) {
+                                let note_id = utxo.id();
+                                utxos = utxos.insert(note_id, utxo);
 
-        for transfer in &block.transfers {
-            // Add new UTXOs (outputs) - only if they belong to our known keys
-            for utxo in transfer.outputs.utxos(transfer) {
-                if known_keys.contains_key(&utxo.note.pk) {
-                    let note_id = utxo.id();
-                    utxos = utxos.insert(note_id, utxo);
-
-                    let note_set = pk_index
-                        .get(&utxo.note.pk)
-                        .cloned()
-                        .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
-                        .insert(note_id);
-                    pk_index = pk_index.insert(utxo.note.pk, note_set);
+                                let note_set = pk_index
+                                    .get(&utxo.note.pk)
+                                    .cloned()
+                                    .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
+                                    .insert(note_id);
+                                pk_index = pk_index.insert(utxo.note.pk, note_set);
+                            }
+                        }
+                    }
+                    WalletOp::ChannelDeposit(inputs) => {
+                        // When removing spent notes, we don't check if the notes are owned
+                        // by the wallet because they will be ignored automatically.
+                        for input_id in inputs {
+                            remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
+                        }
+                    }
+                    WalletOp::Lock(note_id) => {
+                        if utxos.contains_key(note_id) {
+                            locked_notes = locked_notes.insert(*note_id);
+                        }
+                    }
+                    WalletOp::Unlock(note_id) => {
+                        // When unlocking notes, we don't check if the notes are owned
+                        // by the wallet because they will be ignored automatically.
+                        locked_notes = locked_notes.remove(note_id);
+                    }
                 }
             }
-        }
-
-        for locked_note in &block.locked_notes {
-            if utxos.contains_key(locked_note) {
-                locked_notes = locked_notes.insert(*locked_note);
-            }
-        }
-        for unlocked_note in &block.unlocked_notes {
-            locked_notes = locked_notes.remove(unlocked_note);
         }
 
         let (vouchers, voucher_paths, voucher_paths_snapshot) =
@@ -720,11 +752,14 @@ mod tests {
             parent: genesis,
             epoch: 1.into(),
             voucher_cm: v1_cm,
-            spent_notes: vec![],
-            transfers: vec![transfer1.clone()],
-            locked_notes: HashSet::from([locked_note]),
-            // Unknown unlocked note that will be ignored
-            unlocked_notes: HashSet::from([NoteId::from(Fr::ONE)]),
+            txs: vec![WalletTx {
+                ops: vec![
+                    WalletOp::Transfer(transfer1.clone()),
+                    WalletOp::Lock(locked_note),
+                    // Unknown unlocked note that will be ignored
+                    WalletOp::Unlock(NoteId::from(Fr::ONE)),
+                ],
+            }],
         };
 
         wallet.apply_block(&block_1).unwrap();
@@ -736,21 +771,25 @@ mod tests {
         //  - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
         // - voucher v2 is ours -> should be tracked
         let alice_100_nmo_utxo = transfer1.outputs.utxo_by_index(0, &transfer1).unwrap();
+        let transfer2 = TransferOp {
+            inputs: Inputs::new([alice_100_nmo_utxo.id()]),
+            outputs: Outputs::new([Note::new(20, bob), Note::new(80, alice)]),
+        };
 
         let block_2 = WalletBlock {
             id: HeaderId::from([2; 32]),
             parent: block_1.id,
             epoch: 2.into(),
             voucher_cm: v2_cm,
-            spent_notes: vec![alice_100_nmo_utxo.id()],
-            transfers: vec![TransferOp {
-                inputs: Inputs::new([alice_100_nmo_utxo.id()]),
-                outputs: Outputs::new([Note::new(20, bob), Note::new(80, alice)]),
+            txs: vec![WalletTx {
+                ops: vec![
+                    WalletOp::Transfer(transfer2.clone()),
+                    // Unknown locked note that will be ignored
+                    WalletOp::Lock(NoteId::from(Fr::ONE)),
+                    // Unlock the previously locked note
+                    WalletOp::Unlock(locked_note),
+                ],
             }],
-            // Unknown locked note that will be ignored
-            locked_notes: HashSet::from([NoteId::from(Fr::ONE)]),
-            // Unlock the previously locked note
-            unlocked_notes: HashSet::from([locked_note]),
         };
         wallet.apply_block(&block_2).unwrap();
         assert_locked_notes(&wallet, block_2.id, []);
@@ -781,20 +820,16 @@ mod tests {
         // Block 3 (still, epoch 2)
         // - alice spends the 80 NMO note through a non-transfer operation.
         // - voucher v3 is not ours -> should not be tracked
-        let alice_80_nmo_utxo = block_2.transfers[0]
-            .outputs
-            .utxo_by_index(1, &block_2.transfers[0])
-            .unwrap();
+        let alice_80_nmo_utxo = transfer2.outputs.utxo_by_index(1, &transfer2).unwrap();
 
         let block_3 = WalletBlock {
             id: HeaderId::from([3; 32]),
             parent: block_2.id,
             epoch: 2.into(),
             voucher_cm: v3_cm,
-            spent_notes: vec![alice_80_nmo_utxo.id()],
-            transfers: vec![],
-            locked_notes: HashSet::new(),
-            unlocked_notes: HashSet::new(),
+            txs: vec![WalletTx {
+                ops: vec![WalletOp::ChannelDeposit(vec![alice_80_nmo_utxo.id()])],
+            }],
         };
         wallet.apply_block(&block_3).unwrap();
 
@@ -813,6 +848,121 @@ mod tests {
         assert_tracked_but_not_snapshotted_voucher(&wallet, block_3.id, &v2_cm);
         // v3 is not ours, so not tracked at all
         assert_not_tracked_voucher(&wallet, block_3.id, &v3_cm);
+    }
+
+    /// Two transfers within a single transaction where the second consumes
+    /// the first's change. After applying the block, the intermediate note
+    /// must not appear in the wallet's UTXO set — only the final change
+    /// note from the second transfer remains.
+    #[test]
+    fn test_apply_block_dependent_ops_within_tx() {
+        let alice = pk(1);
+        let bob = pk(2);
+        let genesis = HeaderId::from([0; 32]);
+        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
+        let (v_cm, _v_nf) = voucher(1, 0);
+
+        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(alice, 1), (bob, 2)],
+            Vouchers::default(),
+            genesis,
+            &genesis_ledger,
+        );
+
+        // Op A: mint 100 NMO to alice.
+        let transfer_a = TransferOp {
+            inputs: Inputs::empty(),
+            outputs: Outputs::new([Note::new(100, alice)]),
+        };
+        let intermediate = transfer_a
+            .outputs
+            .utxo_by_index(0, &transfer_a)
+            .unwrap()
+            .id();
+
+        // Op B: spend the 100 NMO note created by op A; send 30 to bob,
+        // 70 change back to alice.
+        let transfer_b = TransferOp {
+            inputs: Inputs::new([intermediate]),
+            outputs: Outputs::new([Note::new(30, bob), Note::new(70, alice)]),
+        };
+
+        let block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 1.into(),
+            voucher_cm: v_cm,
+            txs: vec![WalletTx {
+                ops: vec![
+                    WalletOp::Transfer(transfer_a),
+                    WalletOp::Transfer(transfer_b),
+                ],
+            }],
+        };
+        wallet.apply_block(&block).unwrap();
+
+        let alice_balance = wallet.balance(block.id, alice).unwrap().unwrap();
+        assert_eq!(alice_balance.balance, 70);
+        assert!(!alice_balance.notes.contains_key(&intermediate));
+
+        let bob_balance = wallet.balance(block.id, bob).unwrap().unwrap();
+        assert_eq!(bob_balance.balance, 30);
+    }
+
+    /// Two transactions in the same block where the second consumes a
+    /// note the first produced. The wallet must end up matching the ledger:
+    /// only the final change is tracked.
+    #[test]
+    fn test_apply_block_dependent_ops_across_txs() {
+        let alice = pk(1);
+        let bob = pk(2);
+        let genesis = HeaderId::from([0; 32]);
+        let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
+        let (v_cm, _v_nf) = voucher(1, 0);
+
+        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(alice, 1), (bob, 2)],
+            Vouchers::default(),
+            genesis,
+            &genesis_ledger,
+        );
+
+        let transfer_a = TransferOp {
+            inputs: Inputs::empty(),
+            outputs: Outputs::new([Note::new(100, alice)]),
+        };
+        let intermediate = transfer_a
+            .outputs
+            .utxo_by_index(0, &transfer_a)
+            .unwrap()
+            .id();
+        let transfer_b = TransferOp {
+            inputs: Inputs::new([intermediate]),
+            outputs: Outputs::new([Note::new(30, bob), Note::new(70, alice)]),
+        };
+
+        let block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 1.into(),
+            voucher_cm: v_cm,
+            txs: vec![
+                WalletTx {
+                    ops: vec![WalletOp::Transfer(transfer_a)],
+                },
+                WalletTx {
+                    ops: vec![WalletOp::Transfer(transfer_b)],
+                },
+            ],
+        };
+        wallet.apply_block(&block).unwrap();
+
+        let alice_balance = wallet.balance(block.id, alice).unwrap().unwrap();
+        assert_eq!(alice_balance.balance, 70);
+        assert!(!alice_balance.notes.contains_key(&intermediate));
+
+        let bob_balance = wallet.balance(block.id, bob).unwrap().unwrap();
+        assert_eq!(bob_balance.balance, 30);
     }
 
     #[test]

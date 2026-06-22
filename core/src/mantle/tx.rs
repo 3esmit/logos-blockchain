@@ -931,6 +931,48 @@ mod tests {
     }
 
     #[test]
+    fn test_signed_mantle_tx_serialize_includes_id() {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let inscribe_op = create_test_inscribe_op(&signing_key);
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
+
+        let tx_hash = mantle_tx.hash();
+        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+
+        let signed_tx =
+            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]).unwrap();
+
+        let value: serde_json::Value = serde_json::to_value(&signed_tx).unwrap();
+
+        // The human-readable form must expose the tx id, equal to its hash.
+        assert_eq!(
+            value.get("id"),
+            Some(&serde_json::to_value(signed_tx.hash()).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_signed_mantle_tx_deserialize_without_id() {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let inscribe_op = create_test_inscribe_op(&signing_key);
+        let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
+
+        let tx_hash = mantle_tx.hash();
+        let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+
+        let signed_tx =
+            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]).unwrap();
+
+        // Drop the `id` field: it is informational only and must remain optional
+        // on the wire so older/clients that omit it still deserialize.
+        let mut value: serde_json::Value = serde_json::to_value(&signed_tx).unwrap();
+        assert!(value.as_object_mut().unwrap().remove("id").is_some());
+
+        let deserialized: SignedMantleTx = serde_json::from_value(value).unwrap();
+        assert_eq!(deserialized, signed_tx);
+    }
+
+    #[test]
     fn test_signed_mantle_tx_deserialize_with_missing_proof() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
@@ -1110,10 +1152,10 @@ mod tests {
     }
 
     /// Builds a `SignedMantleTx` carrying a single `ChannelConfig` op and
-    /// prints the human-readable (serde_json) body that the `POST
+    /// prints the human-readable (`serde_json`) body that the `POST
     /// /mempool/add/tx` endpoint expects. Run with:
     ///
-    ///   cargo test -p nomos-core build_channel_config_tx_json -- --nocapture
+    ///   cargo test -p nomos-core `build_channel_config_tx_json` -- --nocapture
     /// --include-ignored
     ///
     /// then paste the printed JSON into a curl `-d` payload.

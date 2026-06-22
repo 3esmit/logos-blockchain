@@ -1005,10 +1005,12 @@ mod tests {
         let value: serde_json::Value = serde_json::to_value(&signed_tx).unwrap();
 
         let mut ignored = Vec::new();
-        let _: SignedMantleTx = serde_ignored::deserialize(value, |path| {
-            ignored.push(path.to_string());
-        })
-        .unwrap();
+        drop::<SignedMantleTx>(
+            serde_ignored::deserialize(value, |path| {
+                ignored.push(path.to_string());
+            })
+            .unwrap(),
+        );
 
         assert!(
             ignored.is_empty(),

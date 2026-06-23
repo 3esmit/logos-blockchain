@@ -344,7 +344,6 @@ mod mantle_test_vectors {
             Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([2u8; 32]),
                 outputs: Outputs::new([Note::new(500, zk_pk(12))]),
-                withdraw_nonce: 7,
             }),
             // LeaderClaim (0x30)
             Op::LeaderClaim(LeaderClaimOp {

@@ -107,12 +107,8 @@ pub enum Error {
     InsufficientFunds,
     #[error("Balance overflow")]
     BalanceOverflow,
-    #[error("The withdraw nonce doesn't correspond to the channel state")]
-    InvalidWithdrawNonce,
     #[error("The Channel Config isn't well formed")]
     InvalidChannelConfig,
-    #[error("Withdraw Nonce overflow")]
-    WithdrawNonceOverflow,
     #[error("Inputs error: {0}")]
     Inputs(#[from] ledger::InputsError),
     #[error("Outputs error: {0}")]
@@ -153,7 +149,6 @@ pub struct ChannelState {
 
     // Bridging
     pub balance: Value,
-    pub withdrawal_nonce: u32,
     pub withdraw_threshold: ChannelKeyIndex, /* indicating how many keys are required to
                                               * withdraw
                                               * funds from the channel */
@@ -277,7 +272,6 @@ mod tests {
             posting_timeframe: SlotTimeframe(posting_timeframe),
             posting_timeout: SlotTimeout(posting_timeout),
             balance: 0,
-            withdrawal_nonce: 0,
             accredited_keys: Keys::try_from((0..num_keys).map(test_public_key).collect::<Vec<_>>())
                 .unwrap()
                 .into(),
@@ -323,7 +317,6 @@ mod tests {
                         posting_timeframe: 0u32.into(),
                         balance,
                         withdraw_threshold: 1,
-                        withdrawal_nonce: 0,
                         posting_timeout: 0u32.into(),
                     },
                 ),
@@ -351,7 +344,6 @@ mod tests {
                         posting_timeframe: 0u32.into(),
                         balance: 5,
                         withdraw_threshold: 1,
-                        withdrawal_nonce: 0,
                         posting_timeout: 0u32.into(),
                     },
                 )
@@ -368,7 +360,6 @@ mod tests {
                         posting_timeframe: 0.into(),
                         balance: 9,
                         withdraw_threshold: 2,
-                        withdrawal_nonce: 0,
                         posting_timeout: 0.into(),
                     },
                 ),
@@ -444,7 +435,6 @@ mod tests {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
-            withdraw_nonce: 0,
         };
 
         let utxo_tree = utxo_tree(vec![utxo]);
@@ -476,7 +466,6 @@ mod tests {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
-            withdraw_nonce: 0,
         };
 
         let utxo_tree = utxo_tree(vec![utxo]);
@@ -501,7 +490,6 @@ mod tests {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
-            withdraw_nonce: 0,
         };
 
         let utxo_tree = utxo_tree(vec![utxo]);

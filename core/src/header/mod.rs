@@ -414,7 +414,6 @@ mod block_root_test_vectors {
                 tx(Op::ChannelWithdraw(ChannelWithdrawOp {
                     channel_id: ChannelId::from([2u8; 32]),
                     outputs: Outputs::new([Note::new(500, zk_pk(12))]),
-                    withdraw_nonce: 7,
                 })),
             ),
             // SDPDeclare (0x20)

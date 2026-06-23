@@ -341,7 +341,6 @@ mod tests {
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
             outputs: Outputs::new([withdraw_note]),
-            withdraw_nonce: 0,
         };
 
         // Init a tx builder
@@ -452,7 +451,6 @@ mod tests {
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
                 outputs: Outputs::new([withdraw_note]),
-                withdraw_nonce: 0,
             }))
             .unwrap()
             .push_op(Op::LeaderClaim(LeaderClaimOp {

@@ -451,7 +451,6 @@ mod tests {
         let withdraw = ChannelWithdrawOp {
             channel_id: ChannelId::from([0; 32]),
             outputs: Outputs::new([Note::new(10, pk(1)), Note::new(20, pk(2))]),
-            withdraw_nonce: 0,
         };
 
         let tx = SignedMantleTx::new_unverified(

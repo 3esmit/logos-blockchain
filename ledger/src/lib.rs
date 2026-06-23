@@ -1184,7 +1184,6 @@ mod tests {
         let withdraw = ChannelWithdrawOp {
             channel_id,
             outputs: Outputs::new([withdraw_note]),
-            withdraw_nonce: 0,
         };
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
         let withdraw_tx_hash = withdraw_tx.hash();
@@ -1271,7 +1270,6 @@ mod tests {
         let withdraw = ChannelWithdrawOp {
             channel_id,
             outputs: Outputs::new([withdraw_note]),
-            withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());

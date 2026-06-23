@@ -1336,7 +1336,6 @@ mod tests {
             ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
                 outputs: Outputs::new([note1, note2]),
-                withdraw_nonce: 0,
             },
         )]));
         let tx_hash = mantle_tx.hash();

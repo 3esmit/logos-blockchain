@@ -774,12 +774,10 @@ mod tests {
         let withdraw_for_us = ChannelWithdrawOp {
             channel_id,
             outputs: outputs.clone(),
-            withdraw_nonce: 7,
         };
         let withdraw_other = ChannelWithdrawOp {
             channel_id: other_channel,
             outputs,
-            withdraw_nonce: 0,
         };
 
         let tx = unverified_tx_with_ops(vec![
@@ -797,7 +795,6 @@ mod tests {
             FinalizedOp::Withdraw(w) => {
                 assert_eq!(w.tx_hash, tx_hash);
                 assert_eq!(w.op.channel_id, channel_id);
-                assert_eq!(w.op.withdraw_nonce, 7);
             }
             other => panic!("expected Withdraw, got {other:?}"),
         }

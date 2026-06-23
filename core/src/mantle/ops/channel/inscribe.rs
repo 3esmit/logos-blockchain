@@ -157,7 +157,6 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 posting_timeframe: 0.into(),
                 balance: 0,
                 withdraw_threshold: crate::mantle::channel::DEFAULT_WITHDRAW_THRESHOLD,
-                withdrawal_nonce: 0,
                 posting_timeout: 0.into(),
             });
 

@@ -1308,7 +1308,6 @@ pub async fn submit_zone_withdraw(
     let withdraw = ChannelWithdrawOp {
         channel_id,
         outputs: Outputs::new([Note::new(amount, funding_public_key)]),
-        withdraw_nonce: 0,
     };
 
     let (tx, msg_id, inscription_sig) = client

@@ -721,7 +721,6 @@ mod tests {
                         posting_timeframe: 0u32.into(),
                         posting_timeout: 0u32.into(),
                         balance: 0,
-                        withdrawal_nonce: 0,
                         withdraw_threshold: 1,
                     }),
                 },
@@ -949,7 +948,6 @@ mod tests {
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
             outputs,
-            withdraw_nonce: 0,
         };
         let inscribe_op = InscriptionOp {
             channel_id,
@@ -1339,7 +1337,6 @@ mod tests {
             posting_timeframe: 0u32.into(),
             posting_timeout: 0u32.into(),
             balance: 0,
-            withdrawal_nonce: 0,
             withdraw_threshold: 1,
         });
 

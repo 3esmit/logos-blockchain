@@ -18,7 +18,6 @@ use crate::{
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub outputs: Outputs,
-    pub withdraw_nonce: u32,
 }
 
 impl OpId for ChannelWithdrawOp {
@@ -32,7 +31,6 @@ impl NomEncode for ChannelWithdrawOp {
         let mut bytes = Vec::new();
         bytes.extend(self.channel_id.encode());
         bytes.extend(NomOutputs::from(self.outputs.as_ref()).encode());
-        bytes.extend(self.withdraw_nonce.encode());
         bytes
     }
 }
@@ -43,13 +41,11 @@ impl NomDecode for ChannelWithdrawOp {
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let (bytes, channel_id) = ChannelId::decode(bytes)?;
         let (bytes, outputs) = NomOutputs::decode(bytes)?;
-        let (bytes, withdraw_nonce) = u32::decode(bytes)?;
         Ok((
             bytes,
             Self {
                 channel_id,
                 outputs: Outputs::new(outputs),
-                withdraw_nonce,
             },
         ))
     }
@@ -84,16 +80,13 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
             });
         }
 
-        // Check that the withdrawal nonce is correct
+        // Get the Channel
         let channel = ctx
             .channels
             .channels
             .get(&self.channel_id)
             .cloned()
             .expect("we checked that the channel exist above");
-        if channel.withdrawal_nonce != self.withdraw_nonce {
-            return Err(Error::InvalidWithdrawNonce);
-        }
 
         // Check that the channel has enough funds
         let amount = self.outputs.amount()?;
@@ -134,16 +127,12 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         // Get the amount withdraw
         let amount_withdraw = self.outputs.amount()?;
 
-        // Decrease the balance of the channel and increase the withdrawal nonce
+        // Decrease the balance of the channel
         if let Some(channel) = ctx.channels.channels.get_mut(&self.channel_id) {
             channel.balance = channel
                 .balance
                 .checked_sub(amount_withdraw)
                 .ok_or(Error::InsufficientFunds)?;
-            channel.withdrawal_nonce = channel
-                .withdrawal_nonce
-                .checked_add(1)
-                .ok_or(Error::WithdrawNonceOverflow)?;
             Ok(self)
         } else {
             Err(Error::ChannelNotFound {

@@ -645,7 +645,6 @@ where
             )));
         }
         let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
-        let mut next_nonce = channel_state.withdrawal_nonce;
 
         let parent = self.compute_publish_parent();
 
@@ -655,13 +654,9 @@ where
             let op = ChannelWithdrawOp {
                 channel_id: self.channel_id,
                 outputs: arg.outputs,
-                withdraw_nonce: next_nonce,
             };
             withdraw_ops.push(op.clone());
             ops.push(Op::ChannelWithdraw(op));
-            next_nonce = next_nonce
-                .checked_add(1)
-                .ok_or_else(|| Error::Network("withdraw nonce overflow".into()))?;
         }
 
         let inscription_op = InscriptionOp {

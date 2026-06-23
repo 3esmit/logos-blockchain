@@ -249,7 +249,10 @@ impl WalletState {
 
         for transfer in &block.transfers {
             // Add new UTXOs (outputs) - only if they belong to our known keys
-            for utxo in transfer.outputs.utxos(transfer) {
+            for utxo in transfer
+                .outputs
+                .utxos(transfer, vec![None; transfer.outputs.len()])
+            {
                 if known_keys.contains_key(&utxo.note.pk) {
                     let note_id = utxo.id();
                     utxos = utxos.insert(note_id, utxo);
@@ -630,9 +633,9 @@ mod tests {
 
         let ledger = LedgerState::from_utxos(
             [
-                Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
-                Utxo::new(tx_hash(0), 1, Note::new(20, bob)),
-                Utxo::new(tx_hash(0), 2, Note::new(4, alice)),
+                Utxo::new(tx_hash(0), 0, None, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 1, None, Note::new(20, bob)),
+                Utxo::new(tx_hash(0), 2, None, Note::new(4, alice)),
             ],
             &ledger_config(),
         );
@@ -713,7 +716,11 @@ mod tests {
             outputs: Outputs::new([Note::new(100, alice), Note::new(4, alice)]),
         };
         // immediately lock the 2nd note from `transfer1`
-        let locked_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
+        let locked_note = transfer1
+            .outputs
+            .utxo_by_index(1, &transfer1, None)
+            .unwrap()
+            .id();
 
         let block_1 = WalletBlock {
             id: HeaderId::from([1; 32]),
@@ -735,7 +742,10 @@ mod tests {
         // Block 2 (epoch 2) -- epoch transition snapshots v1's path as claimable
         //  - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
         // - voucher v2 is ours -> should be tracked
-        let alice_100_nmo_utxo = transfer1.outputs.utxo_by_index(0, &transfer1).unwrap();
+        let alice_100_nmo_utxo = transfer1
+            .outputs
+            .utxo_by_index(0, &transfer1, None)
+            .unwrap();
 
         let block_2 = WalletBlock {
             id: HeaderId::from([2; 32]),
@@ -783,7 +793,7 @@ mod tests {
         // - voucher v3 is not ours -> should not be tracked
         let alice_80_nmo_utxo = block_2.transfers[0]
             .outputs
-            .utxo_by_index(1, &block_2.transfers[0])
+            .utxo_by_index(1, &block_2.transfers[0], None)
             .unwrap();
 
         let block_3 = WalletBlock {
@@ -818,8 +828,8 @@ mod tests {
     #[test]
     fn test_fund_tx_with_change() {
         let alice = pk(1);
-        let utxo1 = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let utxo2 = Utxo::new(tx_hash(0), 1, Note::new(5000, alice));
+        let utxo1 = Utxo::new(tx_hash(0), 0, None, Note::new(5000, alice));
+        let utxo2 = Utxo::new(tx_hash(0), 1, None, Note::new(5000, alice));
         let ledger_state = LedgerState::from_utxos([utxo1, utxo2], &ledger_config());
 
         let mut wallet_state =
@@ -870,10 +880,10 @@ mod tests {
         let alice = pk(1);
         let ledger_state = LedgerState::from_utxos(
             [
-                Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
-                Utxo::new(tx_hash(0), 1, Note::new(100, alice)),
-                Utxo::new(tx_hash(0), 2, Note::new(100, alice)),
-                Utxo::new(tx_hash(0), 3, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 0, None, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 1, None, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 2, None, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 3, None, Note::new(100, alice)),
             ],
             &ledger_config(),
         );
@@ -932,7 +942,7 @@ mod tests {
     #[test]
     fn test_fund_tx_all_locked_notes() {
         let alice = pk(1);
-        let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
+        let utxo = Utxo::new(tx_hash(0), 0, None, Note::new(5000, alice));
         let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
 
         let mut wallet_state =
@@ -956,7 +966,7 @@ mod tests {
         let alice = pk(1);
         let bob = pk(2);
         let ledger_state = LedgerState::from_utxos(
-            [Utxo::new(tx_hash(0), 0, Note::new(1_000_000, bob))],
+            [Utxo::new(tx_hash(0), 0, None, Note::new(1_000_000, bob))],
             &ledger_config(),
         );
 
@@ -996,7 +1006,7 @@ mod tests {
             754,
             tx_builder
                 .clone()
-                .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
+                .add_ledger_input(Utxo::new(tx_hash(0), 0, None, Note::new(0, pk(0))))
                 .unwrap()
                 .gas_cost::<Gas>()
                 .unwrap()
@@ -1008,7 +1018,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(754, alice))],
+                [Utxo::new(tx_hash(0), 0, None, Note::new(754, alice))],
                 &ledger_config(),
             ),
         );
@@ -1033,7 +1043,7 @@ mod tests {
             794,
             tx_builder
                 .clone()
-                .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
+                .add_ledger_input(Utxo::new(tx_hash(0), 0, None, Note::new(0, pk(0))))
                 .unwrap()
                 .with_dummy_change_note()
                 .unwrap()
@@ -1049,7 +1059,7 @@ mod tests {
             let wallet_state = WalletState::from_ledger(
                 &HashMap::from_iter([(alice, 1)]),
                 &LedgerState::from_utxos(
-                    [Utxo::new(tx_hash(0), 0, Note::new(value, alice))],
+                    [Utxo::new(tx_hash(0), 0, None, Note::new(value, alice))],
                     &ledger_config(),
                 ),
             );
@@ -1066,7 +1076,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(795, alice))],
+                [Utxo::new(tx_hash(0), 0, None, Note::new(795, alice))],
                 &ledger_config(),
             ),
         );

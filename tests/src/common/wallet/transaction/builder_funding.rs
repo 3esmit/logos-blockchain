@@ -334,7 +334,12 @@ mod tests {
 
         let account = WalletAccount::deterministic(1, 2_000_000, false)
             .expect("test wallet account should build");
-        let funding_utxo = Utxo::new([7u8; 32], 0, Note::new(2_000_000, account.public_key()));
+        let funding_utxo = Utxo::new(
+            [7u8; 32],
+            0,
+            None,
+            Note::new(2_000_000, account.public_key()),
+        );
         let funding_source = WalletFundingSource::new(account, vec![funding_utxo]);
 
         let funded_builder =

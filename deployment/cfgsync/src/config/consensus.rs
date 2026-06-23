@@ -80,6 +80,7 @@ fn create_utxos(
         utxos.push(Utxo {
             note: Note::new(faucet_value, faucet_pk),
             op_id: [0u8; 32],
+            channel_id: None,
             output_index,
         });
         FaucetInfo {

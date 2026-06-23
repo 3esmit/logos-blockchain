@@ -126,7 +126,7 @@ fn distribute_rewards(
         .into_iter()
         .enumerate()
         .map(|(output_index, (zk_id, reward_amount))| {
-            Utxo::new(op_id, output_index, Note::new(reward_amount, zk_id))
+            Utxo::new(op_id, output_index, None, Note::new(reward_amount, zk_id))
         })
         .collect()
 }

@@ -57,16 +57,19 @@ impl GenesisTransferOp {
     }
 
     pub fn notes(&self) -> impl Iterator<Item = Note> {
-        self.outputs.utxos(&self.transfer_op).map(|u| u.note)
+        self.outputs
+            .utxos(&self.transfer_op, vec![None; self.outputs.len()])
+            .map(|u| u.note)
     }
 
     pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
-        self.outputs.utxos(&self.transfer_op)
+        self.outputs
+            .utxos(&self.transfer_op, vec![None; self.outputs.len()])
     }
 
     #[must_use]
     pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
-        self.outputs.utxo_by_index(index, &self.transfer_op)
+        self.outputs.utxo_by_index(index, &self.transfer_op, None)
     }
 }
 

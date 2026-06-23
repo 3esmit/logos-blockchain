@@ -97,7 +97,9 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger
-        utxos = self.outputs.execute(utxos, self);
+        utxos = self
+            .outputs
+            .execute(utxos, self, vec![None; self.outputs.len()]);
         Ok((utxos, Events::new()))
     }
 }
@@ -124,30 +126,33 @@ mod test {
             ]),
         };
         assert_eq!(
-            transfer.outputs.utxo_by_index(0, &transfer),
+            transfer.outputs.utxo_by_index(0, &transfer, None),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 0,
+                channel_id: None,
                 note: Note::new(100, pk0),
             })
         );
         assert_eq!(
-            transfer.outputs.utxo_by_index(1, &transfer),
+            transfer.outputs.utxo_by_index(1, &transfer, None),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 1,
+                channel_id: None,
                 note: Note::new(200, pk1),
             })
         );
         assert_eq!(
-            transfer.outputs.utxo_by_index(2, &transfer),
+            transfer.outputs.utxo_by_index(2, &transfer, None),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 2,
+                channel_id: None,
                 note: Note::new(300, pk2),
             })
         );
 
-        assert!(transfer.outputs.utxo_by_index(3, &transfer).is_none());
+        assert!(transfer.outputs.utxo_by_index(3, &transfer, None).is_none());
     }
 }

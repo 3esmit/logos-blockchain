@@ -53,6 +53,7 @@ impl LeaderClaimOp {
         Utxo {
             op_id: self.op_id(),
             output_index: 0,
+            channel_id: None,
             note: Note {
                 value: amount,
                 pk: self.pk,

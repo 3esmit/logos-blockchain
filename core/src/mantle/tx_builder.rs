@@ -394,7 +394,12 @@ mod tests {
         let builder = MantleTxBuilder::new(context)
             .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
             .unwrap()
-            .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero())));
+            .add_ledger_input(Utxo::new(
+                [0u8; 32],
+                0,
+                None,
+                Note::new(50, ZkPublicKey::zero()),
+            ));
         let builder = builder.unwrap();
 
         // Check that the balance is 10 (= 50 - 40)
@@ -471,7 +476,12 @@ mod tests {
 
         // Fund tx
         let builder = builder
-            .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(40, ZkPublicKey::zero())))
+            .add_ledger_input(Utxo::new(
+                [0u8; 32],
+                0,
+                None,
+                Note::new(40, ZkPublicKey::zero()),
+            ))
             .unwrap();
 
         // Check the tx is balanced
@@ -492,7 +502,7 @@ mod tests {
         let deposit_input = NoteId(Fr::from(1u64));
         let declare_locked = NoteId(Fr::from(2u64));
         let withdraw_locked = NoteId(Fr::from(3u64));
-        let transfer_input = Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero()));
+        let transfer_input = Utxo::new([0u8; 32], 0, None, Note::new(50, ZkPublicKey::zero()));
 
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelDeposit(DepositOp {

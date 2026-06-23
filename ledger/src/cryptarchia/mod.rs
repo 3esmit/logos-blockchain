@@ -623,7 +623,9 @@ impl LedgerState {
         }
 
         Ok(Self::from_utxos(
-            transfer_op.outputs.utxos(transfer_op),
+            transfer_op
+                .outputs
+                .utxos(transfer_op, vec![None; transfer_op.outputs.len()]),
             config,
             epoch_nonce,
         ))
@@ -779,6 +781,7 @@ pub mod tests {
         let utxo = Utxo {
             op_id,
             output_index: 0,
+            channel_id: None,
             note: Note::new(10000, zk_sk.to_public_key()),
         };
 
@@ -1582,6 +1585,7 @@ pub mod tests {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
+            channel_id: None,
             note: input_note,
         };
 
@@ -1615,6 +1619,7 @@ pub mod tests {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
+            channel_id: None,
             note: input_note,
         };
 
@@ -1649,8 +1654,14 @@ pub mod tests {
         // Verify outputs were created
         let (_, transfer_op, _) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
-        let output_utxo1 = transfer_op.outputs.utxo_by_index(0, &transfer_op).unwrap();
-        let output_utxo2 = transfer_op.outputs.utxo_by_index(1, &transfer_op).unwrap();
+        let output_utxo1 = transfer_op
+            .outputs
+            .utxo_by_index(0, &transfer_op, None)
+            .unwrap();
+        let output_utxo2 = transfer_op
+            .outputs
+            .utxo_by_index(1, &transfer_op, None)
+            .unwrap();
 
         assert!(new_state.utxos.contains(&output_utxo1.id()));
         assert!(new_state.utxos.contains(&output_utxo2.id()));
@@ -1690,24 +1701,28 @@ pub mod tests {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
+            channel_id: None,
             note: input_note,
         };
 
         let non_existent_utxo_1 = Utxo {
             op_id: [1u8; 32],
             output_index: 1,
+            channel_id: None,
             note: input_note,
         };
 
         let non_existent_utxo_2 = Utxo {
             op_id: [2u8; 32],
             output_index: 0,
+            channel_id: None,
             note: input_note,
         };
 
         let non_existent_utxo_3 = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
+            channel_id: None,
             note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
         };
 
@@ -1742,6 +1757,7 @@ pub mod tests {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
+            channel_id: None,
             note: input_note,
         };
 
@@ -1787,6 +1803,7 @@ pub mod tests {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
+            channel_id: None,
             note: input_note,
         };
 
@@ -1819,6 +1836,7 @@ pub mod tests {
         let input_utxo = Utxo {
             op_id: [1u8; 32],
             output_index: 0,
+            channel_id: None,
             note: Note::new(10000, input_sk.to_public_key()),
         };
 

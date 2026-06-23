@@ -692,7 +692,12 @@ mod tests {
     }
 
     fn utxo(value: u64, output_index: usize, pk: ZkPublicKey) -> Utxo {
-        Utxo::new([output_index as u8; 32], output_index, Note::new(value, pk))
+        Utxo::new(
+            [output_index as u8; 32],
+            output_index,
+            None,
+            Note::new(value, pk),
+        )
     }
 
     fn wallet_keys(wallet_id: &str, pk: ZkPublicKey) -> TrackedWalletKeys {

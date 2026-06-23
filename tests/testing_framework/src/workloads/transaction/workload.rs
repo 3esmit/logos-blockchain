@@ -330,7 +330,7 @@ fn wallet_utxo_map(
         .outputs
         .iter()
         .enumerate()
-        .map(|(idx, note)| (note.pk, Utxo::new(op_id, idx, *note)))
+        .map(|(idx, note)| (note.pk, Utxo::new(op_id, idx, None, *note)))
         .collect()
 }
 

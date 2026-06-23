@@ -113,7 +113,7 @@ pub(crate) fn genesis_block_utxos(
         .outputs
         .iter()
         .enumerate()
-        .map(|(idx, note)| Utxo::new(transfer_id, idx, *note))
+        .map(|(idx, note)| Utxo::new(transfer_id, idx, None, *note))
         .collect()
 }
 

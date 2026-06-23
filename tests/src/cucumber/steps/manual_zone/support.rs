@@ -1283,7 +1283,7 @@ fn build_atomic_deposit_op(
 ) -> Result<DepositOp, ZoneTestError> {
     let deposit_note_id = transfer
         .outputs
-        .utxo_by_index(0, transfer)
+        .utxo_by_index(0, transfer, None)
         .ok_or_else(|| ZoneTestError::BuildAtomicDeposit {
             message: "transfer did not produce the deposit note".to_owned(),
         })?

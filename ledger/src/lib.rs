@@ -976,7 +976,10 @@ mod tests {
 
         // Verify output was created
         if let Op::Transfer(transfer_op) = &tx.mantle_tx.ops()[0] {
-            let output_utxo = transfer_op.outputs.utxo_by_index(0, transfer_op).unwrap();
+            let output_utxo = transfer_op
+                .outputs
+                .utxo_by_index(0, transfer_op, None)
+                .unwrap();
             assert!(new_state.latest_utxos().contains(&output_utxo.id()));
         } else {
             panic!("first op must be a transfer")
@@ -1214,7 +1217,7 @@ mod tests {
         assert_eq!(channel_balance, utxo.note.value - withdraw_note.value);
         let withdraw_utxo = withdraw
             .outputs
-            .utxos(&withdraw)
+            .utxos(&withdraw, vec![None; withdraw.outputs.len()])
             .next()
             .expect("withdraw should have at least one utxo")
             .id();
@@ -1313,7 +1316,7 @@ mod tests {
         );
         let withdraw_utxo = withdraw
             .outputs
-            .utxos(&withdraw)
+            .utxos(&withdraw, vec![None; withdraw.outputs.len()])
             .next()
             .expect("withdraw should have at least one utxo")
             .id();

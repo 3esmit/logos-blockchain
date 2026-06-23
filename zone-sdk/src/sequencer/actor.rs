@@ -623,6 +623,7 @@ mod tests {
         let utxo = Utxo {
             op_id,
             output_index: 0,
+            channel_id: None,
             note: Note::new(10, zk_sk.to_public_key()),
         };
 

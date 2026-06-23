@@ -945,6 +945,7 @@ mod tests {
         let locked_note = Utxo {
             op_id: [1u8; 32],
             output_index: 12,
+            channel_id: None,
             note: Note {
                 value: 500,
                 pk: locked_note_sk.to_public_key(),
@@ -1202,7 +1203,7 @@ mod tests {
             zk_id: zk_sk.to_public_key(),
             locked_note_id: transfer_op
                 .outputs
-                .utxo_by_index(0, &transfer_op)
+                .utxo_by_index(0, &transfer_op, None)
                 .unwrap()
                 .id(),
         };

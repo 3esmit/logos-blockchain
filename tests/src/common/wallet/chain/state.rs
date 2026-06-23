@@ -179,7 +179,9 @@ impl WalletChainState {
                     &mut changes.observed_spends,
                 );
                 self.apply_owned_outputs(
-                    transfer.outputs.utxos(transfer),
+                    transfer
+                        .outputs
+                        .utxos(transfer, vec![None; transfer.outputs.len()]),
                     &mut changes.observed_outputs,
                 );
             }
@@ -191,7 +193,9 @@ impl WalletChainState {
             }
             Op::ChannelWithdraw(withdraw) => {
                 self.apply_owned_outputs(
-                    withdraw.outputs.utxos(withdraw),
+                    withdraw
+                        .outputs
+                        .utxos(withdraw, vec![None; withdraw.outputs.len()]),
                     &mut changes.observed_outputs,
                 );
             }
@@ -342,7 +346,12 @@ mod tests {
     }
 
     fn utxo(value: u64, output_index: usize, pk: ZkPublicKey) -> Utxo {
-        Utxo::new([output_index as u8; 32], output_index, Note::new(value, pk))
+        Utxo::new(
+            [output_index as u8; 32],
+            output_index,
+            None,
+            Note::new(value, pk),
+        )
     }
 
     fn wallet_utxo_values(chain_state: &WalletChainState, wallet_id: &WalletId) -> Vec<u64> {

@@ -225,6 +225,7 @@ fn create_utxos(
         utxos.push(Utxo {
             note: Note::new(REGULAR_NOTE_VALUE, pk),
             op_id: [0u8; 32],
+            channel_id: None,
             output_index: 0,
         });
         output_index += 1;
@@ -236,6 +237,7 @@ fn create_utxos(
         let utxo = Utxo {
             note: note_blend,
             op_id: [0u8; 32],
+            channel_id: None,
             output_index: 0,
         };
         blend_notes.push(ServiceNote {
@@ -255,6 +257,7 @@ fn create_utxos(
         let utxo = Utxo {
             note: note_sdp,
             op_id: [0u8; 32],
+            channel_id: None,
             output_index,
         };
         sdp_notes.push(ServiceNote {
@@ -286,6 +289,7 @@ pub fn create_genesis_block_with_declarations(
         let utxo = Utxo {
             op_id: transfer_id,
             output_index: provider.note.output_index,
+            channel_id: None,
             note: provider.note.note,
         };
         let declaration = DeclarationMessage {

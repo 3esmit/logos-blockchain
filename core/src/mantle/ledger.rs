@@ -17,7 +17,7 @@ use crate::{
     mantle::{
         encoding::{BoundedInputs, BoundedOutputs, NomInputs},
         nom::{NomDecode, NomEncode},
-        ops::OpId,
+        ops::{OpId, channel::ChannelId},
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
@@ -91,18 +91,29 @@ impl Outputs {
         Self(BoundedOutputs::default())
     }
 
-    pub fn utxos<O: OpId>(&self, op: &O) -> impl Iterator<Item = Utxo> {
+    pub fn utxos<O: OpId>(
+        &self,
+        op: &O,
+        channel_ids: Vec<Option<ChannelId>>,
+    ) -> impl Iterator<Item = Utxo> {
         self.0.iter().enumerate().map(move |(index, note)| Utxo {
             op_id: op.op_id(),
             output_index: index,
+            channel_id: channel_ids[index],
             note: *note,
         })
     }
 
-    pub fn utxo_by_index<O: OpId>(&self, index: usize, op: &O) -> Option<Utxo> {
+    pub fn utxo_by_index<O: OpId>(
+        &self,
+        index: usize,
+        op: &O,
+        channel_id: Option<ChannelId>,
+    ) -> Option<Utxo> {
         self.0.get(index).map(|note| Utxo {
             op_id: op.op_id(),
             output_index: index,
+            channel_id,
             note: *note,
         })
     }
@@ -117,8 +128,13 @@ impl Outputs {
         Ok(())
     }
 
-    pub fn execute<O: OpId>(&self, mut utxos: Utxos, op: &O) -> Utxos {
-        for utxo in self.utxos(op) {
+    pub fn execute<O: OpId>(
+        &self,
+        mut utxos: Utxos,
+        op: &O,
+        channel_ids: Vec<Option<ChannelId>>,
+    ) -> Utxos {
+        for utxo in self.utxos(op, channel_ids) {
             utxos = utxos.insert(utxo.id(), utxo).0;
         }
         utxos
@@ -402,6 +418,7 @@ impl NomDecode for Note {
 pub struct Utxo {
     pub op_id: Hash,
     pub output_index: usize,
+    pub channel_id: Option<ChannelId>,
     pub note: Note,
 }
 
@@ -411,10 +428,16 @@ static NOTE_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
 
 impl Utxo {
     #[must_use]
-    pub const fn new(op_id: Hash, output_index: usize, note: Note) -> Self {
+    pub const fn new(
+        op_id: Hash,
+        output_index: usize,
+        channel_id: Option<ChannelId>,
+        note: Note,
+    ) -> Self {
         Self {
             op_id,
             output_index,
+            channel_id,
             note,
         }
     }
@@ -455,6 +478,7 @@ mod test {
         let utxo = Utxo::new(
             [0u8; 32],
             0,
+            None,
             Note::new(100, ZkPublicKey::from(Fr::from(BigUint::from(456u32)))),
         );
         assert_eq!(

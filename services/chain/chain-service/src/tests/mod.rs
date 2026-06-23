@@ -497,6 +497,7 @@ pub fn utxo() -> (ZkKey, Utxo) {
     let utxo = Utxo {
         op_id,
         output_index: 0,
+        channel_id: None,
         note: Note::new(10000, zk_sk.to_public_key()),
     };
     (zk_sk, utxo)

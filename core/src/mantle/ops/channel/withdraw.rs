@@ -141,7 +141,9 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         }?;
 
         // Add the ouputs to the ledger
-        ctx.utxos = self.outputs.execute(ctx.utxos, self);
+        ctx.utxos = self
+            .outputs
+            .execute(ctx.utxos, self, vec![None; self.outputs.len()]);
 
         Ok((ctx, Events::new()))
     }

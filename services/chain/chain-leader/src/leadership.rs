@@ -464,7 +464,7 @@ mod pol_tests {
 
         // Create a UTXO
         let transfer = TransferOp::new(Inputs::empty(), Outputs::new([Note::new(1000u64, pk)]));
-        let utxo = transfer.outputs.utxo_by_index(0, &transfer).unwrap();
+        let utxo = transfer.outputs.utxo_by_index(0, &transfer, None).unwrap();
 
         // Create aged/latest UTXO trees
         let aged_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
@@ -557,7 +557,7 @@ mod pol_tests {
         let pk = sk.to_public_key();
 
         let transfer = TransferOp::new(Inputs::empty(), Outputs::new([Note::new(1000u64, pk)]));
-        let utxo = transfer.outputs.utxo_by_index(0, &transfer).unwrap();
+        let utxo = transfer.outputs.utxo_by_index(0, &transfer, None).unwrap();
 
         let aged_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
         let latest_tree = UtxoTree::new().insert(utxo.id(), utxo).0;

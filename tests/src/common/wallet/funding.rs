@@ -324,6 +324,7 @@ mod tests {
         Utxo::new(
             [output_index as u8; 32],
             output_index,
+            None,
             Note::new(value, ZkPublicKey::new(1u8.into())),
         )
     }

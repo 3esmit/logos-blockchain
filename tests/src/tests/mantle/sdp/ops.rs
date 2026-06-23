@@ -412,6 +412,19 @@ async fn start_sdp_manual_cluster(
                 .expect("manual-cluster deployment should include genesis tx")
                 .genesis_tx()
                 .genesis_transfer(),
+            vec![
+                None;
+                cluster_harness
+                    .deployment()
+                    .config
+                    .genesis_block
+                    .as_ref()
+                    .expect("manual-cluster deployment should include genesis tx")
+                    .genesis_tx()
+                    .genesis_transfer()
+                    .outputs
+                    .len()
+            ],
         )
         .collect();
 

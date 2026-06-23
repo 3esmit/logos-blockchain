@@ -496,10 +496,10 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
 
             // ChannelMultiSigProof
             Op::ChannelWithdraw(operation) => {
-                let channel_withdraw_threshold = context.withdraw_threshold(&operation.channel_id).expect(
+                let channel_stake_manipulation_threshold = context.stake_manipulation_threshold(&operation.channel_id).expect(
                     "Operation should have been verified before reaching this point, so the channel must exist in the context."
                 );
-                calculate_channel_multi_sig_proof_byte_size(channel_withdraw_threshold)
+                calculate_channel_multi_sig_proof_byte_size(channel_stake_manipulation_threshold)
             }
 
             // None
@@ -699,7 +699,7 @@ mod tests {
                 posting_timeframe: 1.into(),
                 posting_timeout: 2.into(),
                 configuration_threshold: 3,
-                withdraw_threshold: 4,
+                stake_manipulation_threshold: 4,
             }),
         ]));
 
@@ -910,7 +910,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
-            withdraw_threshold: 0,
+            stake_manipulation_threshold: 0,
         };
 
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]));
@@ -1079,7 +1079,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
-            withdraw_threshold: 0,
+            stake_manipulation_threshold: 0,
         };
 
         let blend_proof = ActivityProof {
@@ -1184,7 +1184,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
-            withdraw_threshold: 0,
+            stake_manipulation_threshold: 0,
         };
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
@@ -1409,7 +1409,7 @@ mod tests {
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
                 configuration_threshold: 0,
-                withdraw_threshold: 0,
+                stake_manipulation_threshold: 0,
             });
             u8::MAX as usize + 1
         ];
@@ -1508,7 +1508,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
-            withdraw_threshold: 0,
+            stake_manipulation_threshold: 0,
         }
         .encode();
 

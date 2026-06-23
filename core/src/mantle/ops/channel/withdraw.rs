@@ -99,10 +99,10 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
 
         // Check there is enough signatures
         let signatures = ctx.withdraw_sigs.signatures();
-        if signatures.len() != channel.withdraw_threshold as usize {
+        if signatures.len() != channel.stake_manipulation_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
-                threshold: channel.withdraw_threshold,
+                threshold: channel.stake_manipulation_threshold,
                 actual: ctx.withdraw_sigs.signatures().len(),
             });
         }

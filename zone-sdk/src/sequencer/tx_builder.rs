@@ -101,7 +101,7 @@ pub(super) fn create_channel_config_tx(
     posting_timeframe: SlotTimeframe,
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
-    withdraw_threshold: u16,
+    stake_manipulation_threshold: u16,
 ) -> SignedMantleTx {
     let config_op = ChannelConfigOp {
         channel: channel_id,
@@ -109,7 +109,7 @@ pub(super) fn create_channel_config_tx(
         posting_timeframe,
         posting_timeout,
         configuration_threshold,
-        withdraw_threshold,
+        stake_manipulation_threshold,
     };
 
     // TODO: fund tx

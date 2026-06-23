@@ -721,7 +721,7 @@ mod tests {
                         posting_timeframe: 0u32.into(),
                         posting_timeout: 0u32.into(),
                         balance: 0,
-                        withdraw_threshold: 1,
+                        stake_manipulation_threshold: 1,
                     }),
                 },
                 rx,
@@ -1337,7 +1337,7 @@ mod tests {
             posting_timeframe: 0u32.into(),
             posting_timeout: 0u32.into(),
             balance: 0,
-            withdraw_threshold: 1,
+            stake_manipulation_threshold: 1,
         });
 
         let node = ColdStartMockNode {

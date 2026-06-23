@@ -95,7 +95,7 @@ pub struct MantleTxContext {
 
 #[derive(Debug, Clone, Default)]
 pub struct MantleTxGasContext {
-    withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+    stake_manipulation_threshold: HashMap<ChannelId, ChannelKeyIndex>,
     configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     gas_prices: GasPrices,
 }
@@ -128,20 +128,20 @@ impl Default for GasPrices {
 impl MantleTxGasContext {
     #[must_use]
     pub const fn new(
-        withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+        stake_manipulation_threshold: HashMap<ChannelId, ChannelKeyIndex>,
         configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         gas_prices: GasPrices,
     ) -> Self {
         Self {
-            withdraw_thresholds,
+            stake_manipulation_threshold,
             configuration_thresholds,
             gas_prices,
         }
     }
 
     #[must_use]
-    pub fn withdraw_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
-        self.withdraw_thresholds.get(channel_id).copied()
+    pub fn stake_manipulation_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
+        self.stake_manipulation_threshold.get(channel_id).copied()
     }
 
     #[must_use]
@@ -154,7 +154,7 @@ impl MantleTxGasContext {
         let withdraw_thresholds = value
             .channels
             .iter()
-            .map(|(channel_id, channel)| (*channel_id, channel.withdraw_threshold))
+            .map(|(channel_id, channel)| (*channel_id, channel.stake_manipulation_threshold))
             .collect();
         let configuration_thresholds = value
             .channels
@@ -361,7 +361,7 @@ pub enum VerificationError {
 }
 
 pub trait OperationVerificationHelper {
-    fn get_channel_withdraw_threshold(
+    fn get_channel_stake_manipulation_threshold(
         &self,
         channel_id: &ChannelId,
     ) -> Result<ChannelKeyIndex, VerificationError>;
@@ -510,15 +510,16 @@ fn verify_channel_withdraw(
     op_index: usize,
 ) -> Result<(), VerificationError> {
     let channel_id = &operation.channel_id;
-    let withdraw_threshold = helper.get_channel_withdraw_threshold(channel_id)?;
+    let stake_manipulation_threshold =
+        helper.get_channel_stake_manipulation_threshold(channel_id)?;
 
     let signatures = proof.signatures();
     let signatures_len = signatures.len();
-    if signatures_len < withdraw_threshold as usize {
+    if signatures_len < stake_manipulation_threshold as usize {
         return Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
             op_index,
             actual: signatures_len,
-            required: withdraw_threshold,
+            required: stake_manipulation_threshold,
         });
     }
 
@@ -733,7 +734,7 @@ mod tests {
     }
 
     impl OperationVerificationHelper for TestOperationVerificationHelper {
-        fn get_channel_withdraw_threshold(
+        fn get_channel_stake_manipulation_threshold(
             &self,
             channel_id: &ChannelId,
         ) -> Result<ChannelKeyIndex, VerificationError> {

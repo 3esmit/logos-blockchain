@@ -358,7 +358,7 @@ mod mantle_test_vectors {
                 posting_timeframe: SlotTimeframe::from(10u32),
                 posting_timeout: SlotTimeout::from(20u32),
                 configuration_threshold: 2,
-                withdraw_threshold: 1,
+                stake_manipulation_threshold: 1,
             }),
             // ChannelInscribe (0x11)
             Op::ChannelInscribe(InscriptionOp {

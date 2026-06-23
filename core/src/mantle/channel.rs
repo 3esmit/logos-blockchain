@@ -149,9 +149,10 @@ pub struct ChannelState {
 
     // Bridging
     pub balance: Value,
-    pub withdraw_threshold: ChannelKeyIndex, /* indicating how many keys are required to
-                                              * withdraw
-                                              * funds from the channel */
+    pub stake_manipulation_threshold: ChannelKeyIndex, /* indicating how many keys are required
+                                                        * to
+                                                        * withdraw, or assignate channel notes
+                                                        * from the channel */
 }
 
 pub(crate) const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
@@ -277,7 +278,7 @@ mod tests {
                 .into(),
             configuration_threshold: 0,
             tip_message: MsgId::root(),
-            withdraw_threshold: 0,
+            stake_manipulation_threshold: 0,
         }
     }
 
@@ -316,7 +317,7 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
                         balance,
-                        withdraw_threshold: 1,
+                        stake_manipulation_threshold: 1,
                         posting_timeout: 0u32.into(),
                     },
                 ),
@@ -343,7 +344,7 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
                         balance: 5,
-                        withdraw_threshold: 1,
+                        stake_manipulation_threshold: 1,
                         posting_timeout: 0u32.into(),
                     },
                 )
@@ -359,7 +360,7 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0.into(),
                         balance: 9,
-                        withdraw_threshold: 2,
+                        stake_manipulation_threshold: 2,
                         posting_timeout: 0.into(),
                     },
                 ),
@@ -367,9 +368,12 @@ mod tests {
 
         let gas_context = MantleTxGasContext::from_channels(&channels, GasPrices::new(0, 0));
 
-        assert_eq!(gas_context.withdraw_threshold(&first_id), Some(1));
-        assert_eq!(gas_context.withdraw_threshold(&second_id), Some(2));
-        assert_eq!(gas_context.withdraw_threshold(&missing_id), None);
+        assert_eq!(gas_context.stake_manipulation_threshold(&first_id), Some(1));
+        assert_eq!(
+            gas_context.stake_manipulation_threshold(&second_id),
+            Some(2)
+        );
+        assert_eq!(gas_context.stake_manipulation_threshold(&missing_id), None);
     }
 
     #[test]

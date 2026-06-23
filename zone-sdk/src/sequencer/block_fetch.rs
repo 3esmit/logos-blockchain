@@ -808,7 +808,7 @@ mod tests {
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
-            withdraw_threshold: 1,
+            stake_manipulation_threshold: 1,
         }
     }
 

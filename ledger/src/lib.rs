@@ -1025,7 +1025,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
-            withdraw_threshold: 1,
+            stake_manipulation_threshold: 1,
         };
 
         let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
@@ -1473,7 +1473,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
-            withdraw_threshold: 1,
+            stake_manipulation_threshold: 1,
         };
 
         let inscribe_op3 = InscriptionOp {

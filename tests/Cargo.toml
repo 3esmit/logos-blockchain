@@ -86,6 +86,11 @@ path              = "src/tests/cryptarchia/tip_poll_self_heal.rs"
 required-features = ["tip_poll_self_heal"]
 
 [[test]]
+name              = "test_cryptarchia_tip_poll_tx_propagation"
+path              = "src/tests/cryptarchia/dummy.rs"
+required-features = ["tip_poll_self_heal"]
+
+[[test]]
 name = "test_mantle_chain_start"
 path = "src/tests/mantle/chain_start.rs"
 

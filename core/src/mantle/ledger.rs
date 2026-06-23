@@ -45,6 +45,8 @@ pub enum InputsError {
     InexistingNote(NoteId),
     #[error("Locked note: {0:?}")]
     LockedNote(NoteId),
+    #[error("Note {0:?} doesn't belong to the channel: {1:?}")]
+    InvalidChannel(NoteId, Option<ChannelId>),
     #[error("Inputs contain try to double spend the same NoteId")]
     DoubleSpend,
     #[error("Sum of input values overflows")]
@@ -229,14 +231,19 @@ impl Inputs {
         <&Self as IntoIterator>::into_iter(self)
     }
 
-    pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
+    pub fn validate(
+        &self,
+        locked_notes: &LockedNotes,
+        utxos: &Utxos,
+        channel_ids: Vec<Option<ChannelId>>,
+    ) -> Result<(), InputsError> {
         // Check that there is no duplicate
         let unique: HashSet<_> = self.0.iter().collect();
         if unique.len() != self.0.len() {
             return Err(InputsError::DoubleSpend);
         }
         // Check each note is spendable
-        for input in &self.0 {
+        for (input, channel_id) in self.0.iter().zip(channel_ids) {
             // Check the note isn't locked
             if locked_notes.contains(input) {
                 return Err(InputsError::LockedNote(*input));
@@ -244,6 +251,15 @@ impl Inputs {
             // Check the note exist in the ledger
             if !utxos.contains(input) {
                 return Err(InputsError::InexistingNote(*input));
+            }
+            // check it belongs to the correct channel
+            if utxos
+                .get(input)
+                .expect(" the utxo existence was checked above")
+                .channel_id
+                != channel_id
+            {
+                return Err(InputsError::InvalidChannel(*input, channel_id));
             }
         }
         Ok(())

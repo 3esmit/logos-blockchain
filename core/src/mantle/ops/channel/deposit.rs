@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::{Event, EventPayload, Events},
     mantle::{
-        TxHash,
+        Note, TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Utxos},
+        ledger::{Inputs, Operation, Outputs, Utxos},
         nom::{NomBoundedVec, NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
@@ -90,8 +90,9 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
             });
         }
 
-        // Check that inputs are valid
-        self.inputs.validate(ctx.locked_notes, ctx.utxos)?;
+        // Check that inputs are valid and doesn't provide from a channel
+        self.inputs
+            .validate(ctx.locked_notes, ctx.utxos, vec![None; self.inputs.len()])?;
 
         // Check the signature
         let pks = self.inputs.get_pk(ctx.utxos)?;
@@ -112,18 +113,12 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         // Remove inputs from the ledger
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
-        // Increase the balance of the channel
-        if let Some(channel) = ctx.channels.channels.get_mut(&self.channel_id) {
-            channel.balance = channel
-                .balance
-                .checked_add(amount_deposited)
-                .ok_or(Error::BalanceOverflow)?;
-            Ok(self)
-        } else {
-            Err(Error::ChannelNotFound {
-                channel_id: self.channel_id,
-            })
-        }?;
+        // Create the deposit note channel
+        ctx.utxos = Outputs::new(Note {
+            value: amount_deposited,
+            pk: ZkPublicKey::zero(),
+        })
+        .execute(ctx.utxos, self, vec![Some(self.channel_id)]);
 
         let events = std::iter::once(Event::from_tx(
             ctx.tx_hash,

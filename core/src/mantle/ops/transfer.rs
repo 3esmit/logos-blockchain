@@ -78,8 +78,9 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
         if self.inputs.is_empty() {
             return Err(TransferError::NoInputTransfer);
         }
-        // Validate Inputs
-        self.inputs.validate(ctx.locked_notes, ctx.utxos)?;
+        // Validate Inputs (doesn't provide from a channel)
+        self.inputs
+            .validate(ctx.locked_notes, ctx.utxos, vec![None; self.inputs.len()])?;
         // Validate Outputs
         self.outputs.validate()?;
         // Check the transfer Proof

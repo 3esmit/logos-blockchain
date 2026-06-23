@@ -1336,6 +1336,7 @@ mod tests {
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelWithdraw(
             ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
+                inputs: Inputs::new(NoteId(Fr::from(1u64))),
                 outputs: Outputs::new([note1, note2]),
             },
         )]));

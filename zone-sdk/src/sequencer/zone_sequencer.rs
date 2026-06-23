@@ -653,6 +653,7 @@ where
         for arg in withdraws {
             let op = ChannelWithdrawOp {
                 channel_id: self.channel_id,
+                inputs: arg.inputs,
                 outputs: arg.outputs,
             };
             withdraw_ops.push(op.clone());

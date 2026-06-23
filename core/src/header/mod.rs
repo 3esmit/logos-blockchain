@@ -413,6 +413,7 @@ mod block_root_test_vectors {
                 "ChannelWithdraw",
                 tx(Op::ChannelWithdraw(ChannelWithdrawOp {
                     channel_id: ChannelId::from([2u8; 32]),
+                    inputs: Inputs::new([NoteId(Fr::from(3u64))]),
                     outputs: Outputs::new([Note::new(500, zk_pk(12))]),
                 })),
             ),

@@ -572,7 +572,7 @@ mod tests {
     use lb_core::{
         header::{ContentId, HeaderId},
         mantle::{
-            MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo,
+            MantleTx, Note, NoteId, Op, SignedMantleTx, Transaction as _, Utxo,
             encoding::Ops,
             ledger::{Inputs, Outputs},
             ops::{
@@ -588,6 +588,7 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_http_api_common::queries::BlocksStreamQuery;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;
@@ -946,8 +947,10 @@ mod tests {
             5,
             ZkKey::from(BigUint::from(0u64)).to_public_key(),
         )]);
+        let inputs = Inputs::new(NoteId(Fr::ZERO));
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
+            inputs,
             outputs,
         };
         let inscribe_op = InscriptionOp {

@@ -1,22 +1,25 @@
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     events::Events,
     mantle::{
-        TxHash,
+        Note, TxHash,
         channel::{Channels, Error},
-        encoding::NomOutputs,
-        ledger::{Operation, Outputs, Utxos},
+        encoding::{NomInputs, NomOutputs},
+        ledger::{Inputs, Operation, Outputs, OutputsError, Utxos},
         nom::{NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+    sdp::locked_notes::LockedNotes,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
+    pub inputs: Inputs,
     pub outputs: Outputs,
 }
 
@@ -40,11 +43,13 @@ impl NomDecode for ChannelWithdrawOp {
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let (bytes, channel_id) = ChannelId::decode(bytes)?;
+        let (bytes, inputs) = NomInputs::decode(bytes)?;
         let (bytes, outputs) = NomOutputs::decode(bytes)?;
         Ok((
             bytes,
             Self {
                 channel_id,
+                inputs: Inputs::new(inputs),
                 outputs: Outputs::new(outputs),
             },
         ))
@@ -53,6 +58,8 @@ impl NomDecode for ChannelWithdrawOp {
 
 pub struct WithdrawValidationContext<'a> {
     pub channels: &'a Channels,
+    pub locked_notes: &'a LockedNotes,
+    pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
     pub withdraw_sigs: &'a ChannelMultiSigProof,
 }
@@ -88,9 +95,17 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
             .cloned()
             .expect("we checked that the channel exist above");
 
-        // Check that the channel has enough funds
-        let amount = self.outputs.amount()?;
-        if amount > channel.balance {
+        // Check that the inputs exist and belong to the channel
+        self.inputs.validate(
+            ctx.locked_notes,
+            ctx.utxos,
+            vec![Some(self.channel_id); self.inputs.len()],
+        )?;
+
+        // Check the operation is balanced
+        let input_amount = self.inputs.amount(ctx.utxos)?;
+        let output_amount = self.outputs.amount()?;
+        if input_amount < output_amount {
             return Err(Error::InsufficientFunds);
         }
 
@@ -124,26 +139,26 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
-        // Get the amount withdraw
-        let amount_withdraw = self.outputs.amount()?;
+        // compute the returning amount (checked_sub is not necessary because we
+        // validated the balance before)
+        let input_amount = self.inputs.amount(&ctx.utxos)?;
+        let output_amount = self.outputs.amount()?;
+        let returned_amount = input_amount - output_amount;
 
-        // Decrease the balance of the channel
-        if let Some(channel) = ctx.channels.channels.get_mut(&self.channel_id) {
-            channel.balance = channel
-                .balance
-                .checked_sub(amount_withdraw)
-                .ok_or(Error::InsufficientFunds)?;
-            Ok(self)
-        } else {
-            Err(Error::ChannelNotFound {
-                channel_id: self.channel_id,
-            })
-        }?;
+        // Remove inputs from the ledger
+        ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
         // Add the ouputs to the ledger
-        ctx.utxos = self
-            .outputs
-            .execute(ctx.utxos, self, vec![None; self.outputs.len()]);
+        let mut outputs = self.outputs.clone();
+        let mut channels = vec![None; self.outputs.len()];
+        if returned_amount != 0 {
+            outputs
+                .as_mut()
+                .try_push(Note::new(returned_amount, ZkPublicKey::zero()))
+                .map_err(|_| OutputsError::OutputsOverflow)?;
+            channels.push(Some(self.channel_id));
+        }
+        ctx.utxos = outputs.execute(ctx.utxos, self, channels);
 
         Ok((ctx, Events::new()))
     }

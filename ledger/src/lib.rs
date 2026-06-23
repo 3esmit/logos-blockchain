@@ -608,11 +608,14 @@ impl LedgerState {
                 }
                 (Op::ChannelWithdraw(op), OpProof::ChannelMultiSigProof(sigs)) => {
                     let channels = self.mantle_ledger.channels();
+                    let locked_notes = self.mantle_ledger.locked_notes();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
                     // Validate the Withdraw
                     op.validate(&WithdrawValidationContext {
                         channels,
+                        locked_notes,
+                        utxos,
                         tx_hash: &tx_hash,
                         withdraw_sigs: sigs,
                     })
@@ -1186,6 +1189,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
+            inputs: Inputs::new([utxo.id()]),
             outputs: Outputs::new([withdraw_note]),
         };
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
@@ -1272,6 +1276,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
+            inputs: Inputs::new([utxo.id()]),
             outputs: Outputs::new([withdraw_note]),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);

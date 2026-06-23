@@ -236,22 +236,14 @@ mod tests {
     use rand::thread_rng;
 
     use super::*;
-    use crate::{
-        events::{Event, EventPayload},
-        mantle::{
-            Note, Utxo,
-            ledger::{Outputs, Utxos},
-            ops::{
-                OpId as _,
-                channel::{
-                    Ed25519PublicKey as PublicKey,
-                    deposit::{DepositExecutionContext, DepositOp, Metadata},
-                    withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
-                },
-            },
-            tx::{GasPrices, MantleTxGasContext},
+    use crate::mantle::{
+        Note, NoteId, Utxo,
+        ledger::{Inputs, Outputs, Utxos},
+        ops::channel::{
+            Ed25519PublicKey as PublicKey,
+            withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
         },
-        sdp::locked_notes::LockedNotes,
+        tx::{GasPrices, MantleTxGasContext},
     };
 
     fn test_public_key(seed: u8) -> PublicKey {
@@ -378,112 +370,6 @@ mod tests {
     }
 
     #[test]
-    fn deposit_increases_channel_balance() {
-        let channel_id = ChannelId::from([0u8; 32]);
-        let channels = Channels::with_balance(channel_id, 10);
-
-        let (_, utxo) = utxo(6u64);
-
-        let deposit_op = DepositOp {
-            channel_id,
-            inputs: [utxo.id()].into(),
-            metadata: Metadata::empty(),
-        };
-
-        let utxo_tree = utxo_tree(vec![utxo]);
-
-        let (updated, events) = deposit_op
-            .execute(DepositExecutionContext {
-                channels,
-                locked_notes: LockedNotes::new(),
-                utxos: utxo_tree,
-                tx_hash: [0; 32].into(),
-            })
-            .expect("execution should succeed");
-
-        assert_eq!(
-            updated.channels.channel_state(&channel_id).unwrap().balance,
-            16
-        );
-
-        assert_eq!(events.len(), 1);
-        let Event::Tx {
-            tx_hash,
-            op_id,
-            payload,
-        } = events.iter().next().cloned().unwrap()
-        else {
-            panic!("expected Tx event")
-        };
-        assert_eq!(tx_hash, [0; 32].into());
-        assert_eq!(op_id, deposit_op.op_id());
-        let EventPayload::Deposit {
-            channel_id,
-            amount,
-            metadata,
-        } = payload;
-        assert_eq!(channel_id, deposit_op.channel_id);
-        assert_eq!(amount, utxo.note.value);
-        assert_eq!(metadata, deposit_op.metadata);
-    }
-
-    #[test]
-    fn withdraw_decreases_channel_balance() {
-        let channel_id = ChannelId::from([0u8; 32]);
-        let channels = Channels::with_balance(channel_id, 10);
-
-        let (_, utxo) = utxo(6u64);
-
-        let withdraw_op = ChannelWithdrawOp {
-            channel_id,
-            outputs: Outputs::new([Note {
-                value: 6,
-                pk: ZkPublicKey::zero(),
-            }]),
-        };
-
-        let utxo_tree = utxo_tree(vec![utxo]);
-
-        let (updated, events) = withdraw_op
-            .execute(WithdrawExecutionContext {
-                channels,
-                utxos: utxo_tree,
-            })
-            .expect("execution should succeed");
-
-        assert_eq!(
-            updated.channels.channel_state(&channel_id).unwrap().balance,
-            4
-        );
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn withdraw_fails_with_insufficient_funds() {
-        let channel_id = ChannelId::from([0u8; 32]);
-        let channels = Channels::with_balance(channel_id, 3);
-
-        let (_, utxo) = utxo(6u64);
-
-        let withdraw_op = ChannelWithdrawOp {
-            channel_id,
-            outputs: Outputs::new([Note {
-                value: 6,
-                pk: ZkPublicKey::zero(),
-            }]),
-        };
-
-        let utxo_tree = utxo_tree(vec![utxo]);
-
-        let result = withdraw_op.execute(WithdrawExecutionContext {
-            channels,
-            utxos: utxo_tree,
-        });
-
-        assert!(matches!(result, Err(Error::InsufficientFunds)));
-    }
-
-    #[test]
     fn withdraw_fails_for_missing_channel() {
         let channel_id = ChannelId::from([0u8; 32]);
         let channels = Channels::new();
@@ -491,6 +377,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
+            inputs: Inputs::new(NoteId(Fr::from(3u64))),
             outputs: Outputs::new([Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),

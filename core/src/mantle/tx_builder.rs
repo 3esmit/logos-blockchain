@@ -340,6 +340,7 @@ mod tests {
         };
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
+            inputs: Inputs::new(NoteId(Fr::ZERO)),
             outputs: Outputs::new([withdraw_note]),
         };
 
@@ -455,6 +456,7 @@ mod tests {
             .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
+                inputs: Inputs::new([NoteId(Fr::ZERO)]),
                 outputs: Outputs::new([withdraw_note]),
             }))
             .unwrap()

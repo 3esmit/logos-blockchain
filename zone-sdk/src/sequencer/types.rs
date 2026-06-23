@@ -64,6 +64,7 @@ impl PublishResult {
 /// The caller only specifies the outputs (recipients + amounts).
 #[derive(Debug, Clone)]
 pub struct WithdrawArg {
+    pub inputs: Inputs,
     pub outputs: Outputs,
 }
 

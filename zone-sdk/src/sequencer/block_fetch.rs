@@ -585,7 +585,7 @@ fn touches_channel_tip(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, Note,
+        MantleTx, Note, NoteId,
         channel::{SlotTimeframe, SlotTimeout},
         encoding::Ops,
         ledger::{Inputs, Outputs},
@@ -599,6 +599,7 @@ mod tests {
             },
         },
     };
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;
 
@@ -617,8 +618,6 @@ mod tests {
     }
 
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
-        use lb_core::mantle::NoteId;
-        use lb_groth16::Fr;
         DepositOp {
             channel_id,
             inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
@@ -771,12 +770,15 @@ mod tests {
             42,
             ZkKey::from(BigUint::from(0u64)).to_public_key(),
         )]);
+        let inputs = Inputs::new(NoteId(Fr::ZERO));
         let withdraw_for_us = ChannelWithdrawOp {
             channel_id,
+            inputs: inputs.clone(),
             outputs: outputs.clone(),
         };
         let withdraw_other = ChannelWithdrawOp {
             channel_id: other_channel,
+            inputs,
             outputs,
         };
 

@@ -76,6 +76,7 @@ pub enum WalletOp {
 #[derive(Debug)]
 pub enum WalletBlockEvent {
     LeaderRewardClaimed(Utxo),
+    ChannelWithdraw(Vec<Utxo>),
 }
 
 impl WalletBlock {
@@ -285,6 +286,11 @@ impl WalletState {
                 WalletBlockEvent::LeaderRewardClaimed(utxo) => {
                     insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
                 }
+                WalletBlockEvent::ChannelWithdraw(withdrawn_utxos) => {
+                    for utxo in withdrawn_utxos {
+                        insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
+                    }
+                }
             }
         }
 
@@ -403,10 +409,15 @@ where
 /// Filter only wallet-relevant block events
 fn filter_block_events(events: &Events) -> impl Iterator<Item = WalletBlockEvent> + '_ {
     events.iter().filter_map(|event| match event {
-        Event::Tx {
-            payload: EventPayload::LeaderRewardClaimed { utxo, .. },
-            ..
-        } => Some(WalletBlockEvent::LeaderRewardClaimed(*utxo)),
+        Event::Tx { payload, .. } => match payload {
+            EventPayload::LeaderRewardClaimed { utxo, .. } => {
+                Some(WalletBlockEvent::LeaderRewardClaimed(*utxo))
+            }
+            EventPayload::Withdraw { utxos, .. } => {
+                Some(WalletBlockEvent::ChannelWithdraw(utxos.clone()))
+            }
+            _ => None,
+        },
         _ => None,
     })
 }
@@ -1050,10 +1061,52 @@ mod tests {
         .collect();
 
         let mut events = filter_block_events(&events);
-        let WalletBlockEvent::LeaderRewardClaimed(utxo) = events.next().unwrap();
+        let WalletBlockEvent::LeaderRewardClaimed(utxo) = events.next().unwrap() else {
+            panic!("LeaderRewardClaimed is expected");
+        };
         assert_eq!(utxo, alice_utxo);
-        let WalletBlockEvent::LeaderRewardClaimed(utxo) = events.next().unwrap();
+        let WalletBlockEvent::LeaderRewardClaimed(utxo) = events.next().unwrap() else {
+            panic!("LeaderRewardClaimed is expected");
+        };
         assert_eq!(utxo, bob_utxo);
+    }
+
+    #[test]
+    fn test_channel_withdraw_outputs_update_balance() {
+        let alice = pk(1);
+        let bob = pk(2);
+        let genesis = HeaderId::from([0; 32]);
+        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let (voucher_cm, _voucher_nf) = voucher(1, 0);
+        let alice_withdraw_utxo = Utxo::new(tx_hash(1), 0, Note::new(42, alice));
+        let bob_withdraw_utxo = Utxo::new(tx_hash(1), 1, Note::new(7, bob));
+
+        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(alice, 1)],
+            Vouchers::default(),
+            genesis,
+            &ledger,
+        );
+
+        let block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 1.into(),
+            voucher_cm,
+            txs: vec![],
+            events: vec![WalletBlockEvent::ChannelWithdraw(vec![
+                alice_withdraw_utxo,
+                bob_withdraw_utxo,
+            ])],
+        };
+
+        wallet.apply_block(&block).unwrap();
+
+        assert_eq!(
+            wallet.balance(block.id, alice).unwrap().unwrap().balance,
+            42
+        );
+        assert_eq!(wallet.balance(block.id, bob).unwrap(), None);
     }
 
     #[test]

@@ -7,28 +7,21 @@ use crate::message::Msg;
 ///
 /// The TUI feeds SDK events into this trait; the trait owns persistence.
 /// `InMemoryZoneState` is the demo implementation. A real sequencer would
-/// implement it over a DB so `published`/`adopted`/`finalized` survive
+/// implement it over a DB so `published`/`finalized` survive
 /// restarts (the SDK's own checkpoint covers tx-level resume separately).
 ///
 /// Three lists, each ordered by arrival:
 /// - `published`: our submissions, in submit order, until they finalize or get
 ///   orphaned.
-/// - `adopted`: others' inscriptions on canonical, deduped by `msg_id` (reorgs
-///   can re-adopt the same one), in first-sighting order.
 /// - `finalized`: all inscriptions below LIB, in canonical order — the SDK
 ///   delivers `finalized` on `BlocksProcessed`.
 ///
-/// Replay-idempotent: `on_adopted` and `on_finalized` dedup by `msg_id`, so
+/// Replay-idempotent: `on_finalized` dedup by `msg_id`, so
 /// resuming from a persisted state and re-receiving backfill is harmless.
 pub trait ZoneState: Send {
-    fn on_adopted(&mut self, adopted: &[InscriptionInfo]);
-    /// Remove our orphaned entry from `published`. Caller is expected to
-    /// auto-republish via `sequencer.handle().publish`.
-    fn on_orphaned(&mut self, msg_id: &MsgId);
     fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]);
 
     fn published(&self) -> &[Msg];
-    fn adopted(&self) -> &[Msg];
     fn finalized(&self) -> &[Msg];
 
     fn save_checkpoint(&mut self, checkpoint: SequencerCheckpoint);

@@ -11,6 +11,7 @@ pub mod balance {
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_log_targets::api;
+    use lb_wallet::WalletNote;
     use serde::{Deserialize, Serialize};
     use tracing::error;
 
@@ -20,7 +21,7 @@ pub mod balance {
     pub struct WalletBalanceResponseBody {
         pub tip: HeaderId,
         pub balance: Value,
-        pub notes: HashMap<NoteId, Value>,
+        pub notes: HashMap<NoteId, WalletNote>,
         pub address: ZkPublicKey,
     }
 

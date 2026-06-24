@@ -485,9 +485,16 @@ pub(crate) fn get_wallet_notes_sync(
                 .await
                 .map(|tip_response| {
                     let resolved_tip = tip_response.tip;
-                    tip_response
-                        .response
-                        .map(|balance| (resolved_tip, balance.notes.into_iter().collect()))
+                    tip_response.response.map(|balance| {
+                        (
+                            resolved_tip,
+                            balance
+                                .notes
+                                .into_iter()
+                                .map(|(id, note)| (id, note.value))
+                                .collect(),
+                        )
+                    })
                 })
         })
         .map_err(|_| OperationStatus::DynError)
@@ -1263,7 +1270,13 @@ pub(crate) fn channel_deposit_sync(
             })?;
         let notes: Vec<(CoreNoteId, Value)> = balance
             .response
-            .map(|balance| balance.notes.into_iter().collect())
+            .map(|balance| {
+                balance
+                    .notes
+                    .into_iter()
+                    .map(|(id, note)| (id, note.value))
+                    .collect()
+            })
             .ok_or_else(|| {
                 logging::error!("channel_deposit_sync", "Unknown funding address.");
                 OperationStatus::NotFound

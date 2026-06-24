@@ -244,7 +244,14 @@ impl WalletState {
         self.pk_index.get(&pk)?.iter().for_each(|id| {
             let value = self.utxos[id].note.value;
             balance.balance += value;
-            balance.notes.insert(*id, value);
+            balance.notes.insert(
+                *id,
+                WalletNote {
+                    id: *id,
+                    value,
+                    locked: self.locked_notes.contains(id),
+                },
+            );
         });
 
         Some(balance)
@@ -715,7 +722,14 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletBalance {
     pub balance: Value,
-    pub notes: HashMap<NoteId, Value>,
+    pub notes: HashMap<NoteId, WalletNote>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WalletNote {
+    pub id: NoteId,
+    pub value: Value,
+    pub locked: bool,
 }
 
 #[cfg(test)]

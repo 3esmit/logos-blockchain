@@ -230,6 +230,17 @@ async fn sdp_ops_e2e() {
             .iter()
             .any(|declaration| declaration.provider_id == provider_id)
     );
+
+    // Check that the note has been unlocked in the wallet.
+    let resp = node0
+        .get_wallet_balance(spare_note_secret_key.to_public_key(), None)
+        .await
+        .expect("balance request should succeed");
+    let note = resp
+        .notes
+        .get(&locked_note_id)
+        .expect("the previously-locked note should be tracked by the wallet");
+    assert!(!note.locked);
 }
 
 /// Test that SDP declaration is correctly restored after validator restart.

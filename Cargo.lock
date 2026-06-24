@@ -4602,6 +4602,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-tracing",
+ "logos-blockchain-wallet",
  "pprof",
  "serde",
  "serde_json",

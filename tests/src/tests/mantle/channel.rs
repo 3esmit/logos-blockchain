@@ -460,8 +460,8 @@ async fn get_wallet_note(node: &NodeHttpClient, pk: ZkPublicKey, min_value: u64)
         .expect("balance response should be valid JSON");
 
     body.notes
-        .into_iter()
-        .filter(|(_, value)| *value >= min_value)
+        .into_values()
+        .filter_map(|note| (note.value >= min_value).then_some((note.id, note.value)))
         .min_by_key(|(_, value)| *value)
         .expect("should find a note with sufficient balance for deposit")
 }

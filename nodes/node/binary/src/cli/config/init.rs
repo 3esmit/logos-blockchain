@@ -163,7 +163,7 @@ fn build_cryptarchia_config(
     if cryptarchia_args.ibd
         && let Some(initial_peers) = initial_peers
     {
-        cryptarchia_config.network.bootstrap.ibd.peers = initial_peers
+        cryptarchia_config.network.bootstrap.ibd.trusted_peers = initial_peers
             .iter()
             .filter_map(|addr| match addr.iter().last() {
                 Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),

@@ -123,10 +123,7 @@ cryptarchia:
   network:
     bootstrap:
       ibd:
-        peers: []
-        delay_before_new_download:
-          secs: 10
-          nanos: 0
+        trusted_peers: []
     sync:
       orphan:
         max_orphan_cache_size: 1000

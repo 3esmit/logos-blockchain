@@ -969,7 +969,7 @@ fn prepare_config_patch(
         .network
         .bootstrap
         .ibd
-        .peers
+        .trusted_peers
         .clone_from(ibd_peers);
 
     apply_user_config_overrides(config, user_config_overrides)?;

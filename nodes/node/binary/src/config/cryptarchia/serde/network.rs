@@ -1,7 +1,4 @@
-use core::{
-    num::{NonZeroU64, NonZeroUsize},
-    time::Duration,
-};
+use core::num::{NonZeroU64, NonZeroUsize};
 use std::collections::HashSet;
 
 use libp2p::PeerId;
@@ -23,23 +20,11 @@ pub struct BootstrapConfig {
     pub ibd: IbdConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct IbdConfig {
-    /// Peers to download blocks from.
-    pub peers: HashSet<PeerId>,
-    /// Delay before attempting the next download
-    /// when no download is needed at the moment from a peer.
-    pub delay_before_new_download: Duration,
-}
-
-impl Default for IbdConfig {
-    fn default() -> Self {
-        Self {
-            peers: HashSet::default(),
-            delay_before_new_download: Duration::from_secs(10),
-        }
-    }
+    /// Peers to query for the chain tip during IBD.
+    pub trusted_peers: HashSet<PeerId>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

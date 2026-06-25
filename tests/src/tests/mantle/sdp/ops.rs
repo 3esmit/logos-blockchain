@@ -24,7 +24,7 @@ use lb_core::{
         WithdrawMessage,
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
 use lb_node::config::{
     RunConfig, blend::deployment::MinimumNetworkSize, cryptarchia::deployment::EpochConfig,
 };
@@ -80,6 +80,7 @@ async fn sdp_ops_e2e() {
         spare_note_id,
         slots_per_epoch,
     ) = start_sdp_manual_cluster("sdp-ops").await;
+    let spare_note_pk = spare_note_secret_key.to_public_key();
 
     let inclusion_timeout = Duration::from_mins(1);
 
@@ -160,6 +161,9 @@ async fn sdp_ops_e2e() {
         .expect("API must succeed")
         .expect("declaration should appear after submission");
 
+    // Check that the note has been locked in the wallet.
+    assert!(is_note_locked(&node0, spare_note_pk, locked_note_id).await);
+
     // Submit an withdraw tx immediately.
     let withdraw_message = WithdrawMessage {
         declaration_id,
@@ -232,15 +236,7 @@ async fn sdp_ops_e2e() {
     );
 
     // Check that the note has been unlocked in the wallet.
-    let resp = node0
-        .get_wallet_balance(spare_note_secret_key.to_public_key(), None)
-        .await
-        .expect("balance request should succeed");
-    let note = resp
-        .notes
-        .get(&locked_note_id)
-        .expect("the previously-locked note should be tracked by the wallet");
-    assert!(!note.locked);
+    assert!(!is_note_locked(&node0, spare_note_pk, locked_note_id).await);
 }
 
 /// Test that SDP declaration is correctly restored after validator restart.
@@ -530,4 +526,13 @@ async fn fund_sdp_transaction(
             .expect("funded mixed-op builder should build"),
         signing_keys,
     )
+}
+
+async fn is_note_locked(node: &NodeHttpClient, pk: ZkPublicKey, note_id: NoteId) -> bool {
+    let resp = node
+        .get_wallet_balance(pk, None)
+        .await
+        .expect("balance request should succeed");
+    let note = resp.notes.get(&note_id).expect("note should exist");
+    note.locked
 }

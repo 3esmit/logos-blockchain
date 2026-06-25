@@ -124,6 +124,11 @@ cryptarchia:
     bootstrap:
       ibd:
         trusted_peers: []
+        tips_fetch:
+          attempts: 3
+          delay_between_attempts:
+            secs: 1
+            nanos: 0
     sync:
       orphan:
         max_orphan_cache_size: 1000

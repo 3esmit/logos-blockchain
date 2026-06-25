@@ -107,6 +107,16 @@ impl ServiceConfig {
             bootstrap: lb_chain_network_service::BootstrapConfig {
                 ibd: lb_chain_network_service::IbdConfig {
                     trusted_peers: self.user.network.bootstrap.ibd.trusted_peers,
+                    tips_fetch: lb_chain_network_service::TipsFetchConfig {
+                        attempts: self.user.network.bootstrap.ibd.tips_fetch.attempts,
+                        delay_between_attempts: self
+                            .user
+                            .network
+                            .bootstrap
+                            .ibd
+                            .tips_fetch
+                            .delay_between_attempts,
+                    },
                 },
             },
             network: LibP2pAdapterSettings {

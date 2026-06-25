@@ -635,6 +635,7 @@ fn build_cryptarchia_user_config(
             bootstrap: network::BootstrapConfig {
                 ibd: network::IbdConfig {
                     trusted_peers: HashSet::new(),
+                    tips_fetch: network::TipsFetchConfig::default(),
                 },
             },
             network: network::NetworkConfig {

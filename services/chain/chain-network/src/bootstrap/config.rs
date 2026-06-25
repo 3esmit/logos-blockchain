@@ -1,4 +1,4 @@
-use std::{collections::HashSet, hash::Hash};
+use std::{collections::HashSet, hash::Hash, num::NonZeroUsize, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -19,4 +19,15 @@ where
 {
     /// Trusted peers to query for the chain tip during IBD.
     pub trusted_peers: HashSet<NodeId>,
+    /// Retry policy for tip-fetch batches.
+    pub tips_fetch: TipsFetchConfig,
+}
+
+/// Retry policy for tip-fetch batches at the start of each IBD round.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub struct TipsFetchConfig {
+    /// Total number of attempts.
+    pub attempts: NonZeroUsize,
+    /// Fixed delay between attempts.
+    pub delay_between_attempts: Duration,
 }

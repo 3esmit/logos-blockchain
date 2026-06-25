@@ -16,7 +16,8 @@ use overwatch::DynError;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    Error as ChainError, IbdConfig, mempool::adapter::MempoolAdapter, network::NetworkAdapter,
+    Error as ChainError, IbdConfig, bootstrap::config::TipsFetchConfig,
+    mempool::adapter::MempoolAdapter, network::NetworkAdapter,
     sync::orphan_handler::OrphanBlocksDownloader,
 };
 
@@ -142,7 +143,9 @@ where
         loop {
             self.drain_downloader(&mut downloader).await;
 
-            let unsynced_tips = self.collect_unsynced_tips(&config.trusted_peers).await?;
+            let unsynced_tips = self
+                .collect_unsynced_tips(&config.trusted_peers, config.tips_fetch)
+                .await?;
             if unsynced_tips.is_empty() {
                 info!("IBD complete: all trusted peer tips are present in the local tree");
                 return Ok(self.block_processor);
@@ -183,14 +186,19 @@ where
     }
 
     /// Fetches tips from the trusted peers and returns those not yet in the
-    /// local tree. Returns [`Error::AllPeersFailed`] if no peer responded.
+    /// local tree. Returns [`Error::AllPeersFailed`] if no peer responded
+    /// across every configured attempt.
     async fn collect_unsynced_tips(
         &self,
         peers: &HashSet<NetAdapter::PeerId>,
+        config: TipsFetchConfig,
     ) -> Result<HashSet<HeaderId>, Error> {
-        let tips = fetch_tips(&self.network, peers.iter().copied()).await;
+        let tips = fetch_tips_with_retry(&self.network, peers, config).await;
         if tips.is_empty() {
-            error!("IBD: no trusted peer returned a tip this round");
+            error!(
+                "IBD: no trusted peer returned a tip after {} attempts",
+                config.attempts
+            );
             return Err(Error::AllPeersFailed);
         }
 
@@ -202,6 +210,34 @@ where
         }
         Ok(unsynced)
     }
+}
+
+/// Calls [`fetch_tips`] up to [`TipsFetchConfig::attempts`] times, sleeping
+/// [`TipsFetchConfig::delay_between_attempts`] between attempts. Returns the
+/// first non-empty batch, or an empty set if every attempt returned nothing.
+///
+/// The retry uses a fixed delay rather than exponential backoff because
+/// tip requests are very lightweight.
+async fn fetch_tips_with_retry<NetAdapter, RuntimeServiceId>(
+    network: &NetAdapter,
+    peers: &HashSet<NetAdapter::PeerId>,
+    config: TipsFetchConfig,
+) -> HashSet<HeaderId>
+where
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    NetAdapter::PeerId: Copy + Debug + Send + Sync,
+    RuntimeServiceId: Sync,
+{
+    for attempt in 0..config.attempts.get() {
+        if attempt > 0 {
+            tokio::time::sleep(config.delay_between_attempts).await;
+        }
+        let tips = fetch_tips(network, peers.iter().copied()).await;
+        if !tips.is_empty() {
+            return tips;
+        }
+    }
+    HashSet::new()
 }
 
 /// Concurrently asks every peer for its current chain tip, returning the tips
@@ -263,7 +299,7 @@ mod tests {
     use std::{
         collections::HashMap,
         iter::empty,
-        num::{NonZero, NonZeroU64},
+        num::{NonZero, NonZeroU64, NonZeroUsize},
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -485,6 +521,26 @@ mod tests {
         assert!(matches!(result, Err(Error::AllPeersFailed)));
     }
 
+    /// If a peer's first tip request fails but a later attempt within the
+    /// same round succeeds, IBD recovers via the configured retry instead of
+    /// aborting with `AllPeersFailed`.
+    #[tokio::test]
+    async fn tip_fetch_retries_after_transient_failure() {
+        let chain = vec![Block::genesis(), Block::new(1, GENESIS_ID, 1, 1)];
+        // First tip request fails, second succeeds: only the retry can make
+        // this scenario pass.
+        let peer = BlockProvider::with_tips(
+            chain.clone(),
+            vec![Err(()), Ok(Block::new(1, GENESIS_ID, 1, 1))],
+        );
+        let block_processor = run_ibd(HashMap::from([(NodeId(0), peer)]), [NodeId(0)].into())
+            .await
+            .unwrap();
+
+        let cryptarchia = block_processor.cryptarchia;
+        assert!(chain.iter().all(|b| cryptarchia.has_block(&b.id)));
+    }
+
     async fn run_ibd(
         providers: HashMap<NodeId, BlockProvider>,
         peers: HashSet<NodeId>,
@@ -540,7 +596,13 @@ mod tests {
     struct NodeId(usize);
 
     fn config(trusted_peers: HashSet<NodeId>) -> IbdConfig<NodeId> {
-        IbdConfig { trusted_peers }
+        IbdConfig {
+            trusted_peers,
+            tips_fetch: TipsFetchConfig {
+                attempts: NonZeroUsize::new(3).unwrap(),
+                delay_between_attempts: Duration::from_secs(1),
+            },
+        }
     }
 
     const GENESIS_ID: u8 = 0;

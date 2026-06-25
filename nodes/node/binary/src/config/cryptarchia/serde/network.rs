@@ -1,4 +1,7 @@
-use core::num::{NonZeroU64, NonZeroUsize};
+use core::{
+    num::{NonZeroU64, NonZeroUsize},
+    time::Duration,
+};
 use std::collections::HashSet;
 
 use libp2p::PeerId;
@@ -25,6 +28,26 @@ pub struct BootstrapConfig {
 pub struct IbdConfig {
     /// Peers to query for the chain tip during IBD.
     pub trusted_peers: HashSet<PeerId>,
+    /// Retry policy for tip-fetch batches.
+    pub tips_fetch: TipsFetchConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TipsFetchConfig {
+    /// Total number of attempts.
+    pub attempts: NonZeroUsize,
+    /// Fixed delay between attempts.
+    pub delay_between_attempts: Duration,
+}
+
+impl Default for TipsFetchConfig {
+    fn default() -> Self {
+        Self {
+            attempts: NonZeroUsize::new(3).unwrap(),
+            delay_between_attempts: Duration::from_secs(1),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

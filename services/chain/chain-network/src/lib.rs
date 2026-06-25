@@ -49,7 +49,7 @@ use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
 pub use crate::{
-    bootstrap::config::{BootstrapConfig, IbdConfig},
+    bootstrap::config::{BootstrapConfig, IbdConfig, TipsFetchConfig},
     sync::config::{OrphanConfig, SyncConfig, TipPollConfig},
 };
 use crate::{

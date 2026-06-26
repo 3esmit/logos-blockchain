@@ -54,6 +54,8 @@ where
 pub struct OrphanInfo {
     /// The orphan block ID we're fetching ancestors for
     orphan_id: HeaderId,
+    /// The orphan block's parent.
+    parent_id: HeaderId,
     /// Local tip
     tip: HeaderId,
     /// The latest immutable block
@@ -61,9 +63,15 @@ pub struct OrphanInfo {
 }
 
 impl OrphanInfo {
-    const fn new(block_id: HeaderId, local_tip: HeaderId, lib: HeaderId) -> Self {
+    const fn new(
+        block_id: HeaderId,
+        parent_id: HeaderId,
+        local_tip: HeaderId,
+        lib: HeaderId,
+    ) -> Self {
         Self {
             orphan_id: block_id,
+            parent_id,
             tip: local_tip,
             lib,
         }
@@ -127,9 +135,35 @@ where
     pub fn enqueue_orphan(
         &mut self,
         block_id: HeaderId,
+        parent_id: HeaderId,
         current_tip: HeaderId,
         lib: HeaderId,
     ) -> Result<(), OrphanEnqueueError> {
+        if let DownloaderState::Downloading(download) = &self.state
+            && download.orphan_block_id() == block_id
+        {
+            debug!(target: LOG_TARGET, ?block_id, "Orphan block is already being downloaded, skipping enqueue");
+            return Err(OrphanEnqueueError::AlreadyDownloading);
+        }
+
+        if self.pending_orphans_queue.contains_key(&block_id) {
+            debug!(target: LOG_TARGET, ?block_id, "Orphan block is already in the queue, skipping enqueue");
+            return Err(OrphanEnqueueError::AlreadyInQueue);
+        }
+
+        // If the parent is already queued, replace it with this descendant.
+        // Doing this before the capacity check is safe because this removes
+        // the parent from the queue, if any.
+        if self.pending_orphans_queue.contains_key(&parent_id) {
+            debug!(
+                target: LOG_TARGET,
+                ?block_id, ?parent_id,
+                "replacing queued parent orphan with descendant"
+            );
+            self.remove_orphan(&parent_id);
+            metrics::orphan_blocks_replaced_total();
+        }
+
         if self.pending_orphans_queue.len() >= self.max_pending_orphans.get() {
             warn!(
                 target: LOG_TARGET,
@@ -145,20 +179,10 @@ where
             });
         }
 
-        if let DownloaderState::Downloading(download) = &self.state
-            && download.orphan_block_id() == block_id
-        {
-            debug!(target: LOG_TARGET, ?block_id, "Orphan block is already being downloaded, skipping enqueue");
-            return Err(OrphanEnqueueError::AlreadyDownloading);
-        }
-
-        if self.pending_orphans_queue.contains_key(&block_id) {
-            debug!(target: LOG_TARGET, ?block_id, "Orphan block is already in the queue, skipping enqueue");
-            return Err(OrphanEnqueueError::AlreadyInQueue);
-        }
-
-        self.pending_orphans_queue
-            .insert(block_id, OrphanInfo::new(block_id, current_tip, lib));
+        self.pending_orphans_queue.insert(
+            block_id,
+            OrphanInfo::new(block_id, parent_id, current_tip, lib),
+        );
         debug!(
             target: LOG_TARGET,
             ?block_id, ?current_tip, ?lib, queue_size = self.pending_orphans_queue.len(),
@@ -632,8 +656,89 @@ mod tests {
     const ORPHAN_CACHE_SIZE: NonZeroUsize =
         NonZeroUsize::new(5).expect("ORPHAN_CACHE_SIZE must be non-zero");
 
+    const TEST_PARENT: [u8; 32] = [9u8; 32];
     const TEST_TIP: [u8; 32] = [10u8; 32];
     const TEST_LIB: [u8; 32] = [11u8; 32];
+
+    #[tokio::test]
+    async fn test_enqueue_replaces_queued_parent_with_descendant() {
+        let mut downloader = create_downloader();
+
+        let grandparent: HeaderId = TEST_PARENT.into();
+        let parent: HeaderId = [1u8; 32].into();
+        let child: HeaderId = [2u8; 32].into();
+
+        downloader
+            .enqueue_orphan(parent, grandparent, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+        assert!(downloader.pending_orphans_queue.contains_key(&parent));
+
+        downloader
+            .enqueue_orphan(child, parent, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+
+        assert!(!downloader.pending_orphans_queue.contains_key(&parent));
+        assert!(downloader.pending_orphans_queue.contains_key(&child));
+        assert_eq!(downloader.pending_orphans_queue.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_replaces_queued_parent_when_cache_is_full() {
+        let mut downloader = create_downloader();
+
+        let mut added_orphans = Vec::new();
+        for i in 0..downloader.max_pending_orphans.get() {
+            let orphan: HeaderId = [i as u8; 32].into();
+            downloader
+                .enqueue_orphan(orphan, TEST_PARENT.into(), TEST_TIP.into(), TEST_LIB.into())
+                .unwrap();
+            added_orphans.push(orphan);
+        }
+
+        let descendant: HeaderId = [255u8; 32].into();
+        let parent_in_queue = added_orphans[0];
+
+        downloader
+            .enqueue_orphan(
+                descendant,
+                parent_in_queue,
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
+            .unwrap();
+
+        assert!(
+            !downloader
+                .pending_orphans_queue
+                .contains_key(&parent_in_queue)
+        );
+        assert!(downloader.pending_orphans_queue.contains_key(&descendant));
+        assert_eq!(
+            downloader.pending_orphans_queue.len(),
+            downloader.max_pending_orphans.get()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_with_unqueued_parent_does_not_replace() {
+        let mut downloader = create_downloader();
+
+        let other: HeaderId = [1u8; 32].into();
+        let child: HeaderId = [2u8; 32].into();
+        let absent_parent: HeaderId = [99u8; 32].into();
+
+        downloader
+            .enqueue_orphan(other, TEST_PARENT.into(), TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+
+        downloader
+            .enqueue_orphan(child, absent_parent, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+
+        assert!(downloader.pending_orphans_queue.contains_key(&other));
+        assert!(downloader.pending_orphans_queue.contains_key(&child));
+        assert_eq!(downloader.pending_orphans_queue.len(), 2);
+    }
 
     #[tokio::test]
     async fn test_orphan_cache_limit() {
@@ -643,7 +748,7 @@ mod tests {
         for i in 0..downloader.max_pending_orphans.get() {
             let orphan = [i as u8; 32].into();
             downloader
-                .enqueue_orphan(orphan, TEST_TIP.into(), TEST_LIB.into())
+                .enqueue_orphan(orphan, TEST_PARENT.into(), TEST_TIP.into(), TEST_LIB.into())
                 .unwrap();
             added_orphans.push(orphan);
         }
@@ -659,7 +764,12 @@ mod tests {
 
         let extra_orphan = [255u8; 32].into();
         assert!(matches!(
-            downloader.enqueue_orphan(extra_orphan, TEST_TIP.into(), TEST_LIB.into()),
+            downloader.enqueue_orphan(
+                extra_orphan,
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into()
+            ),
             Err(OrphanEnqueueError::QueueFull { .. })
         ));
 
@@ -704,10 +814,20 @@ mod tests {
             ],
         );
         downloader
-            .enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[2],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
         downloader
-            .enqueue_orphan(chain[6], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[6],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
@@ -734,10 +854,20 @@ mod tests {
         );
 
         downloader
-            .enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[2],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
         downloader
-            .enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[7],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
@@ -762,7 +892,12 @@ mod tests {
             create_downloader_with_responses(&chain, vec![(4, vec![vec![0, 1, 2], vec![3, 4]])]);
 
         downloader
-            .enqueue_orphan(chain[4], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[4],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
@@ -781,7 +916,12 @@ mod tests {
         );
 
         downloader
-            .enqueue_orphan(chain[9], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[9],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
@@ -814,10 +954,20 @@ mod tests {
         );
 
         downloader
-            .enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[2],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
         downloader
-            .enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[7],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut received_blocks = Vec::new();
@@ -858,7 +1008,12 @@ mod tests {
             create_downloader_with_responses(&chain, vec![(4, vec![vec![0, 1, 2, 3, 4]])]);
 
         downloader
-            .enqueue_orphan(chain[4], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[4],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
@@ -867,6 +1022,7 @@ mod tests {
             assert!(matches!(
                 downloader.as_mut().get_mut().enqueue_orphan(
                     chain[4],
+                    TEST_PARENT.into(),
                     [20u8; 32].into(),
                     [21u8; 32].into()
                 ),
@@ -901,10 +1057,20 @@ mod tests {
         );
 
         downloader
-            .enqueue_orphan(chain[3], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[3],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
         downloader
-            .enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[7],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut received_blocks = Vec::new();
@@ -940,7 +1106,12 @@ mod tests {
         );
 
         downloader
-            .enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[2],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);
@@ -952,7 +1123,12 @@ mod tests {
         downloader
             .as_mut()
             .get_mut()
-            .enqueue_orphan(chain[5], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[5],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let second_batch = receive_blocks(&mut downloader, 3).await;
@@ -970,7 +1146,12 @@ mod tests {
             create_downloader_with_responses(&chain, vec![(2, vec![vec![0, 1, 2, 3, 4]])]);
 
         downloader
-            .enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into())
+            .enqueue_orphan(
+                chain[2],
+                TEST_PARENT.into(),
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+            )
             .unwrap();
 
         let mut downloader = pin::pin!(downloader);

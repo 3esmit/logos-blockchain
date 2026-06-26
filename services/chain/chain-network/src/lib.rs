@@ -474,7 +474,9 @@ where
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing. Trying to enqueue block for orphan processing",
                 );
-                if let Err(e) = orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib) {
+                if let Err(e) =
+                    orphan_downloader.enqueue_orphan(block_id, parent, info.tip, info.lib)
+                {
                     error!(
                         target: LOG_TARGET, %e, ?block_id, ?parent,
                         "Failed to enqueue block for orphan processing",

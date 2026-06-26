@@ -311,6 +311,7 @@ where
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
             network_adapter,
             sync_config.orphan.max_orphan_cache_size,
+            sync_config.orphan.max_rejected_cache_size,
         ));
 
         self.notify_service_ready();
@@ -338,8 +339,19 @@ where
                         let header_id = block.header().id();
                         info!("Processing block from orphan downloader: {header_id:?}");
 
-                        if !should_process_block(relays.cryptarchia(), block.header().id()).await {
-                            continue;
+                        match should_process_block(
+                            relays.cryptarchia(),
+                            block.header().id(),
+                            block.header().slot(),
+                        )
+                        .await
+                        {
+                            Ok(()) => {}
+                            Err(DoNotProcessBlock::OlderThanLib) => {
+                                orphan_downloader.insert_rejected_block(header_id);
+                                continue;
+                            }
+                            Err(DoNotProcessBlock::AlreadyApplied) => continue,
                         }
 
                         Self::log_received_block(&block);
@@ -354,6 +366,9 @@ where
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
+                                if !is_recoverable_apply_error(&e) {
+                                    orphan_downloader.insert_rejected_block(header_id);
+                                }
                                 orphan_downloader.cancel_active_download();
                             }
                         }
@@ -436,12 +451,15 @@ where
         RuntimeServiceId: Send + Sync + 'static,
     {
         let block_id = proposal.header().id();
+        let block_slot = proposal.header().slot();
 
-        if !should_process_block(relays.cryptarchia(), block_id).await {
-            info!(
-                target: LOG_TARGET,
-                "Block {block_id:?} already processed, ignoring"            );
-            return;
+        match should_process_block(relays.cryptarchia(), block_id, block_slot).await {
+            Ok(()) => {}
+            Err(DoNotProcessBlock::OlderThanLib) => {
+                orphan_downloader.insert_rejected_block(block_id);
+                return;
+            }
+            Err(DoNotProcessBlock::AlreadyApplied) => return,
         }
 
         let block = match reconstruct_block_from_proposal(proposal, relays.mempool_adapter()).await
@@ -488,6 +506,9 @@ where
                     target: LOG_TARGET, %err, ?block_id,
                     "Error processing reconstructed block",
                 );
+                if !is_recoverable_apply_error(&err) {
+                    orphan_downloader.insert_rejected_block(block_id);
+                }
             }
         }
     }
@@ -574,34 +595,91 @@ where
     }
 }
 
+/// Apply-time errors that must NOT mark the block as rejected:
+/// - `ParentMissing`: transient — block may become applicable once parent
+///   arrives.
+/// - `AlreadyApplied`: the block is already in the chain; re-processing is
+///   unnecessary. Rejecting would also block its valid descendants from
+///   entering the orphan pipeline.
+/// - `CommsFailure`: relay failure has nothing to do with block validity.
+const fn is_recoverable_apply_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Cryptarchia(
+            lb_chain_service::api::ApiError::ParentMissing { .. }
+                | lb_chain_service::api::ApiError::AlreadyApplied(_)
+                | lb_chain_service::api::ApiError::CommsFailure(_),
+        ),
+    )
+}
+
 async fn should_process_block<Cryptarchia, RuntimeServiceId>(
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     block_id: HeaderId,
+    block_slot: Slot,
+) -> Result<(), DoNotProcessBlock>
+where
+    Cryptarchia: CryptarchiaServiceData,
+    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    RuntimeServiceId: Send + Sync,
+{
+    if !is_after_lib(cryptarchia, block_id, block_slot).await {
+        return Err(DoNotProcessBlock::OlderThanLib);
+    }
+
+    match cryptarchia.get_ledger_state(block_id).await {
+        Ok(Some(_)) => Err(DoNotProcessBlock::AlreadyApplied),
+        Ok(None) => Ok(()),
+        Err(err) => {
+            error!(target: LOG_TARGET, err = ?err, "Failure when checking if block already processed");
+            // block processing is idempotent, so we can safely re-process a block
+            Ok(())
+        }
+    }
+}
+
+/// Errors that indicate why a block should not be processed.
+#[derive(Debug)]
+enum DoNotProcessBlock {
+    OlderThanLib,
+    AlreadyApplied,
+}
+
+async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    block_id: HeaderId,
+    block_slot: Slot,
 ) -> bool
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
-    match cryptarchia.get_ledger_state(block_id).await {
-        Ok(Some(_)) => {
-            info!(
+    match cryptarchia.info().await {
+        Ok(info) => {
+            if !is_at_or_before_lib(block_slot, info.lib_slot) {
+                return true;
+            }
+
+            trace!(
                 target: LOG_TARGET,
-                "Block {:?} already processed, ignoring",
-                block_id
+                ?block_id,
+                ?block_slot,
+                lib = ?info.lib,
+                lib_slot = ?info.lib_slot,
+                "Ignoring block at or before local LIB"
             );
             false
         }
-        Ok(None) => {
-            // block has not been processed
-            true
-        }
         Err(err) => {
-            error!(target: LOG_TARGET, err = ?err, "Failure when checking if block already processed");
-            // block processing is idempotent, so we can safely re-process a block
+            error!(target: LOG_TARGET, err = ?err, "Failure when checking local LIB");
             true
         }
     }
+}
+
+fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
+    block_slot <= lib_slot
 }
 
 /// Try to add a [`Block`] to [`Cryptarchia`].

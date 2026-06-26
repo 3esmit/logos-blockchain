@@ -25,6 +25,8 @@ pub enum ApiError {
         parent: HeaderId,
         info: Box<CryptarchiaInfo>,
     },
+    #[error("Block {0} has already been applied")]
+    AlreadyApplied(HeaderId),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
     #[error("Unexpected Error: {0}")]
@@ -212,6 +214,7 @@ where
                 crate::Error::ParentMissing { parent, info } => {
                     ApiError::ParentMissing { parent, info }
                 }
+                crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
                 err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
             })
     }

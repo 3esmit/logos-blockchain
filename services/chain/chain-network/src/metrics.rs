@@ -93,6 +93,23 @@ pub fn orphan_blocks_fetch_failed_total() {
     lb_tracing::increase_counter_u64!(orphan_blocks_fetch_failed_total, 1);
 }
 
+/// Enqueue was refused because the block (or its parent) is in the
+/// rejected-blocks negative cache.
+pub fn orphan_blocks_enqueue_rejected_total() {
+    lb_tracing::increase_counter_u64!(orphan_blocks_enqueue_rejected_total, 1);
+}
+
+/// A queued orphan was dropped at dequeue time because it had been marked
+/// rejected after enqueue.
+pub fn orphan_blocks_dequeue_rejected_total() {
+    lb_tracing::increase_counter_u64!(orphan_blocks_dequeue_rejected_total, 1);
+}
+
+/// A new block id was inserted into the rejected-blocks negative cache.
+pub fn orphan_blocks_rejected_inserted_total() {
+    lb_tracing::increase_counter_u64!(orphan_blocks_rejected_inserted_total, 1);
+}
+
 pub fn consensus_block_blob_validation_failed_total(mode: &'static str, reason: &'static str) {
     lb_tracing::increase_counter_u64!(
         consensus_block_blob_validation_failed_total,

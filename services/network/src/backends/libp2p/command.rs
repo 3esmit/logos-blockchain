@@ -44,4 +44,7 @@ pub struct Libp2pInfo {
     pub n_peers: usize,
     pub n_connections: u32,
     pub n_pending_connections: u32,
+    /// Peers in the local Kademlia routing table.
+    pub discovered_peers: Vec<PeerId>,
+    pub n_discovered_peers: usize,
 }

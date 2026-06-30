@@ -105,6 +105,8 @@ pub enum Error {
     ChannelNotFound { channel_id: ChannelId },
     #[error("Insufficient funds")]
     InsufficientFunds,
+    #[error("Unbalanced operation")]
+    UnbalancedOperation,
     #[error("Balance overflow")]
     BalanceOverflow,
     #[error("The Channel Config isn't well formed")]

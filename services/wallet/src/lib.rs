@@ -700,6 +700,18 @@ where
         Ok(OpProof::ZkSig(zk_sig))
     }
 
+    async fn sign_channel_stake_transfer(
+        tx_hash: TxHash,
+        note_ids: Inputs,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        ledger: &LedgerState,
+    ) -> Result<OpProof, WalletServiceError> {
+        let input_pks = Self::resolve_note_input_pks(ledger, note_ids.into_inner())?;
+        let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
+
+        Ok(OpProof::ZkSig(zk_sig))
+    }
+
     async fn sign_channel_set_key(
         tx_hash: TxHash,
         set_keys_op: &ChannelConfigOp,
@@ -863,6 +875,21 @@ where
                 Op::ChannelDeposit(deposit_op) => {
                     Self::sign_channel_deposit(tx_hash, deposit_op.inputs.clone(), kms, &tip_leader)
                         .await?
+                }
+                Op::ChannelStakeAssignation(_stake_assignation_op) => {
+                    let proof = channel_multi_sig_proofs
+                        .remove(&i)
+                        .ok_or(WalletServiceError::ChannelMultiSigProofNotFound(i))?;
+                    OpProof::ChannelMultiSigProof(proof)
+                }
+                Op::ChannelStakeTransfer(stake_transfer_op) => {
+                    Self::sign_channel_stake_transfer(
+                        tx_hash,
+                        stake_transfer_op.inputs.clone(),
+                        kms,
+                        &tip_leader,
+                    )
+                    .await?
                 }
                 Op::ChannelWithdraw(_channel_withdraw_op) => {
                     let proof = channel_multi_sig_proofs

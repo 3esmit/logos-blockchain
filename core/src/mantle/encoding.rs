@@ -152,9 +152,11 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         }
 
         // ZkSigProof = ZkSignature
-        Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_) => {
-            map(decode_zk_signature, OpProof::ZkSig).parse(input)
-        }
+        Op::SDPWithdraw(_)
+        | Op::SDPActive(_)
+        | Op::Transfer(_)
+        | Op::ChannelDeposit(_)
+        | Op::ChannelStakeTransfer(_) => map(decode_zk_signature, OpProof::ZkSig).parse(input),
 
         // ProofOfClaimProof = Groth16
         Op::LeaderClaim(leader_claim_op) => map(decode_groth16, |proof| {
@@ -166,7 +168,7 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         .parse(input),
 
         // ChannelMultiSigProof — also used by ChannelConfig (threshold sigs)
-        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => map(
+        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) | Op::ChannelStakeAssignation(_) => map(
             decode_channel_multi_sig_proof,
             OpProof::ChannelMultiSigProof,
         )
@@ -490,12 +492,18 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
             Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
 
             // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
-            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) => {
+            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) | Op::ChannelStakeTransfer(_) => {
                 GROTH16_BYTES
             }
 
             // ChannelMultiSigProof
             Op::ChannelWithdraw(operation) => {
+                let channel_stake_manipulation_threshold = context.stake_manipulation_threshold(&operation.channel_id).expect(
+                    "Operation should have been verified before reaching this point, so the channel must exist in the context."
+                );
+                calculate_channel_multi_sig_proof_byte_size(channel_stake_manipulation_threshold)
+            }
+            Op::ChannelStakeAssignation(operation) => {
                 let channel_stake_manipulation_threshold = context.stake_manipulation_threshold(&operation.channel_id).expect(
                     "Operation should have been verified before reaching this point, so the channel must exist in the context."
                 );

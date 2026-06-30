@@ -11,6 +11,7 @@ use std::sync::LazyLock;
 
 use channel::{
     config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+    stake_assignation::ChannelStakeAssignationOp, stake_transfer::ChannelStakeTransferOp,
     withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -59,7 +60,9 @@ const TRANSFER: u8 = 0x00;
 const CHANNEL_CONFIG: u8 = 0x10;
 const INSCRIBE: u8 = 0x11;
 const CHANNEL_DEPOSIT: u8 = 0x12;
-const CHANNEL_WITHDRAW: u8 = 0x13;
+const CHANNEL_STAKE_ASSIGNATION: u8 = 0x13;
+const CHANNEL_STAKE_TRANSFER: u8 = 0x14;
+const CHANNEL_WITHDRAW: u8 = 0x15;
 const SDP_DECLARE: u8 = 0x20;
 const SDP_WITHDRAW: u8 = 0x21;
 const SDP_ACTIVE: u8 = 0x22;
@@ -79,6 +82,8 @@ pub enum Op {
     ChannelInscribe(InscriptionOp),
     ChannelConfig(ChannelConfigOp),
     ChannelDeposit(DepositOp),
+    ChannelStakeAssignation(ChannelStakeAssignationOp),
+    ChannelStakeTransfer(ChannelStakeTransferOp),
     ChannelWithdraw(ChannelWithdrawOp),
     SDPDeclare(SDPDeclareOp),
     SDPWithdraw(SDPWithdrawOp),
@@ -137,6 +142,12 @@ impl NomEncode for Op {
                 bytes.extend(op.encode());
             }
             Self::ChannelDeposit(op) => {
+                bytes.extend(op.encode());
+            }
+            Self::ChannelStakeAssignation(op) => {
+                bytes.extend(op.encode());
+            }
+            Self::ChannelStakeTransfer(op) => {
                 bytes.extend(op.encode());
             }
             Self::ChannelWithdraw(op) => {
@@ -205,6 +216,8 @@ impl Op {
             Self::ChannelInscribe(_) => "ChannelInscribe",
             Self::ChannelConfig(_) => "ChannelConfig",
             Self::ChannelDeposit(_) => "ChannelDeposit",
+            Self::ChannelStakeAssignation(_) => "ChannelStakeAssignation",
+            Self::ChannelStakeTransfer(_) => "ChannelStakeTransfer",
             Self::ChannelWithdraw(_) => "ChannelWithdraw",
             Self::SDPDeclare(_) => "SDPDeclare",
             Self::SDPWithdraw(_) => "SDPWithdraw",
@@ -220,6 +233,8 @@ impl Op {
             Self::ChannelInscribe(_) => Constants::CHANNEL_INSCRIBE,
             Self::ChannelConfig(_) => Constants::CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => Constants::CHANNEL_DEPOSIT,
+            Self::ChannelStakeAssignation(_) => Constants::CHANNEL_STAKE_ASSIGNATION,
+            Self::ChannelStakeTransfer(_) => Constants::CHANNEL_STAKE_TRANSFER,
             Self::ChannelWithdraw(_) => Constants::CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => Constants::SDP_DECLARE,
             Self::SDPWithdraw(_) => Constants::SDP_WITHDRAW,
@@ -234,6 +249,8 @@ impl Op {
             Self::ChannelInscribe(_) => INSCRIBE,
             Self::ChannelConfig(_) => CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
+            Self::ChannelStakeAssignation(_) => CHANNEL_STAKE_ASSIGNATION,
+            Self::ChannelStakeTransfer(_) => CHANNEL_STAKE_TRANSFER,
             Self::ChannelWithdraw(_) => CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => SDP_DECLARE,
             Self::SDPWithdraw(_) => SDP_WITHDRAW,

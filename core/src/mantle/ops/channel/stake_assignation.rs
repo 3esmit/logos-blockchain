@@ -1,14 +1,13 @@
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     events::Events,
     mantle::{
-        Note, TxHash,
+        TxHash,
         channel::{Channels, Error},
         encoding::{NomInputs, NomOutputs},
-        ledger::{Inputs, Operation, Outputs, OutputsError, Utxos},
+        ledger::{Inputs, Operation, Outputs, Utxos},
         nom::{NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
@@ -17,19 +16,19 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ChannelWithdrawOp {
+pub struct ChannelStakeAssignationOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
     pub outputs: Outputs,
 }
 
-impl OpId for ChannelWithdrawOp {
+impl OpId for ChannelStakeAssignationOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
     }
 }
 
-impl NomEncode for ChannelWithdrawOp {
+impl NomEncode for ChannelStakeAssignationOp {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(self.channel_id.encode());
@@ -39,7 +38,7 @@ impl NomEncode for ChannelWithdrawOp {
     }
 }
 
-impl NomDecode for ChannelWithdrawOp {
+impl NomDecode for ChannelStakeAssignationOp {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
@@ -57,27 +56,27 @@ impl NomDecode for ChannelWithdrawOp {
     }
 }
 
-pub struct WithdrawValidationContext<'a> {
+pub struct StakeAssignationValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
-    pub withdraw_sigs: &'a ChannelMultiSigProof,
+    pub stake_assignation_sigs: &'a ChannelMultiSigProof,
 }
 
-pub struct WithdrawExecutionContext {
+pub struct StakeAssignationExecutionContext {
     pub channels: Channels,
     pub utxos: Utxos,
 }
 
-impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
+impl Operation<StakeAssignationValidationContext<'_>> for ChannelStakeAssignationOp {
     type ExecutionContext<'a>
-        = WithdrawExecutionContext
+        = StakeAssignationExecutionContext
     where
         Self: 'a;
     type Error = Error;
 
-    fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &StakeAssignationValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the outputs are valid
         self.outputs.validate()?;
 
@@ -106,20 +105,20 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         // Check the operation is balanced
         let input_amount = self.inputs.amount(ctx.utxos)?;
         let output_amount = self.outputs.amount()?;
-        if input_amount < output_amount {
-            return Err(Error::InsufficientFunds);
+        if input_amount != output_amount {
+            return Err(Error::UnbalancedOperation);
         }
 
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
         // Check there is enough signatures
-        let signatures = ctx.withdraw_sigs.signatures();
+        let signatures = ctx.stake_assignation_sigs.signatures();
         if signatures.len() != channel.stake_manipulation_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
                 threshold: channel.stake_manipulation_threshold,
-                actual: ctx.withdraw_sigs.signatures().len(),
+                actual: ctx.stake_assignation_sigs.signatures().len(),
             });
         }
 
@@ -140,26 +139,15 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
-        // compute the returning amount (checked_sub is not necessary because we
-        // validated the balance before)
-        let input_amount = self.inputs.amount(&ctx.utxos)?;
-        let output_amount = self.outputs.amount()?;
-        let returned_amount = input_amount - output_amount;
-
         // Remove inputs from the ledger
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
         // Add the ouputs to the ledger
-        let mut outputs = self.outputs.clone();
-        let mut channels = vec![None; self.outputs.len()];
-        if returned_amount != 0 {
-            outputs
-                .as_mut()
-                .try_push(Note::new(returned_amount, ZkPublicKey::zero()))
-                .map_err(|_| OutputsError::OutputsOverflow)?;
-            channels.push(Some(self.channel_id));
-        }
-        ctx.utxos = outputs.execute(ctx.utxos, self, channels);
+        ctx.utxos = self.outputs.execute(
+            ctx.utxos,
+            self,
+            vec![Some(self.channel_id); self.outputs.len()],
+        );
 
         Ok((ctx, Events::new()))
     }

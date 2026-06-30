@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CHANNEL_CONFIG, CHANNEL_DEPOSIT, CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM, Op, SDP_ACTIVE,
-    SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
-    channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
+    CHANNEL_CONFIG, CHANNEL_DEPOSIT, CHANNEL_STAKE_ASSIGNATION, CHANNEL_STAKE_TRANSFER,
+    CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM, Op, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
+    channel::{
+        config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+        stake_assignation::ChannelStakeAssignationOp, stake_transfer::ChannelStakeTransferOp,
+    },
     leader_claim::LeaderClaimOp,
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_::OpWire,
@@ -18,6 +21,8 @@ pub enum OpSer<'a> {
     ChannelInscribe(OpWire<INSCRIBE, &'a InscriptionOp>),
     ChannelConfig(OpWire<CHANNEL_CONFIG, &'a ChannelConfigOp>),
     ChannelDeposit(OpWire<CHANNEL_DEPOSIT, &'a DepositOp>),
+    ChannelStakeAssignation(OpWire<CHANNEL_STAKE_ASSIGNATION, &'a ChannelStakeAssignationOp>),
+    ChannelStakeTransfer(OpWire<CHANNEL_STAKE_TRANSFER, &'a ChannelStakeTransferOp>),
     ChannelWithdraw(OpWire<CHANNEL_WITHDRAW, &'a ChannelWithdrawOp>),
     SDPDeclare(OpWire<SDP_DECLARE, &'a SDPDeclareOp>),
     SDPWithdraw(OpWire<SDP_WITHDRAW, &'a SDPWithdrawOp>),
@@ -32,6 +37,8 @@ impl<'a> From<&'a Op> for OpSer<'a> {
             Op::ChannelInscribe(op) => Self::ChannelInscribe(OpWire::new(op)),
             Op::ChannelConfig(op) => Self::ChannelConfig(OpWire::new(op)),
             Op::ChannelDeposit(op) => Self::ChannelDeposit(OpWire::new(op)),
+            Op::ChannelStakeAssignation(op) => Self::ChannelStakeAssignation(OpWire::new(op)),
+            Op::ChannelStakeTransfer(op) => Self::ChannelStakeTransfer(OpWire::new(op)),
             Op::ChannelWithdraw(op) => Self::ChannelWithdraw(OpWire::new(op)),
             Op::SDPDeclare(op) => Self::SDPDeclare(OpWire::new(op)),
             Op::SDPWithdraw(op) => Self::SDPWithdraw(OpWire::new(op)),

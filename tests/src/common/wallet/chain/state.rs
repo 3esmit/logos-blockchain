@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use lb_core::mantle::{NoteId, SignedMantleTx, Utxo, ops::Op};
+use lb_core::mantle::{
+    Note, NoteId, SignedMantleTx, Utxo,
+    ops::{Op, OpId as _},
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use thiserror::Error;
 
@@ -186,18 +189,55 @@ impl WalletChainState {
                 );
             }
             Op::ChannelDeposit(deposit) => {
+                // A deposit consumes user notes and creates a single
+                // channel-owned note worth the deposited
+                // amount, tagged with the channel id.
+                let amount = self.sum_note_values(deposit.inputs.iter().copied());
                 self.apply_spent_note_ids(
                     deposit.inputs.iter().copied(),
                     &mut changes.observed_spends,
                 );
+                if amount != 0 {
+                    self.apply_owned_outputs(
+                        std::iter::once(Utxo::new(
+                            deposit.op_id(),
+                            0,
+                            Some(deposit.channel_id),
+                            Note::new(amount, ZkPublicKey::zero()),
+                        )),
+                        &mut changes.observed_outputs,
+                    );
+                }
             }
             Op::ChannelWithdraw(withdraw) => {
+                // A withdraw spends channel-owned notes, pays the recipient
+                // outputs, and returns the unspent remainder as a fresh
+                // channel-owned change note.
+                let input_amount = self.sum_note_values(withdraw.inputs.iter().copied());
+                self.apply_spent_note_ids(
+                    withdraw.inputs.iter().copied(),
+                    &mut changes.observed_spends,
+                );
                 self.apply_owned_outputs(
                     withdraw
                         .outputs
                         .utxos(withdraw, vec![None; withdraw.outputs.len()]),
                     &mut changes.observed_outputs,
                 );
+                let output_amount: u64 = withdraw.outputs.iter().map(|note| note.value).sum();
+                if let Some(returned) = input_amount.checked_sub(output_amount)
+                    && returned != 0
+                {
+                    self.apply_owned_outputs(
+                        std::iter::once(Utxo::new(
+                            withdraw.op_id(),
+                            withdraw.outputs.len(),
+                            Some(withdraw.channel_id),
+                            Note::new(returned, ZkPublicKey::zero()),
+                        )),
+                        &mut changes.observed_outputs,
+                    );
+                }
             }
             Op::SDPDeclare(declaration) => self.lock_note(declaration.locked_note_id),
             Op::SDPWithdraw(withdrawal) => self.unlock_note(withdrawal.locked_note_id),
@@ -228,6 +268,20 @@ impl WalletChainState {
                 });
             }
         }
+    }
+
+    /// Sums the value of the tracked notes referenced by `note_ids`, ignoring
+    /// ids the wallet does not currently hold.
+    fn sum_note_values(&self, note_ids: impl IntoIterator<Item = NoteId>) -> u64 {
+        note_ids
+            .into_iter()
+            .filter_map(|note_id| {
+                self.utxos_by_wallet
+                    .values()
+                    .find_map(|utxos_by_note| utxos_by_note.get(&note_id))
+                    .map(|utxo| utxo.note.value)
+            })
+            .sum()
     }
 
     fn apply_spent_note_ids(
@@ -331,12 +385,13 @@ fn wallet_public_keys_by_owner(
 mod tests {
     use lb_core::{
         mantle::{
-            MantleTx, Note,
+            MantleTx,
             ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
         },
         sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
     };
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_service::keys::Ed25519Key;
 
     use super::*;
@@ -459,6 +514,7 @@ mod tests {
         .expect("tracked wallet keys should be valid");
         let withdraw = ChannelWithdrawOp {
             channel_id: ChannelId::from([0; 32]),
+            inputs: Inputs::new(NoteId(Fr::ZERO)),
             outputs: Outputs::new([Note::new(10, pk(1)), Note::new(20, pk(2))]),
         };
 

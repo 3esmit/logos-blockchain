@@ -5,7 +5,8 @@ use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     TxHash, Utxo,
-    ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
+    ledger::Inputs,
+    ops::channel::{ChannelId, config::Keys, deposit::Metadata, inscribe::Inscription},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_testing_framework::NodeHttpClient;
@@ -386,6 +387,57 @@ fn record_zone_wallet_submission(
     })
 }
 
+/// Keeps only the user-owned notes, dropping the channel-owned notes.
+fn user_owned_utxos(utxos: Vec<Utxo>) -> Vec<Utxo> {
+    utxos
+        .into_iter()
+        .filter(|utxo| utxo.channel_id.is_none())
+        .collect()
+}
+
+/// Selects the channel-owned UTXOs the zone wallet tracks for `channel_id` and
+/// returns the smallest set whose value covers `amount` as withdraw inputs.
+async fn select_channel_withdraw_inputs(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: &str,
+    channel_id: ChannelId,
+    amount: u64,
+) -> Result<Inputs, StepError> {
+    let mut channel_utxos: Vec<Utxo> =
+        current_available_utxos_for_wallet(world, &step.value, wallet_name)
+            .await?
+            .into_iter()
+            .filter(|utxo| utxo.channel_id == Some(channel_id))
+            .collect();
+
+    // Spend the largest notes first so the fewest inputs cover the amount.
+    channel_utxos.sort_by_key(|b| std::cmp::Reverse(b.note.value));
+
+    let mut selected = Vec::new();
+    let mut total = 0u64;
+    for utxo in channel_utxos {
+        if total >= amount {
+            break;
+        }
+        total += utxo.note.value;
+        selected.push(utxo.id());
+    }
+
+    if total < amount {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Zone wallet for channel {channel_id:?} holds {total} but the withdraw needs \
+                 {amount}"
+            ),
+        });
+    }
+
+    Inputs::try_new(selected).map_err(|error| StepError::LogicalError {
+        message: format!("Failed to build withdraw inputs: {error}"),
+    })
+}
+
 pub(super) async fn submit_zone_deposit_transaction(
     world: &mut CucumberWorld,
     step: &Step,
@@ -397,10 +449,10 @@ pub(super) async fn submit_zone_deposit_transaction(
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&channel_alias))?;
     let wallet = log_step_error(step, resolve_zone_wallet(world, &channel_alias))?;
     let public_key = log_step_error(step, wallet.public_key())?;
-    let available_utxos = log_step_error(
+    let available_utxos = user_owned_utxos(log_step_error(
         step,
         current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
-    )?;
+    )?);
     let ZoneDeposit {
         deposit,
         reserved_inputs,
@@ -437,10 +489,10 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
     let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
     let public_key = log_step_error(step, wallet.public_key())?;
-    let available_utxos = log_step_error(
+    let available_utxos = user_owned_utxos(log_step_error(
         step,
         current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
-    )?;
+    )?);
     let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Mint {amount} to Alice"));
 
@@ -490,12 +542,18 @@ pub(super) async fn submit_zone_withdraw_transaction(
 ) -> StepResult {
     let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
     let public_key = log_step_error(step, wallet.public_key())?;
+    let channel_id = world.zone.sequencer_channel_id(sequencer_alias)?;
+    let inputs = log_step_error(
+        step,
+        select_channel_withdraw_inputs(world, step, &wallet.wallet_name, channel_id, amount).await,
+    )?;
     let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Burn {amount}"));
 
     let submission = submit_zone_withdraw(
         sequencer,
-        world.zone.sequencer_channel_id(sequencer_alias)?,
+        channel_id,
+        inputs,
         public_key,
         amount,
         inscription_data.clone(),
@@ -547,19 +605,23 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
         .map(|(_, outputs)| outputs.clone())
         .collect();
 
-    let submission = {
-        let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+    let channel_id = world.zone.sequencer_channel_id(sequencer_alias)?;
+    let inputs = log_step_error(
+        step,
+        select_channel_withdraw_inputs(world, step, &wallet.wallet_name, channel_id, total).await,
+    )?;
+    let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
 
-        publish_atomic_zone_withdraw(
-            &sequencer,
-            public_key,
-            outputs_per_arg,
-            inscription_data.clone(),
-            PublishDeadline::from_now(Duration::from_mins(3)),
-        )
-        .await
-        .map_err(|error| zone_step_error(step, &error))?
-    };
+    let submission = publish_atomic_zone_withdraw(
+        sequencer,
+        inputs,
+        public_key,
+        outputs_per_arg,
+        inscription_data.clone(),
+        PublishDeadline::from_now(Duration::from_mins(3)),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
 
     if submission.withdraws.len() != withdraw_rows.len() {
         return Err(zone_step_error(

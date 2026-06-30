@@ -1301,12 +1301,14 @@ fn build_atomic_deposit_op(
 pub async fn submit_zone_withdraw(
     client: &SequencerClient,
     channel_id: ChannelId,
+    inputs: Inputs,
     funding_public_key: ZkPublicKey,
     amount: Value,
     inscription_data: Inscription,
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
     let withdraw = ChannelWithdrawOp {
         channel_id,
+        inputs,
         outputs: Outputs::new([Note::new(amount, funding_public_key)]),
     };
 
@@ -1381,6 +1383,7 @@ pub struct ZoneAtomicWithdrawSubmission {
 /// any arg able to carry multiple output notes.
 pub async fn publish_atomic_zone_withdraw(
     client: &SequencerClient,
+    inputs: Inputs,
     funding_public_key: ZkPublicKey,
     outputs_per_arg: Vec<Vec<Value>>,
     inscription_data: Inscription,
@@ -1395,6 +1398,7 @@ pub async fn publish_atomic_zone_withdraw(
         .iter()
         .map(|amounts| {
             Ok::<WithdrawArg, ZoneTestError>(WithdrawArg {
+                inputs: inputs.clone(),
                 outputs: Outputs::try_new(
                     amounts
                         .iter()

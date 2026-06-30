@@ -282,6 +282,15 @@ impl ZoneState {
             })
     }
 
+    /// Returns the channel whose funds the given wallet tracks.
+    #[must_use]
+    pub fn channel_id_for_wallet(&self, wallet_name: &str) -> Option<ChannelId> {
+        self.sequencers
+            .values()
+            .find(|sequencer| sequencer.default_wallet_name.as_deref() == Some(wallet_name))
+            .map(|sequencer| sequencer.channel_id)
+    }
+
     pub fn default_channel_id(&self) -> Result<ChannelId, StepError> {
         let alias = self.default_sequencer_alias()?.to_owned();
 

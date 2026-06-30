@@ -507,7 +507,12 @@ fn build_tracked_wallet_keys(
             warn!(target: TARGET, "Step `{}` error: {e}", step);
         })?;
 
-        wallet_keys.add_wallet(group_key, wallet.wallet_name.clone(), wallet_pk);
+        wallet_keys.add_wallet(group_key.clone(), wallet.wallet_name.clone(), wallet_pk);
+
+        // Zone wallets also hold the channel-owned notes
+        if world.zone.channel_id_for_wallet(&wallet.wallet_name).is_some() {
+            wallet_keys.add_wallet(group_key, wallet.wallet_name.clone(), ZkPublicKey::zero());
+        }
     }
 
     Ok(wallet_keys)

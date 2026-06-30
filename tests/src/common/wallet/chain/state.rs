@@ -209,6 +209,38 @@ impl WalletChainState {
                     );
                 }
             }
+            Op::ChannelStakeAssignation(stake_assignation) => {
+                // A stake assignation is a balanced re-distribution of stake
+                // within a channel: it spends channel-owned notes and produces
+                // new channel-owned notes (all tagged with the same channel id).
+                self.apply_spent_note_ids(
+                    stake_assignation.inputs.iter().copied(),
+                    &mut changes.observed_spends,
+                );
+                self.apply_owned_outputs(
+                    stake_assignation.outputs.utxos(
+                        stake_assignation,
+                        vec![Some(stake_assignation.channel_id); stake_assignation.outputs.len()],
+                    ),
+                    &mut changes.observed_outputs,
+                );
+            }
+            Op::ChannelStakeTransfer(stake_transfer) => {
+                // A stake transfer is likewise balanced and stays within the
+                // channel: spend channel-owned notes, re-create channel-owned
+                // notes tagged with the same channel id.
+                self.apply_spent_note_ids(
+                    stake_transfer.inputs.iter().copied(),
+                    &mut changes.observed_spends,
+                );
+                self.apply_owned_outputs(
+                    stake_transfer.outputs.utxos(
+                        stake_transfer,
+                        vec![Some(stake_transfer.channel_id); stake_transfer.outputs.len()],
+                    ),
+                    &mut changes.observed_outputs,
+                );
+            }
             Op::ChannelWithdraw(withdraw) => {
                 // A withdraw spends channel-owned notes, pays the recipient
                 // outputs, and returns the unspent remainder as a fresh

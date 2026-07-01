@@ -1105,16 +1105,15 @@ mod tests {
         let result =
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx.clone());
         let (new_state, balance, events) = result.unwrap();
-        assert_eq!(
-            new_state
-                .mantle_ledger()
-                .channels()
-                .channels
-                .get(&channel_id)
-                .unwrap()
-                .balance,
-            utxo.note.value,
-        );
+        let deposit_note_id = Outputs::new(Note {
+            value: utxo.note.value,
+            pk: ZkPublicKey::zero(),
+        })
+        .utxos(&deposit, vec![Some(channel_id)])
+        .next()
+        .expect("deposit creates a channel note")
+        .id();
+        assert!(new_state.latest_utxos().contains(&deposit_note_id));
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);
@@ -1160,7 +1159,7 @@ mod tests {
             inputs: Inputs::new([utxo.id()]),
             metadata: [5, 6, 7, 8].into(),
         };
-        let deposit_ops = vec![Op::ChannelDeposit(deposit)];
+        let deposit_ops = vec![Op::ChannelDeposit(deposit.clone())];
         ledger_state = ledger_state
             .try_apply_tx::<HeaderId, MainnetGasConstants>(
                 &test_config,
@@ -1169,16 +1168,17 @@ mod tests {
             .unwrap()
             .0;
 
-        assert_eq!(
-            ledger_state
-                .mantle_ledger
-                .channels()
-                .channels
-                .get(&channel_id)
-                .expect("channel_created")
-                .balance,
-            utxo.note.value
-        );
+        // The deposit is now held as a channel-tagged UTXO note that the
+        // withdraw must spend (the `balance` field is no longer used).
+        let deposit_note_id = Outputs::new(Note {
+            value: utxo.note.value,
+            pk: ZkPublicKey::zero(),
+        })
+        .utxos(&deposit, vec![Some(channel_id)])
+        .next()
+        .expect("deposit creates a channel note")
+        .id();
+        assert!(ledger_state.latest_utxos().contains(&deposit_note_id));
 
         // Withdraw some funds from the channel
         let recipient_sk = ZkKey::from(BigUint::from(99u8));
@@ -1189,7 +1189,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: Inputs::new([deposit_note_id]),
             outputs: Outputs::new([withdraw_note]),
         };
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
@@ -1211,14 +1211,18 @@ mod tests {
 
         let (new_state, tx_balance, events) = result.unwrap();
         assert_eq!(tx_balance, 0);
-        let channel_balance = new_state
-            .mantle_ledger()
-            .channels()
-            .channels
-            .get(&channel_id)
-            .unwrap()
-            .balance;
-        assert_eq!(channel_balance, utxo.note.value - withdraw_note.value);
+        let change_note_id = Outputs::new([
+            withdraw_note,
+            Note {
+                value: utxo.note.value - withdraw_note.value,
+                pk: ZkPublicKey::zero(),
+            },
+        ])
+        .utxos(&withdraw, vec![None, Some(channel_id)])
+        .nth(1)
+        .expect("withdraw creates a channel change note")
+        .id();
+        assert!(new_state.latest_utxos().contains(&change_note_id));
         let withdraw_utxo = withdraw
             .outputs
             .utxos(&withdraw, vec![None; withdraw.outputs.len()])
@@ -1251,7 +1255,7 @@ mod tests {
             inputs: Inputs::new([utxo.id()]),
             metadata: Metadata::empty(),
         };
-        let deposit_ops = vec![Op::ChannelDeposit(deposit)];
+        let deposit_ops = vec![Op::ChannelDeposit(deposit.clone())];
         ledger_state = ledger_state
             .try_apply_tx::<HeaderId, MainnetGasConstants>(
                 &test_config,
@@ -1259,13 +1263,16 @@ mod tests {
             )
             .unwrap()
             .0;
-        let channel_balance_after_deposit = ledger_state
-            .mantle_ledger()
-            .channels()
-            .channels
-            .get(&channel_id)
-            .unwrap()
-            .balance;
+        // The deposit is held as a channel-tagged UTXO note; a failed
+        // withdraw must leave it untouched.
+        let deposit_note_id = Outputs::new(Note {
+            value: utxo.note.value,
+            pk: ZkPublicKey::zero(),
+        })
+        .utxos(&deposit, vec![Some(channel_id)])
+        .next()
+        .expect("deposit creates a channel note")
+        .id();
 
         // Try to withdraw some funds from the channel, but with an invalid proof
         let recipient_sk = ZkKey::from(BigUint::from(99u8));
@@ -1276,7 +1283,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: Inputs::new([deposit_note_id]),
             outputs: Outputs::new([withdraw_note]),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
@@ -1307,18 +1314,9 @@ mod tests {
             )
         );
 
-        let channel_balance_after_withdraw = ledger_state
-            .mantle_ledger()
-            .channels()
-            .channels
-            .get(&channel_id)
-            .unwrap()
-            .balance;
-        assert_eq!(channel_balance_after_deposit, utxo.note.value);
-        assert_eq!(
-            channel_balance_after_deposit,
-            channel_balance_after_withdraw
-        );
+        // The failed withdraw must not touch the channel funds nor create a
+        // recipient note.
+        assert!(ledger_state.latest_utxos().contains(&deposit_note_id));
         let withdraw_utxo = withdraw
             .outputs
             .utxos(&withdraw, vec![None; withdraw.outputs.len()])

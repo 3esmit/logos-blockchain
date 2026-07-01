@@ -349,41 +349,47 @@ mod mantle_test_vectors {
             // Transfer (0x00)
             Op::Transfer(TransferOp::new(
                 Inputs::new([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))]),
-                Outputs::new([Note::new(100, zk_pk(10)), Note::new(200, zk_pk(11))]),
+                Outputs::new([Note::new(3, zk_pk(4)), Note::new(5, zk_pk(6))]),
             )),
-            // ChannelDeposit (0x12)
-            Op::ChannelDeposit(DepositOp {
-                channel_id: ChannelId::from([1u8; 32]),
-                inputs: Inputs::new([NoteId(Fr::from(3u64))]),
-                metadata: Metadata::try_from(b"deposit-metadata".to_vec()).unwrap(),
-            }),
-            // ChannelWithdraw (0x13)
-            Op::ChannelWithdraw(ChannelWithdrawOp {
-                channel_id: ChannelId::from([2u8; 32]),
-                inputs: Inputs::new([NoteId(Fr::from(3u64))]),
-                outputs: Outputs::new([Note::new(500, zk_pk(12))]),
-            }),
-            // LeaderClaim (0x30)
-            Op::LeaderClaim(LeaderClaimOp {
-                rewards_root: Fr::from(42u64).into(),
-                voucher_nullifier: Fr::from(43u64).into(),
-                pk: zk_pk(44),
-            }),
             // ChannelConfig (0x10)
             Op::ChannelConfig(ChannelConfigOp {
-                channel: ChannelId::from([3u8; 32]),
-                keys: Keys::try_from(vec![ed25519_pk(1), ed25519_pk(2)]).unwrap(),
+                channel: ChannelId::from([7u8; 32]),
+                keys: Keys::try_from(vec![ed25519_pk(8), ed25519_pk(9)]).unwrap(),
                 posting_timeframe: SlotTimeframe::from(10u32),
-                posting_timeout: SlotTimeout::from(20u32),
-                configuration_threshold: 2,
-                stake_manipulation_threshold: 1,
+                posting_timeout: SlotTimeout::from(11u32),
+                configuration_threshold: 12,
+                stake_manipulation_threshold: 13,
             }),
             // ChannelInscribe (0x11)
             Op::ChannelInscribe(InscriptionOp {
-                channel_id: ChannelId::from([4u8; 32]),
+                channel_id: ChannelId::from([14u8; 32]),
                 inscription: b"hello logos".into(),
                 parent: MsgId::root(),
-                signer: ed25519_pk(5),
+                signer: ed25519_pk(15),
+            }),
+            // ChannelDeposit (0x12)
+            Op::ChannelDeposit(DepositOp {
+                channel_id: ChannelId::from([16u8; 32]),
+                inputs: Inputs::new([NoteId(Fr::from(17u64))]),
+                metadata: Metadata::try_from(b"deposit-metadata".to_vec()).unwrap(),
+            }),
+            // ChannelStakeAssignation (0x13)
+            Op::ChannelStakeAssignation(ChannelStakeAssignationOp {
+                channel_id: ChannelId::from([18u8; 32]),
+                inputs: Inputs::new([NoteId(Fr::from(19u64))]),
+                outputs: Outputs::new([Note::new(20, zk_pk(21))]),
+            }),
+            // ChannelStakeTransfer (0x14)
+            Op::ChannelStakeAssignation(ChannelStakeAssignationOp {
+                channel_id: ChannelId::from([22u8; 32]),
+                inputs: Inputs::new([NoteId(Fr::from(23u64))]),
+                outputs: Outputs::new([Note::new(24, zk_pk(25))]),
+            }),
+            // ChannelWithdraw (0x15)
+            Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id: ChannelId::from([26u8; 32]),
+                inputs: Inputs::new([NoteId(Fr::from(27u64))]),
+                outputs: Outputs::new([Note::new(28, zk_pk(29))]),
             }),
             // SDPDeclare (0x20)
             Op::SDPDeclare(DeclarationMessage {
@@ -392,21 +398,27 @@ mod mantle_test_vectors {
                     .parse::<Locator>()
                     .unwrap()
                     .into(),
-                provider_id: ProviderId(ed25519_pk(7)),
-                zk_id: zk_pk(70),
-                locked_note_id: NoteId(Fr::from(71u64)),
+                provider_id: ProviderId(ed25519_pk(30)),
+                zk_id: zk_pk(31),
+                locked_note_id: NoteId(Fr::from(32u64)),
             }),
             // SDPWithdraw (0x21)
             Op::SDPWithdraw(WithdrawMessage {
-                declaration_id: DeclarationId([8u8; 32]),
-                locked_note_id: NoteId(Fr::from(80u64)),
-                nonce: 3,
+                declaration_id: DeclarationId([33u8; 32]),
+                locked_note_id: NoteId(Fr::from(34u64)),
+                nonce: 35,
             }),
             // SDPActive (0x22)
             Op::SDPActive(ActiveMessage {
-                declaration_id: DeclarationId([9u8; 32]),
-                nonce: 5,
+                declaration_id: DeclarationId([36u8; 32]),
+                nonce: 37,
                 metadata: ActivityMetadata::Blend(Box::new(activity)),
+            }),
+            // LeaderClaim (0x30)
+            Op::LeaderClaim(LeaderClaimOp {
+                rewards_root: Fr::from(38u64).into(),
+                voucher_nullifier: Fr::from(39u64).into(),
+                pk: zk_pk(40),
             }),
         ]
     }

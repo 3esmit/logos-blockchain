@@ -243,9 +243,13 @@ mod tests {
         ledger::{Inputs, Outputs, Utxos},
         ops::channel::{
             Ed25519PublicKey as PublicKey,
-            withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
+            withdraw::{ChannelWithdrawOp, WithdrawValidationContext},
         },
         tx::{GasPrices, MantleTxGasContext},
+    };
+    use crate::{
+        mantle::TxHash, proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+        sdp::locked_notes::LockedNotes,
     };
 
     fn test_public_key(seed: u8) -> PublicKey {
@@ -388,9 +392,12 @@ mod tests {
 
         let utxo_tree = utxo_tree(vec![utxo]);
 
-        let result = withdraw_op.execute(WithdrawExecutionContext {
-            channels,
-            utxos: utxo_tree,
+        let result = withdraw_op.validate(&WithdrawValidationContext {
+            channels: &channels,
+            locked_notes: &LockedNotes::new(),
+            utxos: &utxo_tree,
+            tx_hash: &TxHash::default(),
+            withdraw_sigs: &ChannelMultiSigProof::new(vec![]).unwrap(),
         });
 
         assert!(matches!(result, Err(Error::ChannelNotFound { .. })));

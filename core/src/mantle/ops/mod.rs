@@ -380,7 +380,7 @@ mod mantle_test_vectors {
                 outputs: Outputs::new([Note::new(20, zk_pk(21))]),
             }),
             // ChannelStakeTransfer (0x14)
-            Op::ChannelStakeAssignation(ChannelStakeAssignationOp {
+            Op::ChannelStakeTransfer(ChannelStakeTransferOp {
                 channel_id: ChannelId::from([22u8; 32]),
                 inputs: Inputs::new([NoteId(Fr::from(23u64))]),
                 outputs: Outputs::new([Note::new(24, zk_pk(25))]),
@@ -477,6 +477,12 @@ mod mantle_test_vectors {
             match op {
                 Op::Transfer(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::ChannelDeposit(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
+                Op::ChannelStakeAssignation(o) => {
+                    assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes()))
+                }
+                Op::ChannelStakeTransfer(o) => {
+                    assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes()))
+                }
                 Op::ChannelWithdraw(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::LeaderClaim(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 _ => {}

@@ -611,10 +611,20 @@ mod tests {
             },
         },
     };
+    use async_trait::async_trait;
+    use lb_common_http_client::{
+        ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, Events, TimeInfo,
+    };
+    use lb_core::{
+        header::ContentId, mantle::channel::ChannelState,
+        proofs::leader_proof::Groth16LeaderProof,
+    };
+    use lb_http_api_common::queries::BlocksStreamQuery;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;
 
     use super::*;
+    use crate::{ZoneMessage, adapter::BoxStream};
 
     /// Build a `SignedMantleTx` carrying the given ops, with placeholder
     /// proofs. Suitable for tests that only care about op extraction, not
@@ -1052,6 +1062,206 @@ mod tests {
         assert!(
             !shed_hashes.contains(&pending_hash),
             "pending chained from the (still-current) config tip must remain on-branch"
+        );
+    }
+
+    /// Minimal node mock for the canonical-backfill path: serves exactly one
+    /// gap block via `block()`; every other endpoint is off-limits for the
+    /// scenario under test.
+    struct GapMockNode {
+        gap_block: ApiBlock,
+    }
+
+    #[async_trait]
+    impl adapter::Node for GapMockNode {
+        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn channel_state(
+            &self,
+            _channel_id: ChannelId,
+        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn block_stream(
+            &self,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn blocks_range_stream(
+            &self,
+            _params: BlocksStreamQuery,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn block(
+            &self,
+            id: HeaderId,
+        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
+            assert_eq!(
+                id, self.gap_block.header.id,
+                "only the gap block should be fetched by the canonical backfill"
+            );
+            Ok(Some(self.gap_block.clone()))
+        }
+
+        async fn block_events(
+            &self,
+            _id: HeaderId,
+        ) -> Result<Option<Events>, lb_common_http_client::Error> {
+            Ok(None)
+        }
+
+        async fn immutable_blocks(
+            &self,
+            _slot_from: Slot,
+            _slot_to: Slot,
+        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn zone_messages_in_block(
+            &self,
+            _id: HeaderId,
+            _channel_id: ChannelId,
+        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn zone_messages_in_blocks(
+            &self,
+            _slot_from: Slot,
+            _slot_to: Slot,
+            _channel_id: ChannelId,
+        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn post_transaction(
+            &self,
+            _tx: SignedMantleTx,
+        ) -> Result<(), lb_common_http_client::Error> {
+            unimplemented!()
+        }
+    }
+
+    fn api_block(id: u8, parent: u8, slot: u64, transactions: Vec<SignedMantleTx>) -> ApiBlock {
+        ApiBlock {
+            header: ApiHeader {
+                id: header_id(id),
+                parent_block: header_id(parent),
+                slot: slot.into(),
+                block_root: ContentId::from([0; 32]),
+                proof_of_leadership: Groth16LeaderProof::genesis(),
+            },
+            transactions,
+        }
+    }
+
+    /// A live stream event delivering `block` with the tip at that same block
+    /// and LIB pinned at genesis.
+    fn live_event(block: ApiBlock) -> ProcessedBlockEvent {
+        let tip = block.header.id;
+        let tip_slot = block.header.slot;
+        ProcessedBlockEvent {
+            block,
+            tip,
+            tip_slot,
+            lib: header_id(0),
+            lib_slot: Slot::genesis(),
+        }
+    }
+
+    #[tokio::test]
+    async fn canonical_backfill_gap_inscriptions_surface_as_adopted() {
+        // A sequencer whose block stream skipped a block self-heals via
+        // backfill_canonical. Inscriptions mined in the gap block are new to
+        // this sequencer's canonical view, so they must be reported as
+        // `adopted` — otherwise no consumer learns they landed until
+        // finalization.
+        //
+        // Chain: G(0) <- B1 <- B2 <- B3
+        //   B1 carries inscription A (parent = root), delivered live
+        //   B2 carries inscription Y (parent = A), MISSED by the stream
+        //   B3 is empty, delivered live with B2's parent missing
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        let a = inscribe_op(channel_id, MsgId::root(), b"a");
+        let a_id = a.id();
+        let y = inscribe_op(channel_id, a_id, b"y");
+        let y_id = y.id();
+
+        let b1 = api_block(
+            1,
+            0,
+            1,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(a)])],
+        );
+        let b2 = api_block(
+            2,
+            1,
+            2,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(y)])],
+        );
+        let b3 = api_block(3, 2, 3, Vec::new());
+
+        let node = GapMockNode { gap_block: b2 };
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        // First live event: B1 arrives normally and adopts A.
+        let first = handle_block_event(
+            &live_event(b1),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B1 succeeds");
+        let update = first.channel_update.expect("B1 adopts inscription A");
+        assert!(
+            update.adopted.iter().any(|i| i.this_msg == a_id),
+            "sanity: A is adopted on the first event"
+        );
+
+        // Second live event: B3 arrives with its parent B2 missing, so the
+        // canonical backfill fetches B2 (carrying Y). Y is newly canonical
+        // from this sequencer's perspective and was never surfaced before,
+        // so this event's channel update must report it as adopted.
+        let second = handle_block_event(
+            &live_event(b3),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B3 succeeds");
+        let update = second
+            .channel_update
+            .expect("the backfilled gap advanced the channel tip; expected a channel update");
+        assert!(
+            update.adopted.iter().any(|i| i.this_msg == y_id),
+            "inscription mined in the backfilled gap block must be reported as adopted; \
+             got adopted={:?}, orphaned={:?}",
+            update.adopted,
+            update.orphaned,
         );
     }
 }

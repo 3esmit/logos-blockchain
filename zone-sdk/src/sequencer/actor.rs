@@ -1422,11 +1422,7 @@ mod tests {
     }
 
     impl GapStreamMockNode {
-        fn new(
-            b1: ApiBlock,
-            b2: ApiBlock,
-            b3: ApiBlock,
-        ) -> (Self, mpsc::Receiver<SignedMantleTx>) {
+        fn new(b1: ApiBlock, b2: ApiBlock, b3: ApiBlock) -> (Self, mpsc::Receiver<SignedMantleTx>) {
             let (inner, posted_rx) = MockNode::new();
             (
                 Self {
@@ -1479,8 +1475,7 @@ mod tests {
                 // Reconnection: resume at B3 — B2 was missed while down.
                 let event = Self::live_event(&self.b3);
                 Ok(Box::pin(
-                    futures::stream::once(async move { event })
-                        .chain(futures::stream::pending()),
+                    futures::stream::once(async move { event }).chain(futures::stream::pending()),
                 ))
             }
         }
@@ -1616,12 +1611,10 @@ mod tests {
         // notifications interleave).
         let adopted = timeout(Duration::from_secs(10), async {
             loop {
-                if let Event::BlocksProcessed { channel_update, .. } =
-                    sequencer.next_event().await
+                if let Event::BlocksProcessed { channel_update, .. } = sequencer.next_event().await
+                    && !channel_update.adopted.is_empty()
                 {
-                    if !channel_update.adopted.is_empty() {
-                        return channel_update.adopted;
-                    }
+                    return channel_update.adopted;
                 }
             }
         })
@@ -1638,8 +1631,7 @@ mod tests {
         // reconnect is B3's ingestion and must carry Y as adopted.
         let update = timeout(Duration::from_secs(10), async {
             loop {
-                if let Event::BlocksProcessed { channel_update, .. } =
-                    sequencer.next_event().await
+                if let Event::BlocksProcessed { channel_update, .. } = sequencer.next_event().await
                 {
                     return channel_update;
                 }

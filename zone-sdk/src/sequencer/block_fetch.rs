@@ -596,27 +596,27 @@ fn touches_channel_tip(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        MantleTx, Note,
-        channel::{SlotTimeframe, SlotTimeout},
-        encoding::Ops,
-        ledger::{Inputs, Outputs},
-        ops::{
-            OpId as _, OpProof,
-            channel::{
-                config::{ChannelConfigOp, Keys},
-                deposit::{DepositOp, Metadata},
-                inscribe::InscriptionOp,
-                withdraw::ChannelWithdrawOp,
-            },
-        },
-    };
     use async_trait::async_trait;
     use lb_common_http_client::{
         ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, Events, TimeInfo,
     };
     use lb_core::{
-        header::ContentId, mantle::channel::ChannelState,
+        header::ContentId,
+        mantle::{
+            MantleTx, Note,
+            channel::{ChannelState, SlotTimeframe, SlotTimeout},
+            encoding::Ops,
+            ledger::{Inputs, Outputs},
+            ops::{
+                OpId as _, OpProof,
+                channel::{
+                    config::{ChannelConfigOp, Keys},
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
+                },
+            },
+        },
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_http_api_common::queries::BlocksStreamQuery;

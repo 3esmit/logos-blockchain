@@ -586,6 +586,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    };
+
     use async_trait::async_trait;
     use futures::StreamExt as _;
     use lb_common_http_client::{
@@ -1400,5 +1405,254 @@ mod tests {
             }
             other => panic!("expected Inscription, got {other:?}"),
         }
+    }
+
+    /// Mock node for the stream-gap scenario. The first `block_stream` call
+    /// delivers B1 and then ends — a dropped stream. B2 is "mined" while the
+    /// sequencer is disconnected. The second call resumes at B3, whose parent
+    /// (B2) is unknown locally, so the canonical backfill must fetch B2 via
+    /// `block()`.
+    #[derive(Clone)]
+    struct GapStreamMockNode {
+        inner: MockNode,
+        stream_calls: Arc<AtomicUsize>,
+        b1: ApiBlock,
+        b2: ApiBlock,
+        b3: ApiBlock,
+    }
+
+    impl GapStreamMockNode {
+        fn new(
+            b1: ApiBlock,
+            b2: ApiBlock,
+            b3: ApiBlock,
+        ) -> (Self, mpsc::Receiver<SignedMantleTx>) {
+            let (inner, posted_rx) = MockNode::new();
+            (
+                Self {
+                    inner,
+                    stream_calls: Arc::new(AtomicUsize::new(0)),
+                    b1,
+                    b2,
+                    b3,
+                },
+                posted_rx,
+            )
+        }
+
+        fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
+            ProcessedBlockEvent {
+                block: block.clone(),
+                tip: block.header.id,
+                tip_slot: block.header.slot,
+                lib: HeaderId::from([0; 32]),
+                lib_slot: Slot::genesis(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl adapter::Node for GapStreamMockNode {
+        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
+            self.inner.consensus_info().await
+        }
+
+        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
+            self.inner.time_info().await
+        }
+
+        async fn channel_state(
+            &self,
+            channel_id: ChannelId,
+        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
+            self.inner.channel_state(channel_id).await
+        }
+
+        async fn block_stream(
+            &self,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            if self.stream_calls.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
+                // First connection: deliver B1, then end the stream (drop).
+                let event = Self::live_event(&self.b1);
+                Ok(Box::pin(futures::stream::once(async move { event })))
+            } else {
+                // Reconnection: resume at B3 — B2 was missed while down.
+                let event = Self::live_event(&self.b3);
+                Ok(Box::pin(
+                    futures::stream::once(async move { event })
+                        .chain(futures::stream::pending()),
+                ))
+            }
+        }
+
+        async fn blocks_range_stream(
+            &self,
+            params: BlocksStreamQuery,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            self.inner.blocks_range_stream(params).await
+        }
+
+        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
+            self.inner.lib_stream().await
+        }
+
+        async fn block(
+            &self,
+            id: HeaderId,
+        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
+            assert_eq!(
+                id, self.b2.header.id,
+                "only the missed gap block (B2) should be fetched by the canonical backfill"
+            );
+            Ok(Some(self.b2.clone()))
+        }
+
+        async fn block_events(
+            &self,
+            id: HeaderId,
+        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
+            self.inner.block_events(id).await
+        }
+
+        async fn immutable_blocks(
+            &self,
+            slot_from: Slot,
+            slot_to: Slot,
+        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+            self.inner.immutable_blocks(slot_from, slot_to).await
+        }
+
+        async fn zone_messages_in_block(
+            &self,
+            id: HeaderId,
+            channel_id: ChannelId,
+        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
+            self.inner.zone_messages_in_block(id, channel_id).await
+        }
+
+        async fn zone_messages_in_blocks(
+            &self,
+            slot_from: Slot,
+            slot_to: Slot,
+            channel_id: ChannelId,
+        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            self.inner
+                .zone_messages_in_blocks(slot_from, slot_to, channel_id)
+                .await
+        }
+
+        async fn post_transaction(
+            &self,
+            tx: SignedMantleTx,
+        ) -> Result<(), lb_common_http_client::Error> {
+            self.inner.post_transaction(tx).await
+        }
+    }
+
+    /// Realistic stream-gap scenario, driven end-to-end through the public
+    /// `ZoneSequencer` event loop.
+    ///
+    /// Chain: G <- B1 <- B2 <- B3, one canonical branch, LIB at genesis.
+    /// The live stream delivers B1 (inscription A) and drops. B2 (inscription
+    /// Y, child of A) is mined during the outage. The stream resumes at B3;
+    /// the sequencer self-heals by backfilling B2.
+    ///
+    /// Per the [`Event::Ready`] / [`ChannelUpdate`] contract, catch-up deltas
+    /// surface on the next `BlocksProcessed` once the stream resumes — so Y
+    /// must be reported as `adopted`. A consumer mirroring the channel from
+    /// `ChannelUpdate` otherwise silently misses Y until finalization.
+    #[tokio::test]
+    async fn stream_gap_surfaces_backfilled_inscriptions_as_adopted() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let a = InscriptionOp {
+            channel_id,
+            parent: MsgId::root(),
+            inscription: Inscription::new_unchecked(b"a".to_vec()),
+            signer: sequencer_key.public_key(),
+        };
+        let a_id = a.id();
+        let y = InscriptionOp {
+            channel_id,
+            parent: a_id,
+            inscription: Inscription::new_unchecked(b"y".to_vec()),
+            signer: sequencer_key.public_key(),
+        };
+        let y_id = y.id();
+
+        let block = |id: u8, parent: u8, slot: u64, transactions: Vec<SignedMantleTx>| ApiBlock {
+            header: ApiHeader {
+                id: HeaderId::from([id; 32]),
+                parent_block: HeaderId::from([parent; 32]),
+                slot: slot.into(),
+                block_root: ContentId::from([0; 32]),
+                proof_of_leadership: Groth16LeaderProof::genesis(),
+            },
+            transactions,
+        };
+        let b1 = block(
+            1,
+            0,
+            1,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(a)])],
+        );
+        let b2 = block(
+            2,
+            1,
+            2,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(y)])],
+        );
+        let b3 = block(3, 2, 3, Vec::new());
+
+        let (node, _posted_rx) = GapStreamMockNode::new(b1, b2, b3);
+        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+
+        // Phase 1: drive until B1's channel update adopts A (Ready and turn
+        // notifications interleave).
+        let adopted = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Event::BlocksProcessed { channel_update, .. } =
+                    sequencer.next_event().await
+                {
+                    if !channel_update.adopted.is_empty() {
+                        return channel_update.adopted;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for B1's channel update");
+        assert!(
+            adopted.iter().any(|i| i.this_msg == a_id),
+            "sanity: A is adopted from the live B1"
+        );
+
+        // Phase 2: stream #1 has ended — a disconnect. `next_event`
+        // reconnects internally and resumes at B3; the canonical backfill
+        // fetches the missed B2. The first `BlocksProcessed` after the
+        // reconnect is B3's ingestion and must carry Y as adopted.
+        let update = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Event::BlocksProcessed { channel_update, .. } =
+                    sequencer.next_event().await
+                {
+                    return channel_update;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for the post-reconnect BlocksProcessed");
+        assert!(
+            update.adopted.iter().any(|i| i.this_msg == y_id),
+            "inscription mined during the stream gap must surface as adopted on the next \
+             BlocksProcessed after reconnect; got adopted={:?}, orphaned={:?}",
+            update.adopted,
+            update.orphaned,
+        );
     }
 }

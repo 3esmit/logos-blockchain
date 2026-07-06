@@ -1198,7 +1198,7 @@ impl GenesisBlockBuilder<WithAll> {
                 count: n,
             }));
         };
-        let signed_tx = SignedMantleTx::new_unverified(
+        let signed_tx = SignedMantleTx::new_trusted(
             MantleTx(capped_ops),
             vec![
                 OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
@@ -1331,7 +1331,7 @@ mod tests {
                 other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
             })
             .collect();
-        SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
+        SignedMantleTx::new_trusted(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {

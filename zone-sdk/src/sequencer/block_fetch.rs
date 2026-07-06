@@ -776,7 +776,7 @@ mod tests {
     fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
         let n = ops.len();
         let mantle_tx = MantleTx(Ops::try_from(ops).unwrap());
-        SignedMantleTx::new_unverified(
+        SignedMantleTx::new_trusted(
             mantle_tx,
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
         )
@@ -1150,7 +1150,7 @@ mod tests {
             })]
             .into(),
         );
-        SignedMantleTx::new_unverified(
+        SignedMantleTx::new_trusted(
             mantle_tx,
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
         )

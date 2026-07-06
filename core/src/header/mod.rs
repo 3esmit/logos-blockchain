@@ -330,7 +330,6 @@ mod block_root_test_vectors {
                     deposit::{DepositOp, Metadata},
                     inscribe::InscriptionOp,
                     stake_assignation::ChannelStakeAssignationOp,
-                    stake_transfer::ChannelStakeTransferOp,
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::{LeaderClaimOp, VoucherCm},
@@ -417,15 +416,6 @@ mod block_root_test_vectors {
                     channel_id: ChannelId::from([18u8; 32]),
                     inputs: Inputs::new([NoteId(Fr::from(19u64))]),
                     outputs: Outputs::new([Note::new(20, zk_pk(21))]),
-                })),
-            ),
-            // ChannelStakeTransfer (0x14)
-            (
-                "ChannelStakeTransfer",
-                tx(Op::ChannelStakeTransfer(ChannelStakeTransferOp {
-                    channel_id: ChannelId::from([22u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(23u64))]),
-                    outputs: Outputs::new([Note::new(24, zk_pk(25))]),
                 })),
             ),
             // ChannelWithdraw (0x15)

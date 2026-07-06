@@ -110,13 +110,19 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         // Get the amount deposited
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
 
+        // Get the public key
+        let key = self
+            .inputs
+            .get_pk(&ctx.utxos)
+            .expect("the inputs was checked to exist in validate")[0];
+
         // Remove inputs from the ledger
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
         // Create the deposit note channel
         ctx.utxos = Outputs::new(Note {
             value: amount_deposited,
-            pk: ZkPublicKey::zero(),
+            pk: key,
         })
         .execute(ctx.utxos, self, vec![Some(self.channel_id)]);
 

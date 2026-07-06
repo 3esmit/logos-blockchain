@@ -165,9 +165,6 @@ pub trait GasConstants {
     /// Verify the stake assignation signature.
     const CHANNEL_STAKE_ASSIGNATION: Gas;
 
-    /// Verify the proof of ownership
-    const CHANNEL_STAKE_TRANSFER: Gas;
-
     /// Verify the withdrawal signature.
     const CHANNEL_WITHDRAW: Gas;
 
@@ -191,9 +188,8 @@ impl GasConstants for MainnetGasConstants {
     const CHANNEL_INSCRIBE: Gas = Gas(56);
     const CHANNEL_CONFIG: Gas = Gas(56);
     const CHANNEL_DEPOSIT: Gas = Gas(590);
-    const CHANNEL_STAKE_ASSIGNATION: Gas = Gas(56);
-    const CHANNEL_STAKE_TRANSFER: Gas = Gas(590);
     const CHANNEL_WITHDRAW: Gas = Gas(56);
+    const CHANNEL_STAKE_ASSIGNATION: Gas = Gas(56);
     const SDP_DECLARE: Gas = Gas(646);
     const SDP_WITHDRAW: Gas = Gas(590);
     const SDP_ACTIVE: Gas = Gas(590);

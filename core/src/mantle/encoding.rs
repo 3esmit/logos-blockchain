@@ -152,11 +152,9 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         }
 
         // ZkSigProof = ZkSignature
-        Op::SDPWithdraw(_)
-        | Op::SDPActive(_)
-        | Op::Transfer(_)
-        | Op::ChannelDeposit(_)
-        | Op::ChannelStakeTransfer(_) => map(decode_zk_signature, OpProof::ZkSig).parse(input),
+        Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_) => {
+            map(decode_zk_signature, OpProof::ZkSig).parse(input)
+        }
 
         // ProofOfClaimProof = Groth16
         Op::LeaderClaim(leader_claim_op) => map(decode_groth16, |proof| {
@@ -492,7 +490,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
             Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
 
             // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
-            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) | Op::ChannelStakeTransfer(_) => {
+            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) => {
                 GROTH16_BYTES
             }
 

@@ -225,22 +225,6 @@ impl WalletChainState {
                     &mut changes.observed_outputs,
                 );
             }
-            Op::ChannelStakeTransfer(stake_transfer) => {
-                // A stake transfer is likewise balanced and stays within the
-                // channel: spend channel-owned notes, re-create channel-owned
-                // notes tagged with the same channel id.
-                self.apply_spent_note_ids(
-                    stake_transfer.inputs.iter().copied(),
-                    &mut changes.observed_spends,
-                );
-                self.apply_owned_outputs(
-                    stake_transfer.outputs.utxos(
-                        stake_transfer,
-                        vec![Some(stake_transfer.channel_id); stake_transfer.outputs.len()],
-                    ),
-                    &mut changes.observed_outputs,
-                );
-            }
             Op::ChannelWithdraw(withdraw) => {
                 // A withdraw spends channel-owned notes, pays the recipient
                 // outputs, and returns the unspent remainder as a fresh

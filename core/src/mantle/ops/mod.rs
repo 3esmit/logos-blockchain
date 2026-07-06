@@ -11,8 +11,7 @@ use std::sync::LazyLock;
 
 use channel::{
     config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
-    stake_assignation::ChannelStakeAssignationOp, stake_transfer::ChannelStakeTransferOp,
-    withdraw::ChannelWithdrawOp,
+    stake_assignation::ChannelStakeAssignationOp, withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use nom::{
@@ -60,9 +59,8 @@ const TRANSFER: u8 = 0x00;
 const CHANNEL_CONFIG: u8 = 0x10;
 const INSCRIBE: u8 = 0x11;
 const CHANNEL_DEPOSIT: u8 = 0x12;
-const CHANNEL_STAKE_ASSIGNATION: u8 = 0x13;
-const CHANNEL_STAKE_TRANSFER: u8 = 0x14;
-const CHANNEL_WITHDRAW: u8 = 0x15;
+const CHANNEL_WITHDRAW: u8 = 0x13;
+const CHANNEL_STAKE_ASSIGNATION: u8 = 0x14;
 const SDP_DECLARE: u8 = 0x20;
 const SDP_WITHDRAW: u8 = 0x21;
 const SDP_ACTIVE: u8 = 0x22;
@@ -83,7 +81,6 @@ pub enum Op {
     ChannelConfig(ChannelConfigOp),
     ChannelDeposit(DepositOp),
     ChannelStakeAssignation(ChannelStakeAssignationOp),
-    ChannelStakeTransfer(ChannelStakeTransferOp),
     ChannelWithdraw(ChannelWithdrawOp),
     SDPDeclare(SDPDeclareOp),
     SDPWithdraw(SDPWithdrawOp),
@@ -147,9 +144,7 @@ impl NomEncode for Op {
             Self::ChannelStakeAssignation(op) => {
                 bytes.extend(op.encode());
             }
-            Self::ChannelStakeTransfer(op) => {
-                bytes.extend(op.encode());
-            }
+
             Self::ChannelWithdraw(op) => {
                 bytes.extend(op.encode());
             }
@@ -217,7 +212,6 @@ impl Op {
             Self::ChannelConfig(_) => "ChannelConfig",
             Self::ChannelDeposit(_) => "ChannelDeposit",
             Self::ChannelStakeAssignation(_) => "ChannelStakeAssignation",
-            Self::ChannelStakeTransfer(_) => "ChannelStakeTransfer",
             Self::ChannelWithdraw(_) => "ChannelWithdraw",
             Self::SDPDeclare(_) => "SDPDeclare",
             Self::SDPWithdraw(_) => "SDPWithdraw",
@@ -234,7 +228,6 @@ impl Op {
             Self::ChannelConfig(_) => Constants::CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => Constants::CHANNEL_DEPOSIT,
             Self::ChannelStakeAssignation(_) => Constants::CHANNEL_STAKE_ASSIGNATION,
-            Self::ChannelStakeTransfer(_) => Constants::CHANNEL_STAKE_TRANSFER,
             Self::ChannelWithdraw(_) => Constants::CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => Constants::SDP_DECLARE,
             Self::SDPWithdraw(_) => Constants::SDP_WITHDRAW,
@@ -250,7 +243,6 @@ impl Op {
             Self::ChannelConfig(_) => CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
             Self::ChannelStakeAssignation(_) => CHANNEL_STAKE_ASSIGNATION,
-            Self::ChannelStakeTransfer(_) => CHANNEL_STAKE_TRANSFER,
             Self::ChannelWithdraw(_) => CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => SDP_DECLARE,
             Self::SDPWithdraw(_) => SDP_WITHDRAW,
@@ -379,12 +371,6 @@ mod mantle_test_vectors {
                 inputs: Inputs::new([NoteId(Fr::from(19u64))]),
                 outputs: Outputs::new([Note::new(20, zk_pk(21))]),
             }),
-            // ChannelStakeTransfer (0x14)
-            Op::ChannelStakeTransfer(ChannelStakeTransferOp {
-                channel_id: ChannelId::from([22u8; 32]),
-                inputs: Inputs::new([NoteId(Fr::from(23u64))]),
-                outputs: Outputs::new([Note::new(24, zk_pk(25))]),
-            }),
             // ChannelWithdraw (0x15)
             Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([26u8; 32]),
@@ -478,10 +464,7 @@ mod mantle_test_vectors {
                 Op::Transfer(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::ChannelDeposit(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::ChannelStakeAssignation(o) => {
-                    assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes()))
-                }
-                Op::ChannelStakeTransfer(o) => {
-                    assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes()))
+                    assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes()));
                 }
                 Op::ChannelWithdraw(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::LeaderClaim(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),

@@ -409,22 +409,22 @@ mod block_root_test_vectors {
                     metadata: Metadata::try_from(b"deposit-metadata".to_vec()).unwrap(),
                 })),
             ),
-            // ChannelStakeAssignation (0x13)
+            // ChannelWithdraw (0x13)
             (
-                "ChannelStakeAssignation",
-                tx(Op::ChannelStakeAssignation(ChannelStakeAssignationOp {
+                "ChannelWithdraw",
+                tx(Op::ChannelWithdraw(ChannelWithdrawOp {
                     channel_id: ChannelId::from([18u8; 32]),
                     inputs: Inputs::new([NoteId(Fr::from(19u64))]),
                     outputs: Outputs::new([Note::new(20, zk_pk(21))]),
                 })),
             ),
-            // ChannelWithdraw (0x15)
+            // ChannelStakeAssignation (0x14)
             (
-                "ChannelWithdraw",
-                tx(Op::ChannelWithdraw(ChannelWithdrawOp {
-                    channel_id: ChannelId::from([26u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(27u64))]),
-                    outputs: Outputs::new([Note::new(28, zk_pk(29))]),
+                "ChannelStakeAssignation",
+                tx(Op::ChannelStakeAssignation(ChannelStakeAssignationOp {
+                    channel_id: ChannelId::from([22u8; 32]),
+                    inputs: Inputs::new([NoteId(Fr::from(23u64))]),
+                    outputs: Outputs::new([Note::new(24, zk_pk(25))]),
                 })),
             ),
             // SDPDeclare (0x20)
@@ -436,26 +436,26 @@ mod block_root_test_vectors {
                         .parse::<Locator>()
                         .unwrap()
                         .into(),
-                    provider_id: ProviderId(ed25519_pk(30)),
-                    zk_id: zk_pk(31),
-                    locked_note_id: NoteId(Fr::from(32u64)),
+                    provider_id: ProviderId(ed25519_pk(26)),
+                    zk_id: zk_pk(27),
+                    locked_note_id: NoteId(Fr::from(28u64)),
                 })),
             ),
             // SDPWithdraw (0x21)
             (
                 "SDPWithdraw",
                 tx(Op::SDPWithdraw(WithdrawMessage {
-                    declaration_id: DeclarationId([33u8; 32]),
-                    locked_note_id: NoteId(Fr::from(34u64)),
-                    nonce: 35,
+                    declaration_id: DeclarationId([29u8; 32]),
+                    locked_note_id: NoteId(Fr::from(30u64)),
+                    nonce: 31,
                 })),
             ),
             // SDPActive (0x22)
             (
                 "SDPActive",
                 tx(Op::SDPActive(ActiveMessage {
-                    declaration_id: DeclarationId([36u8; 32]),
-                    nonce: 37,
+                    declaration_id: DeclarationId([32u8; 32]),
+                    nonce: 33,
                     metadata: ActivityMetadata::Blend(Box::new(activity)),
                 })),
             ),
@@ -463,9 +463,9 @@ mod block_root_test_vectors {
             (
                 "LeaderClaim",
                 tx(Op::LeaderClaim(LeaderClaimOp {
-                    rewards_root: Fr::from(38u64).into(),
-                    voucher_nullifier: Fr::from(39u64).into(),
-                    pk: zk_pk(40),
+                    rewards_root: Fr::from(34u64).into(),
+                    voucher_nullifier: Fr::from(35u64).into(),
+                    pk: zk_pk(36),
                 })),
             ),
         ]

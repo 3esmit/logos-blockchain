@@ -95,8 +95,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         }
 
         // Check that inputs are valid and doesn't provide from a channel
-        self.inputs
-            .validate(ctx.locked_notes, ctx.utxos, vec![None; self.inputs.len()])?;
+        self.inputs.validate(ctx.locked_notes, ctx.utxos, None)?;
 
         // Check the signature
         let pks = self.inputs.get_pk(ctx.utxos)?;

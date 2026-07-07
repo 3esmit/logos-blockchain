@@ -96,11 +96,8 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
             .expect("we checked that the channel exist above");
 
         // Check that the inputs exist and belong to the channel
-        self.inputs.validate(
-            ctx.locked_notes,
-            ctx.utxos,
-            vec![Some(self.channel_id); self.inputs.len()],
-        )?;
+        self.inputs
+            .validate(ctx.locked_notes, ctx.utxos, Some(self.channel_id))?;
 
         // Check the operation is balanced
         let input_amount = self.inputs.amount(ctx.utxos)?;

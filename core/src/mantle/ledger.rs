@@ -224,7 +224,7 @@ impl Inputs {
         &self,
         locked_notes: &LockedNotes,
         utxos: &Utxos,
-        channel_ids: Vec<Option<ChannelId>>,
+        channel_id: Option<ChannelId>,
     ) -> Result<(), InputsError> {
         // Check that there is no duplicate
         let unique: HashSet<_> = self.0.iter().collect();
@@ -232,7 +232,7 @@ impl Inputs {
             return Err(InputsError::DoubleSpend);
         }
         // Check each note is spendable
-        for (input, channel_id) in self.0.iter().zip(channel_ids) {
+        for input in self.0.iter() {
             // Check the note isn't locked
             if locked_notes.contains(input) {
                 return Err(InputsError::LockedNote(*input));

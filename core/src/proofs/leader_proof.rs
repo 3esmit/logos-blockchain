@@ -191,8 +191,8 @@ pub fn check_winning(
     publib_key: &ZkPublicKey,
     secret_key: Fr,
 ) -> bool {
-    utxo.note.pk == *publib_key
-        && public_inputs.check_winning(utxo.note.value, utxo.id().0, secret_key)
+    utxo.note().pk == *publib_key
+        && public_inputs.check_winning(utxo.note().value, utxo.id().0, secret_key)
 }
 
 impl LeaderPublic {
@@ -266,9 +266,9 @@ impl LeaderPrivate {
         let (aged_path, aged_selector) = merkle_path_to_witness(aged_path);
         let (latest_path, latest_selector) = merkle_path_to_witness(latest_path);
         let wallet = lb_pol::PolWalletInputsData {
-            note_value: note.note.value,
-            transaction_hash: Fr::from_le_bytes_mod_order(note.op_id.as_ref()),
-            output_number: note.output_index as u64,
+            note_value: note.note().value,
+            transaction_hash: Fr::from_le_bytes_mod_order(note.op_id().as_ref()),
+            output_number: note.output_index() as u64,
             aged_path: aged_path
                 .try_into()
                 .expect("Aged path length should match the expected height"),

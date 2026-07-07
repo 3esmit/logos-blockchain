@@ -77,7 +77,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             .lock(
                 &ctx.min_stake,
                 self.service_type,
-                utxo.note,
+                utxo.note(),
                 &self.locked_note_id,
             )
             .map_err(|_| SdpError::UnexpectedError)?;
@@ -125,7 +125,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
         };
 
         // Ensure locked note exists and ownership over the locked note and `zk_id`
-        let note = utxo.note;
+        let note = utxo.note();
         if !ZkPublicKey::verify_multi(
             &[note.pk, self.zk_id],
             &ctx.tx_hash.to_fr(),
@@ -172,7 +172,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
         let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
         };
-        let note = utxo.note;
+        let note = utxo.note();
 
         SDPDeclareValidationExt::validate(
             self,

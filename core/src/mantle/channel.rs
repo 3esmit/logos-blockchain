@@ -282,12 +282,7 @@ mod tests {
         let mut op_id = [0u8; 32];
         thread_rng().fill_bytes(&mut op_id);
         let zk_sk = ZkKey::from(Fr::ZERO);
-        let utxo = Utxo {
-            op_id,
-            output_index: 0,
-            channel_id: None,
-            note: Note::new(value, zk_sk.to_public_key()),
-        };
+        let utxo = Utxo::new_bedrock(op_id, 0, Note::new(value, zk_sk.to_public_key()));
         (zk_sk, utxo)
     }
 

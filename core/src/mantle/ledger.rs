@@ -93,30 +93,24 @@ impl Outputs {
         Self(BoundedOutputs::default())
     }
 
-    pub fn utxos<O: OpId>(
-        &self,
-        op: &O,
-        channel_ids: Vec<Option<ChannelId>>,
-    ) -> impl Iterator<Item = Utxo> {
-        self.0.iter().enumerate().map(move |(index, note)| Utxo {
-            op_id: op.op_id(),
-            output_index: index,
-            channel_id: channel_ids[index],
-            note: *note,
+    pub fn utxos<O: OpId>(&self, op: &O) -> impl Iterator<Item = Utxo> {
+        let op_id = op.op_id();
+        let channel_id = op.outputs_channel_id();
+        self.0.iter().enumerate().map(move |(index, note)| {
+            channel_id.map_or_else(
+                || Utxo::new_bedrock(op_id, index, *note),
+                |channel_id| Utxo::new_channel(op_id, index, channel_id, *note),
+            )
         })
     }
 
-    pub fn utxo_by_index<O: OpId>(
-        &self,
-        index: usize,
-        op: &O,
-        channel_id: Option<ChannelId>,
-    ) -> Option<Utxo> {
-        self.0.get(index).map(|note| Utxo {
-            op_id: op.op_id(),
-            output_index: index,
-            channel_id,
-            note: *note,
+    pub fn utxo_by_index<O: OpId>(&self, index: usize, op: &O) -> Option<Utxo> {
+        let op_id = op.op_id();
+        self.0.get(index).map(|note| {
+            op.outputs_channel_id().map_or_else(
+                || Utxo::new_bedrock(op_id, index, *note),
+                |channel_id| Utxo::new_channel(op_id, index, channel_id, *note),
+            )
         })
     }
 
@@ -130,13 +124,8 @@ impl Outputs {
         Ok(())
     }
 
-    pub fn execute<O: OpId>(
-        &self,
-        mut utxos: Utxos,
-        op: &O,
-        channel_ids: Vec<Option<ChannelId>>,
-    ) -> Utxos {
-        for utxo in self.utxos(op, channel_ids) {
+    pub fn execute<O: OpId>(&self, mut utxos: Utxos, op: &O) -> Utxos {
+        for utxo in self.utxos(op) {
             utxos = utxos.insert(utxo.id(), utxo).0;
         }
         utxos
@@ -256,7 +245,7 @@ impl Inputs {
             if utxos
                 .get(input)
                 .expect(" the utxo existence was checked above")
-                .channel_id
+                .channel_id()
                 != channel_id
             {
                 return Err(InputsError::InvalidChannel(*input, channel_id));
@@ -282,7 +271,7 @@ impl Inputs {
                 .get(input)
                 .ok_or(InputsError::InexistingNote(*input))?;
             amount = amount
-                .checked_add(utxo.note.value)
+                .checked_add(utxo.note().value)
                 .ok_or(InputsError::InputsOverflow)?;
         }
         Ok(amount)
@@ -294,7 +283,7 @@ impl Inputs {
             let utxo = utxos
                 .get(input)
                 .ok_or(InputsError::InexistingNote(*input))?;
-            pks.push(utxo.note.pk);
+            pks.push(utxo.note().pk);
         }
         Ok(pks)
     }
@@ -431,29 +420,31 @@ impl NomDecode for Note {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Utxo {
+pub struct UtxoData {
     pub op_id: Hash,
     pub output_index: usize,
-    pub channel_id: Option<ChannelId>,
     pub note: Note,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Utxo {
+    Bedrock(UtxoData),
+    Channel {
+        utxo_data: UtxoData,
+        channel_id: ChannelId,
+    },
 }
 
 static NOTE_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"NOTE_ID_V1").expect("BigUint should load from constant string")
 });
 
-impl Utxo {
+impl UtxoData {
     #[must_use]
-    pub const fn new(
-        op_id: Hash,
-        output_index: usize,
-        channel_id: Option<ChannelId>,
-        note: Note,
-    ) -> Self {
+    pub const fn new(op_id: Hash, output_index: usize, note: Note) -> Self {
         Self {
             op_id,
             output_index,
-            channel_id,
             note,
         }
     }
@@ -480,6 +471,62 @@ impl Utxo {
     }
 }
 
+impl Utxo {
+    #[must_use]
+    pub const fn new_bedrock(op_id: Hash, output_index: usize, note: Note) -> Self {
+        Self::Bedrock(UtxoData::new(op_id, output_index, note))
+    }
+
+    #[must_use]
+    pub const fn new_channel(
+        op_id: Hash,
+        output_index: usize,
+        channel_id: ChannelId,
+        note: Note,
+    ) -> Self {
+        Self::Channel {
+            utxo_data: UtxoData::new(op_id, output_index, note),
+            channel_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn data(&self) -> &UtxoData {
+        match self {
+            Self::Bedrock(data) => data,
+            Self::Channel { utxo_data, .. } => utxo_data,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> NoteId {
+        self.data().id()
+    }
+
+    #[must_use]
+    pub const fn note(&self) -> Note {
+        self.data().note
+    }
+
+    #[must_use]
+    pub const fn op_id(&self) -> Hash {
+        self.data().op_id
+    }
+
+    #[must_use]
+    pub const fn output_index(&self) -> usize {
+        self.data().output_index
+    }
+
+    #[must_use]
+    pub const fn channel_id(&self) -> Option<ChannelId> {
+        match self {
+            Self::Channel { channel_id, .. } => Some(*channel_id),
+            Self::Bedrock(_) => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::str::FromStr as _;
@@ -491,10 +538,9 @@ mod test {
     /// NOTE: This test must be updated if the [`NoteId`] derivation changes.
     #[test]
     fn test_note_id() {
-        let utxo = Utxo::new(
+        let utxo = Utxo::new_bedrock(
             [0u8; 32],
             0,
-            None,
             Note::new(100, ZkPublicKey::from(Fr::from(BigUint::from(456u32)))),
         );
         assert_eq!(

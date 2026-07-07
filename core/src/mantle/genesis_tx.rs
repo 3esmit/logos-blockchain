@@ -526,8 +526,8 @@ mod tests {
             )
         };
         let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
-        let utxo1 = Utxo::new([0u8; 32], 0, None, create_test_note(1000));
-        let utxo2 = Utxo::new([1u8; 32], 1, None, create_test_note(2000));
+        let utxo1 = Utxo::new_bedrock([0u8; 32], 0, create_test_note(1000));
+        let utxo2 = Utxo::new_bedrock([1u8; 32], 1, create_test_note(2000));
         let sdp_declare_op_helper = |utxo_to_use: Utxo, zk_id_value: u8| {
             sdp_declare_op(utxo_to_use, zk_id_value, verifying_key)
         };
@@ -577,7 +577,7 @@ mod tests {
             MsgId::root(),
             Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         );
-        let utxo = Utxo::new([0u8; 32], 0, None, create_test_note(1000));
+        let utxo = Utxo::new_bedrock([0u8; 32], 0, create_test_note(1000));
         let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
         let sdp_op = sdp_declare_op(utxo, 0, verifying_key);
         // SDPDeclare requires a `ZkAndEd25519Sigs` proof, an `Ed25519Sig` is the

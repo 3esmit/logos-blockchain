@@ -1,14 +1,13 @@
-use lb_key_management_system_keys::keys::ZkPublicKey;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     events::Events,
     mantle::{
-        Note, TxHash,
+        TxHash,
         channel::{Channels, Error},
         encoding::{NomInputs, NomOutputs},
-        ledger::{Inputs, Operation, Outputs, OutputsError, Utxos},
+        ledger::{Inputs, Operation, Outputs, Utxos},
         nom::{NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
@@ -144,9 +143,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
         // Add the ouputs to the ledger
-        ctx.utxos = self
-            .outputs
-            .execute(ctx.utxos, self, vec![None; self.outputs.len()]);
+        ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
         Ok((ctx, Events::new()))
     }

@@ -949,7 +949,7 @@ mod tests {
         let fees =
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::default())
                 .unwrap();
-        output_note.value = utxo.note.value - fees.into_inner();
+        output_note.value = utxo.note().value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
         // Create a dummy proof (using same structure as in cryptarchia tests)
@@ -981,7 +981,7 @@ mod tests {
         if let Op::Transfer(transfer_op) = &tx.mantle_tx.ops()[0] {
             let output_utxo = transfer_op
                 .outputs
-                .utxo_by_index(0, transfer_op, None)
+                .utxo_by_index(0, transfer_op)
                 .unwrap();
             assert!(new_state.latest_utxos().contains(&output_utxo.id()));
         } else {
@@ -1106,10 +1106,10 @@ mod tests {
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx.clone());
         let (new_state, balance, events) = result.unwrap();
         let deposit_note_id = Outputs::new(Note {
-            value: utxo.note.value,
+            value: utxo.note().value,
             pk: ZkPublicKey::zero(),
         })
-        .utxos(&deposit, vec![Some(channel_id)])
+        .utxos(&deposit)
         .next()
         .expect("deposit creates a channel note")
         .id();
@@ -1133,7 +1133,7 @@ mod tests {
             metadata,
         } = payload;
         assert_eq!(channel_id, deposit.channel_id);
-        assert_eq!(amount, utxo.note.value);
+        assert_eq!(amount, utxo.note().value);
         assert_eq!(metadata, deposit.metadata);
     }
 
@@ -1171,10 +1171,10 @@ mod tests {
         // The deposit is now held as a channel-tagged UTXO note that the
         // withdraw must spend (the `balance` field is no longer used).
         let deposit_note_id = Outputs::new(Note {
-            value: utxo.note.value,
+            value: utxo.note().value,
             pk: ZkPublicKey::zero(),
         })
-        .utxos(&deposit, vec![Some(channel_id)])
+        .utxos(&deposit)
         .next()
         .expect("deposit creates a channel note")
         .id();
@@ -1214,18 +1214,18 @@ mod tests {
         let change_note_id = Outputs::new([
             withdraw_note,
             Note {
-                value: utxo.note.value - withdraw_note.value,
+                value: utxo.note().value - withdraw_note.value,
                 pk: ZkPublicKey::zero(),
             },
         ])
-        .utxos(&withdraw, vec![None, Some(channel_id)])
+        .utxos(&withdraw)
         .nth(1)
         .expect("withdraw creates a channel change note")
         .id();
         assert!(new_state.latest_utxos().contains(&change_note_id));
         let withdraw_utxo = withdraw
             .outputs
-            .utxos(&withdraw, vec![None; withdraw.outputs.len()])
+            .utxos(&withdraw)
             .next()
             .expect("withdraw should have at least one utxo")
             .id();
@@ -1266,10 +1266,10 @@ mod tests {
         // The deposit is held as a channel-tagged UTXO note; a failed
         // withdraw must leave it untouched.
         let deposit_note_id = Outputs::new(Note {
-            value: utxo.note.value,
+            value: utxo.note().value,
             pk: ZkPublicKey::zero(),
         })
-        .utxos(&deposit, vec![Some(channel_id)])
+        .utxos(&deposit)
         .next()
         .expect("deposit creates a channel note")
         .id();
@@ -1319,7 +1319,7 @@ mod tests {
         assert!(ledger_state.latest_utxos().contains(&deposit_note_id));
         let withdraw_utxo = withdraw
             .outputs
-            .utxos(&withdraw, vec![None; withdraw.outputs.len()])
+            .utxos(&withdraw)
             .next()
             .expect("withdraw should have at least one utxo")
             .id();
@@ -1656,7 +1656,7 @@ mod tests {
             ledger.get_gas_prices(),
         )
         .unwrap();
-        output_note.value = utxo.note.value - fees.into_inner();
+        output_note.value = utxo.note().value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
         let result = ledger
@@ -1697,7 +1697,7 @@ mod tests {
             ledger.get_gas_prices(),
         )
         .unwrap();
-        output_note.value = utxo.note.value - fees.into_inner();
+        output_note.value = utxo.note().value - fees.into_inner();
         let tx = create_tx(
             vec![utxo.id()],
             vec![output_note],
@@ -1713,7 +1713,7 @@ mod tests {
 
         // The tx ays 1794 fees = 590 execution base fee + 1000 execution tip + 204
         // storage
-        output_note.value = utxo.note.value - fees.into_inner() - 1000;
+        output_note.value = utxo.note().value - fees.into_inner() - 1000;
         let tx = create_tx(
             vec![utxo.id()],
             vec![output_note],

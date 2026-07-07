@@ -264,12 +264,7 @@ mod tests {
 
     pub fn create_proof() -> Groth16LeaderProof {
         let leader_sk = UnsecuredZkKey::zero();
-        let utxo = Utxo {
-            op_id: [0u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: Note::new(1000, leader_sk.to_public_key()),
-        };
+        let utxo = Utxo::new_bedrock([0u8; 32], 0, Note::new(1000, leader_sk.to_public_key()));
         let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
         let utxo_tree_root = utxo_tree.root();
         let utxo_merkle_path = utxo_tree.path(&utxo.id()).expect("note must exist in tree");
@@ -291,7 +286,7 @@ mod tests {
                     lottery_1,
                 );
 
-                if inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr()) {
+                if inputs.check_winning(utxo.note().value, *utxo.id().as_fr(), *leader_sk.as_fr()) {
                     break;
                 }
 

@@ -195,7 +195,7 @@ impl MantleTxBuilder {
         let in_sum: i128 = self
             .ledger_inputs
             .iter()
-            .map(|utxo| i128::from(utxo.note.value))
+            .map(|utxo| i128::from(utxo.note().value))
             .sum();
 
         let out_sum: i128 = self
@@ -395,10 +395,9 @@ mod tests {
         let builder = MantleTxBuilder::new(context)
             .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
             .unwrap()
-            .add_ledger_input(Utxo::new(
+            .add_ledger_input(Utxo::new_bedrock(
                 [0u8; 32],
                 0,
-                None,
                 Note::new(50, ZkPublicKey::zero()),
             ));
         let builder = builder.unwrap();
@@ -478,10 +477,9 @@ mod tests {
 
         // Fund tx
         let builder = builder
-            .add_ledger_input(Utxo::new(
+            .add_ledger_input(Utxo::new_bedrock(
                 [0u8; 32],
                 0,
-                None,
                 Note::new(40, ZkPublicKey::zero()),
             ))
             .unwrap();
@@ -504,7 +502,7 @@ mod tests {
         let deposit_input = NoteId(Fr::from(1u64));
         let declare_locked = NoteId(Fr::from(2u64));
         let withdraw_locked = NoteId(Fr::from(3u64));
-        let transfer_input = Utxo::new([0u8; 32], 0, None, Note::new(50, ZkPublicKey::zero()));
+        let transfer_input = Utxo::new_bedrock([0u8; 32], 0, Note::new(50, ZkPublicKey::zero()));
 
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelDeposit(DepositOp {

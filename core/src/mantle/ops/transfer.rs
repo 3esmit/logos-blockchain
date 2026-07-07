@@ -98,9 +98,7 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger
-        utxos = self
-            .outputs
-            .execute(utxos, self, vec![None; self.outputs.len()]);
+        utxos = self.outputs.execute(utxos, self);
         Ok((utxos, Events::new()))
     }
 }
@@ -127,33 +125,18 @@ mod test {
             ]),
         };
         assert_eq!(
-            transfer.outputs.utxo_by_index(0, &transfer, None),
-            Some(Utxo {
-                op_id: transfer.op_id(),
-                output_index: 0,
-                channel_id: None,
-                note: Note::new(100, pk0),
-            })
+            transfer.outputs.utxo_by_index(0, &transfer),
+            Some(Utxo::new_bedrock(transfer.op_id(), 0, Note::new(100, pk0)))
         );
         assert_eq!(
-            transfer.outputs.utxo_by_index(1, &transfer, None),
-            Some(Utxo {
-                op_id: transfer.op_id(),
-                output_index: 1,
-                channel_id: None,
-                note: Note::new(200, pk1),
-            })
+            transfer.outputs.utxo_by_index(1, &transfer),
+            Some(Utxo::new_bedrock(transfer.op_id(), 1, Note::new(200, pk1)))
         );
         assert_eq!(
-            transfer.outputs.utxo_by_index(2, &transfer, None),
-            Some(Utxo {
-                op_id: transfer.op_id(),
-                output_index: 2,
-                channel_id: None,
-                note: Note::new(300, pk2),
-            })
+            transfer.outputs.utxo_by_index(2, &transfer),
+            Some(Utxo::new_bedrock(transfer.op_id(), 2, Note::new(300, pk2)))
         );
 
-        assert!(transfer.outputs.utxo_by_index(3, &transfer, None).is_none());
+        assert!(transfer.outputs.utxo_by_index(3, &transfer).is_none());
     }
 }

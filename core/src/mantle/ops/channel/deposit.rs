@@ -30,6 +30,10 @@ impl OpId for DepositOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
     }
+
+    fn outputs_channel_id(&self) -> Option<ChannelId> {
+        Some(self.channel_id)
+    }
 }
 
 impl NomEncode for DepositOp {
@@ -113,10 +117,10 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
                 .utxos
                 .get(input)
                 .expect("note existence was checked in validate")
-                .note;
+                .note();
 
             // create the deposit channel note
-            ctx.utxos = Outputs::new(note).execute(ctx.utxos, self, vec![Some(self.channel_id)]);
+            ctx.utxos = Outputs::new(note).execute(ctx.utxos, self);
         }
 
         let amount = self.inputs.amount(&ctx.utxos)?;

@@ -132,12 +132,7 @@ mod tests {
         let mut op_id = [0u8; 32];
         thread_rng().fill_bytes(&mut op_id);
         let zk_sk = ZkKey::from(BigUint::from(0u64));
-        Utxo {
-            op_id,
-            output_index: 0,
-            channel_id: None,
-            note: Note::new(10000, zk_sk.to_public_key()),
-        }
+        Utxo::new_bedrock(op_id, 0, Note::new(10000, zk_sk.to_public_key()))
     }
 
     #[test]
@@ -151,7 +146,7 @@ mod tests {
         };
 
         let locked_notes_bn = locked_notes
-            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
+            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id)
             .expect("Should be able to lock for BN service");
 
         assert!(locked_notes_bn.contains(&note_id));
@@ -175,11 +170,11 @@ mod tests {
         };
 
         let locked_notes_once = locked_notes
-            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
+            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id)
             .unwrap();
 
         let result =
-            locked_notes_once.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+            locked_notes_once.lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id);
 
         assert!(result.is_err());
         assert_eq!(
@@ -201,7 +196,7 @@ mod tests {
             timestamp: 0,
         };
 
-        let result = locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+        let result = locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id);
 
         assert!(result.is_err());
         assert_eq!(
@@ -223,7 +218,7 @@ mod tests {
             timestamp: 0,
         };
 
-        let result = locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+        let result = locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id);
 
         assert!(result.is_ok());
     }
@@ -236,7 +231,7 @@ mod tests {
             timestamp: 0,
         };
         let mut locked = LockedNotes::new()
-            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
+            .lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id)
             .unwrap();
 
         locked

@@ -50,15 +50,14 @@ pub struct LeaderClaimOp {
 impl LeaderClaimOp {
     #[must_use]
     pub fn utxo(&self, amount: Value) -> Utxo {
-        Utxo {
-            op_id: self.op_id(),
-            output_index: 0,
-            channel_id: None,
-            note: Note {
+        Utxo::new_bedrock(
+            self.op_id(),
+            0,
+            Note {
                 value: amount,
                 pk: self.pk,
             },
-        }
+        )
     }
 }
 

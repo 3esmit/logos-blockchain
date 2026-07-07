@@ -948,15 +948,14 @@ mod tests {
         let locator2: Multiaddr = "/ip6/::1/tcp/9090".parse().unwrap();
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
-        let locked_note = Utxo {
-            op_id: [1u8; 32],
-            output_index: 12,
-            channel_id: None,
-            note: Note {
+        let locked_note = Utxo::new_bedrock(
+            [1u8; 32],
+            12,
+            Note {
                 value: 500,
                 pk: locked_note_sk.to_public_key(),
             },
-        };
+        );
         let sdp_declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locators: vec![
@@ -1209,7 +1208,7 @@ mod tests {
             zk_id: zk_sk.to_public_key(),
             locked_note_id: transfer_op
                 .outputs
-                .utxo_by_index(0, &transfer_op, None)
+                .utxo_by_index(0, &transfer_op)
                 .unwrap()
                 .id(),
         };

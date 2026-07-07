@@ -10,7 +10,7 @@ mod serde_;
 use std::sync::LazyLock;
 
 use channel::{
-    config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+    ChannelId, config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
     stake_assignation::ChannelStakeAssignationOp, withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -53,6 +53,10 @@ pub trait OpId {
     }
 
     fn op_bytes(&self) -> Vec<u8>;
+    
+    fn outputs_channel_id(&self) -> Option<ChannelId> {
+        None
+    }
 }
 
 const TRANSFER: u8 = 0x00;
@@ -308,7 +312,7 @@ mod mantle_test_vectors {
             channel::{SlotTimeframe, SlotTimeout},
             encoding::{Ops, encode_mantle_tx},
             ledger::{Inputs, NoteId, Outputs},
-            ops::channel::{ChannelId, MsgId, config::Keys, deposit::Metadata},
+            ops::channel::{MsgId, config::Keys, deposit::Metadata},
         },
         sdp::{
             ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,

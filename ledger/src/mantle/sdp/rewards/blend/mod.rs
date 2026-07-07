@@ -461,9 +461,9 @@ mod tests {
             .iter()
             .map(|utxo| {
                 let provider_id = zk_id_to_provider_id
-                    .get(&utxo.note.pk)
+                    .get(&utxo.note().pk)
                     .expect("provider should exist");
-                (*provider_id, utxo.note.value)
+                (*provider_id, utxo.note().value)
             })
             .collect();
 

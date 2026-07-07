@@ -625,7 +625,7 @@ impl LedgerState {
         Ok(Self::from_utxos(
             transfer_op
                 .outputs
-                .utxos(transfer_op, vec![None; transfer_op.outputs.len()]),
+                .utxos(transfer_op),
             config,
             epoch_nonce,
         ))
@@ -639,8 +639,8 @@ impl LedgerState {
         let total_stake = utxos
             .utxos()
             .iter()
-            .filter(|(_, (utxo, _))| config.faucet_pk.is_none_or(|fpk| utxo.note.pk != fpk))
-            .map(|(_, (utxo, _))| utxo.note.value)
+            .filter(|(_, (utxo, _))| config.faucet_pk.is_none_or(|fpk| utxo.note().pk != fpk))
+            .map(|(_, (utxo, _))| utxo.note().value)
             .sum::<Value>()
             .max(1); // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
         let (lottery_0, lottery_1) = config
@@ -778,12 +778,7 @@ pub mod tests {
         let mut op_id = [0u8; 32];
         thread_rng().fill_bytes(&mut op_id);
         let zk_sk = ZkKey::from(BigUint::from(0u64));
-        let utxo = Utxo {
-            op_id,
-            output_index: 0,
-            channel_id: None,
-            note: Note::new(10000, zk_sk.to_public_key()),
-        };
+        let utxo = Utxo::new_bedrock(op_id, 0, Note::new(10000, zk_sk.to_public_key()));
 
         (zk_sk, utxo)
     }
@@ -953,7 +948,7 @@ pub mod tests {
     #[must_use]
     pub fn genesis_state(utxos: &[Utxo]) -> LedgerState {
         let config = config();
-        let total_stake = utxos.iter().map(|u| u.note.value).sum();
+        let total_stake = utxos.iter().map(|u| u.note().value).sum();
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);
@@ -1582,12 +1577,7 @@ pub mod tests {
         let note_sk = ZkKey::from(BigUint::from(1u8));
         let output_note_sk = ZkKey::from(BigUint::from(2u8));
         let input_note = Note::new(100, note_sk.to_public_key());
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: input_note,
-        };
+        let input_utxo = Utxo::new_bedrock([1u8; 32], 0, input_note);
 
         let output_note = Note::new(200, output_note_sk.to_public_key());
 
@@ -1616,12 +1606,7 @@ pub mod tests {
         let output_note1_sk = ZkKey::from(BigUint::from(2u8));
         let output_note2_sk = ZkKey::from(BigUint::from(3u8));
         let input_note = Note::new(11000, note_sk.to_public_key());
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: input_note,
-        };
+        let input_utxo = Utxo::new_bedrock([1u8; 32], 0, input_note);
 
         let output_note1 = Note::new(4000, output_note1_sk.to_public_key());
         let output_note2 = Note::new(3000, output_note2_sk.to_public_key());
@@ -1656,11 +1641,11 @@ pub mod tests {
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
         let output_utxo1 = transfer_op
             .outputs
-            .utxo_by_index(0, &transfer_op, None)
+            .utxo_by_index(0, &transfer_op)
             .unwrap();
         let output_utxo2 = transfer_op
             .outputs
-            .utxo_by_index(1, &transfer_op, None)
+            .utxo_by_index(1, &transfer_op)
             .unwrap();
 
         assert!(new_state.utxos.contains(&output_utxo1.id()));
@@ -1698,33 +1683,17 @@ pub mod tests {
     fn test_tx_processing_invalid_input() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1000, input_sk.to_public_key());
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: input_note,
-        };
+        let input_utxo = Utxo::new_bedrock([1u8; 32], 0, input_note);
 
-        let non_existent_utxo_1 = Utxo {
-            op_id: [1u8; 32],
-            output_index: 1,
-            channel_id: None,
-            note: input_note,
-        };
+        let non_existent_utxo_1 = Utxo::new_bedrock([1u8; 32], 1, input_note);
 
-        let non_existent_utxo_2 = Utxo {
-            op_id: [2u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: input_note,
-        };
+        let non_existent_utxo_2 = Utxo::new_bedrock([2u8; 32], 0, input_note);
 
-        let non_existent_utxo_3 = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
-        };
+        let non_existent_utxo_3 = Utxo::new_bedrock(
+            [1u8; 32],
+            0,
+            Note::new(999, Fr::from(BigUint::from(1u8)).into()),
+        );
 
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
 
@@ -1754,12 +1723,7 @@ pub mod tests {
     fn test_tx_processing_insufficient_balance() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1, input_sk.to_public_key());
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: input_note,
-        };
+        let input_utxo = Utxo::new_bedrock([1u8; 32], 0, input_note);
 
         let output_note = Note::new(1, Fr::from(BigUint::from(2u8)).into());
 
@@ -1800,12 +1764,7 @@ pub mod tests {
     fn test_tx_processing_no_outputs() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(10000, input_sk.to_public_key());
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: input_note,
-        };
+        let input_utxo = Utxo::new_bedrock([1u8; 32], 0, input_note);
 
         let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
@@ -1833,12 +1792,7 @@ pub mod tests {
     #[test]
     fn test_output_not_zero() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            channel_id: None,
-            note: Note::new(10000, input_sk.to_public_key()),
-        };
+        let input_utxo = Utxo::new_bedrock([1u8; 32], 0, Note::new(10000, input_sk.to_public_key()));
 
         let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);

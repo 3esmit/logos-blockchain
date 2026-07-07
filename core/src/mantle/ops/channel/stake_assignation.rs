@@ -26,6 +26,10 @@ impl OpId for ChannelStakeAssignationOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
     }
+
+    fn outputs_channel_id(&self) -> Option<ChannelId> {
+        Some(self.channel_id)
+    }
 }
 
 impl NomEncode for ChannelStakeAssignationOp {
@@ -143,11 +147,7 @@ impl Operation<StakeAssignationValidationContext<'_>> for ChannelStakeAssignatio
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
         // Add the ouputs to the ledger
-        ctx.utxos = self.outputs.execute(
-            ctx.utxos,
-            self,
-            vec![Some(self.channel_id); self.outputs.len()],
-        );
+        ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
         Ok((ctx, Events::new()))
     }

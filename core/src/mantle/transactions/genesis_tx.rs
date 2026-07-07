@@ -341,7 +341,7 @@ impl<const MIN_SIZE: usize, const MAX_SIZE: usize, const MIN: usize, const MAX: 
     }
 }
 
-pub const MAX_CHAIN_ID_SIZE: usize = u64::MAX as usize;
+pub const MAX_CHAIN_ID_SIZE: usize = u8::MAX as usize;
 type ChainIdBoundedVec = BoundedVec<u8, 1, MAX_CHAIN_ID_SIZE>;
 type ChainIdBoundedString = BoundedString<1, MAX_CHAIN_ID_SIZE>;
 
@@ -415,10 +415,10 @@ impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for C
     fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
         const {
             assert!(MIN >= 1, "Min size cannot be less than 1.");
-            // No need to assert `MAX <= MAX_CHAIN_ID_SIZE` because
-            // `MAX_CHAIN_ID_SIZE` == `u64::MAX` so comparison is
-            // always true, and the compiles throws an error because
-            // of that.
+            assert!(
+                MAX <= MAX_CHAIN_ID_SIZE,
+                "Max size cannot exceed MAX_CHAIN_ID_SIZE"
+            );
         }
         Self::try_from(value.into_inner())
     }
@@ -443,8 +443,8 @@ impl NomDecode for ChainId {
     }
 }
 
-/// Time at which the chain should start. u32 suffices: we only need the
-/// positive half of the i64 Unix timestamp.
+/// Time at which the chain should start. Bounded by u32 since a far-future
+/// value or a pre-unix-epoch value isn't needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, NomCodec)]
 pub struct GenesisTime(u32);
 
@@ -811,9 +811,9 @@ mod tests {
 
     #[test]
     fn test_cryptarchia_parameter_decode_errors() {
-        // Too short
+        // Too short: can't even read the 1-byte chain_id_len prefix.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[0; 1]).unwrap_err(),
+            CryptarchiaParameter::decode(&[]).unwrap_err(),
             nom::Err::Error(NomError {
                 code: ErrorKind::Eof,
                 ..
@@ -833,7 +833,7 @@ mod tests {
 
         // Invalid UTF-8 chain_id
         let mut encoded = cryptarchia_param().encode();
-        encoded[8] = 0xFF; // corrupt the UTF-8 byte
+        encoded[1] = 0xFF; // corrupt the UTF-8 byte
         assert!(matches!(
             CryptarchiaParameter::decode(&encoded).unwrap_err(),
             nom::Err::Error(NomError {

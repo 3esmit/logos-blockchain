@@ -14,7 +14,7 @@ pub struct WalletBalance {
 impl WalletBalance {
     #[must_use]
     pub fn from_utxos(utxos: &[Utxo]) -> Self {
-        let value = utxos.iter().map(|utxo| utxo.note.value).sum();
+        let value = utxos.iter().map(|utxo| utxo.note().value).sum();
         Self {
             output_count: utxos.len(),
             value,

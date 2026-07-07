@@ -37,7 +37,7 @@ pub fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> WalletState {
 
     for utxo in utxos {
         let note_id = utxo.id();
-        let pk = utxo.note.pk;
+        let pk = utxo.note().pk;
         utxo_map = utxo_map.insert(note_id, utxo);
 
         let note_set = pk_index
@@ -201,7 +201,7 @@ fn build_chunked_funded_tx(
 
     let input_sum = funding_utxos
         .iter()
-        .map(|utxo| u128::from(utxo.note.value))
+        .map(|utxo| u128::from(utxo.note().value))
         .sum::<u128>();
     let output_sum = pending_transfer_output_sum(tx_builder);
 
@@ -334,12 +334,8 @@ mod tests {
 
         let account = WalletAccount::deterministic(1, 2_000_000, false)
             .expect("test wallet account should build");
-        let funding_utxo = Utxo::new(
-            [7u8; 32],
-            0,
-            None,
-            Note::new(2_000_000, account.public_key()),
-        );
+        let funding_utxo =
+            Utxo::new_bedrock([7u8; 32], 0, Note::new(2_000_000, account.public_key()));
         let funding_source = WalletFundingSource::new(account, vec![funding_utxo]);
 
         let funded_builder =

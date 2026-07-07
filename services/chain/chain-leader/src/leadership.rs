@@ -59,7 +59,7 @@ where
             tracing::debug!(
                 "leader for slot {:?}, {:?}/{:?}",
                 slot,
-                utxo.note.value,
+                utxo.note().value,
                 epoch_state.total_stake()
             );
 
@@ -108,7 +108,7 @@ where
             tracing::trace!(
                 "Not a leader for slot {:?}, {:?}/{:?}",
                 slot,
-                utxo.note.value,
+                utxo.note().value,
                 epoch_state.total_stake()
             );
         }
@@ -325,7 +325,7 @@ where
         Some(faucet_pk) => eligible_utxos
             .response
             .into_iter()
-            .filter(|utxo| utxo.utxo.note.pk != *faucet_pk)
+            .filter(|utxo| utxo.utxo.note().pk != *faucet_pk)
             .collect(),
         None => eligible_utxos.response,
     };
@@ -464,14 +464,14 @@ mod pol_tests {
 
         // Create a UTXO
         let transfer = TransferOp::new(Inputs::empty(), Outputs::new([Note::new(1000u64, pk)]));
-        let utxo = transfer.outputs.utxo_by_index(0, &transfer, None).unwrap();
+        let utxo = transfer.outputs.utxo_by_index(0, &transfer).unwrap();
 
         // Create aged/latest UTXO trees
         let aged_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
         let latest_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
 
         // Create EpochState
-        let total_stake = utxo.note.value;
+        let total_stake = utxo.note().value;
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);
@@ -557,12 +557,12 @@ mod pol_tests {
         let pk = sk.to_public_key();
 
         let transfer = TransferOp::new(Inputs::empty(), Outputs::new([Note::new(1000u64, pk)]));
-        let utxo = transfer.outputs.utxo_by_index(0, &transfer, None).unwrap();
+        let utxo = transfer.outputs.utxo_by_index(0, &transfer).unwrap();
 
         let aged_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
         let latest_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
 
-        let total_stake = utxo.note.value;
+        let total_stake = utxo.note().value;
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);

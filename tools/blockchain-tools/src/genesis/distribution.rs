@@ -57,19 +57,16 @@ impl GenesisTransferOp {
     }
 
     pub fn notes(&self) -> impl Iterator<Item = Note> {
-        self.outputs
-            .utxos(&self.transfer_op, vec![None; self.outputs.len()])
-            .map(|u| u.note)
+        self.outputs.utxos(&self.transfer_op).map(|u| u.note())
     }
 
     pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
-        self.outputs
-            .utxos(&self.transfer_op, vec![None; self.outputs.len()])
+        self.outputs.utxos(&self.transfer_op)
     }
 
     #[must_use]
     pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
-        self.outputs.utxo_by_index(index, &self.transfer_op, None)
+        self.outputs.utxo_by_index(index, &self.transfer_op)
     }
 }
 
@@ -114,7 +111,7 @@ where
             ));
         }
 
-        if let Some(utxo) = transfer_op.utxos().find(|u| u.note.pk == provider.zk_id) {
+        if let Some(utxo) = transfer_op.utxos().find(|u| u.note().pk == provider.zk_id) {
             declarations.push(SDPDeclareOp {
                 service_type: provider.service_type,
                 locators: provider.locators,

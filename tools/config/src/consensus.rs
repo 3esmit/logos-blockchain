@@ -119,7 +119,7 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
 #[must_use]
 pub fn create_genesis_block(utxos: &[Utxo], test_context: Option<&str>) -> GenesisBlock {
     // Create transfer op with the utxos as outputs
-    let mut outputs = utxos.iter().map(|u| u.note);
+    let mut outputs = utxos.iter().map(Utxo::note);
     #[expect(
         clippy::option_if_let_else,
         reason = "Moving notes inside of consuming lambda function is harder to read"
@@ -222,24 +222,18 @@ fn create_utxos(
         let sk = ZkKey::from(BigUint::from_bytes_le(&sk_data));
         let pk = sk.to_public_key();
         regular_note_keys.push(sk);
-        utxos.push(Utxo {
-            note: Note::new(REGULAR_NOTE_VALUE, pk),
-            op_id: [0u8; 32],
-            channel_id: None,
-            output_index: 0,
-        });
+        utxos.push(Utxo::new_bedrock(
+            [0u8; 32],
+            0,
+            Note::new(REGULAR_NOTE_VALUE, pk),
+        ));
         output_index += 1;
 
         let sk_blend_data = derive_key_material(BLEND_KEY_PREFIX, &id);
         let sk_blend = ZkKey::from(BigUint::from_bytes_le(&sk_blend_data));
         let pk_blend = sk_blend.to_public_key();
         let note_blend = Note::new(BLEND_NOTE_VALUE, pk_blend);
-        let utxo = Utxo {
-            note: note_blend,
-            op_id: [0u8; 32],
-            channel_id: None,
-            output_index: 0,
-        };
+        let utxo = Utxo::new_bedrock([0u8; 32], 0, note_blend);
         blend_notes.push(ServiceNote {
             pk: pk_blend,
             sk: sk_blend,
@@ -254,12 +248,7 @@ fn create_utxos(
         let sk_sdp = ZkKey::from(BigUint::from_bytes_le(&sk_sdp_data));
         let pk_sdp = sk_sdp.to_public_key();
         let note_sdp = Note::new(SDP_NOTE_VALUE, pk_sdp);
-        let utxo = Utxo {
-            note: note_sdp,
-            op_id: [0u8; 32],
-            channel_id: None,
-            output_index,
-        };
+        let utxo = Utxo::new_bedrock([0u8; 32], output_index, note_sdp);
         sdp_notes.push(ServiceNote {
             pk: pk_sdp,
             sk: sk_sdp,
@@ -286,12 +275,7 @@ pub fn create_genesis_block_with_declarations(
     let mut ops = vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
 
     for provider in &providers {
-        let utxo = Utxo {
-            op_id: transfer_id,
-            output_index: provider.note.output_index,
-            channel_id: None,
-            note: provider.note.note,
-        };
+        let utxo = Utxo::new_bedrock(transfer_id, provider.note.output_index, provider.note.note);
         let declaration = DeclarationMessage {
             service_type: provider.service_type,
             locators: provider.locator.clone().into(),

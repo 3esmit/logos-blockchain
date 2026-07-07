@@ -391,7 +391,7 @@ fn record_zone_wallet_submission(
 fn user_owned_utxos(utxos: Vec<Utxo>) -> Vec<Utxo> {
     utxos
         .into_iter()
-        .filter(|utxo| utxo.channel_id.is_none())
+        .filter(|utxo| utxo.channel_id().is_none())
         .collect()
 }
 
@@ -408,11 +408,11 @@ async fn select_channel_withdraw_inputs(
         current_available_utxos_for_wallet(world, &step.value, wallet_name)
             .await?
             .into_iter()
-            .filter(|utxo| utxo.channel_id == Some(channel_id))
+            .filter(|utxo| utxo.channel_id() == Some(channel_id))
             .collect();
 
     // Spend the largest notes first so the fewest inputs cover the amount.
-    channel_utxos.sort_by_key(|b| std::cmp::Reverse(b.note.value));
+    channel_utxos.sort_by_key(|b| std::cmp::Reverse(b.note().value));
 
     let mut selected = Vec::new();
     let mut total = 0u64;
@@ -420,7 +420,7 @@ async fn select_channel_withdraw_inputs(
         if total >= amount {
             break;
         }
-        total += utxo.note.value;
+        total += utxo.note().value;
         selected.push(utxo.id());
     }
 

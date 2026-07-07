@@ -72,17 +72,16 @@ fn create_utxos(
 ) -> (Vec<Utxo>, Option<FaucetInfo>) {
     // Create a single faucet UTXO with value = u64::MAX - sum(other UTXOs)
     let faucet_info = faucet_settings.enabled.then(|| {
-        let other_sum: u64 = utxos.iter().map(|u| u.note.value).sum();
+        let other_sum: u64 = utxos.iter().map(|u| u.note().value).sum();
         let faucet_value = u64::MAX - other_sum;
         let faucet_sk = generate_faucet_key(entropy);
         let faucet_pk = faucet_sk.to_public_key();
         let output_index = utxos.len();
-        utxos.push(Utxo {
-            note: Note::new(faucet_value, faucet_pk),
-            op_id: [0u8; 32],
-            channel_id: None,
+        utxos.push(Utxo::new_bedrock(
+            [0u8; 32],
             output_index,
-        });
+            Note::new(faucet_value, faucet_pk),
+        ));
         FaucetInfo {
             sk: faucet_sk,
             pk: faucet_pk,

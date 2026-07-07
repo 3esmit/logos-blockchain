@@ -379,7 +379,7 @@ async fn wait_wallet_send_ready(
         // Prefer smaller UTXOs first. The transaction builder selects sufficient
         // inputs, so this helps consume smaller/dustier outputs before large
         // change-like outputs.
-        fresh.available_utxos.sort_by_key(|utxo| utxo.note.value);
+        fresh.available_utxos.sort_by_key(|utxo| utxo.note().value);
 
         let available = fresh.observation.balance(WalletOutputState::Available);
         last_available_value = available.value;
@@ -391,10 +391,10 @@ async fn wait_wallet_send_ready(
         for utxo in fresh
             .available_utxos
             .iter()
-            .filter(|utxo| utxo.note.value >= value_per_transaction)
+            .filter(|utxo| utxo.note().value >= value_per_transaction)
         {
             eligible_outputs += 1;
-            eligible_value += utxo.note.value;
+            eligible_value += utxo.note().value;
         }
 
         let is_ready = eligible_outputs >= required_outputs && eligible_value >= required_available;

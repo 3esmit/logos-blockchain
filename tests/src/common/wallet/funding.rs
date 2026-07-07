@@ -157,14 +157,14 @@ impl WalletSelectedInputs {
             });
         }
 
-        utxos.sort_by_key(|utxo| Reverse(utxo.note.value));
+        utxos.sort_by_key(|utxo| Reverse(utxo.note().value));
 
-        let available = utxos.iter().map(|utxo| utxo.note.value).sum();
+        let available = utxos.iter().map(|utxo| utxo.note().value).sum();
         let mut total = 0u64;
         let mut inputs = Vec::new();
 
         for utxo in utxos {
-            total = total.saturating_add(utxo.note.value);
+            total = total.saturating_add(utxo.note().value);
             inputs.push(utxo);
             if total >= target {
                 return Ok(Self { inputs, total });
@@ -244,7 +244,7 @@ pub struct WalletFundingPlan {
 impl WalletFundingPlan {
     #[must_use]
     pub fn largest_first(mut utxos: Vec<Utxo>, base_inputs: Vec<Utxo>) -> Self {
-        utxos.sort_by_key(|utxo| Reverse(utxo.note.value));
+        utxos.sort_by_key(|utxo| Reverse(utxo.note().value));
         Self {
             ordered_utxos: utxos,
             base_inputs,
@@ -253,7 +253,7 @@ impl WalletFundingPlan {
 
     #[must_use]
     pub fn smallest_first(mut utxos: Vec<Utxo>, base_inputs: Vec<Utxo>) -> Self {
-        utxos.sort_by_key(|utxo| utxo.note.value);
+        utxos.sort_by_key(|utxo| utxo.note().value);
         Self {
             ordered_utxos: utxos,
             base_inputs,
@@ -281,7 +281,7 @@ impl WalletFundingPlan {
                 .base_inputs
                 .iter()
                 .chain(self.ordered_utxos.iter())
-                .map(|utxo| utxo.note.value)
+                .map(|utxo| utxo.note().value)
                 .sum(),
         }
         .into())
@@ -321,10 +321,9 @@ mod tests {
     use super::*;
 
     fn utxo(value: u64, output_index: usize) -> Utxo {
-        Utxo::new(
+        Utxo::new_bedrock(
             [output_index as u8; 32],
             output_index,
-            None,
             Note::new(value, ZkPublicKey::new(1u8.into())),
         )
     }
@@ -357,7 +356,7 @@ mod tests {
                 .expect("fee sponsor should be present")
                 .available_utxos()
                 .iter()
-                .map(|utxo| utxo.note.value)
+                .map(|utxo| utxo.note().value)
                 .collect::<Vec<_>>(),
             vec![20]
         );
@@ -384,13 +383,13 @@ mod tests {
                 observed_input_values.push(
                     selected_inputs
                         .iter()
-                        .map(|utxo| utxo.note.value)
+                        .map(|utxo| utxo.note().value)
                         .collect::<Vec<_>>(),
                 );
 
                 if selected_inputs
                     .iter()
-                    .map(|utxo| utxo.note.value)
+                    .map(|utxo| utxo.note().value)
                     .sum::<u64>()
                     >= 8
                 {
@@ -415,7 +414,7 @@ mod tests {
                 observed_input_values.push(
                     selected_inputs
                         .iter()
-                        .map(|utxo| utxo.note.value)
+                        .map(|utxo| utxo.note().value)
                         .collect::<Vec<_>>(),
                 );
 

@@ -287,7 +287,7 @@ fn build_wallet_transaction(
     let provisional_tx = MantleTxBuilder::new(tx_context.clone())
         .add_ledger_input(input.utxo)
         .map_err(|err| format!("failed to add provisional input: {err}"))?
-        .add_ledger_output(Note::new(input.utxo.note.value, receiver))
+        .add_ledger_output(Note::new(input.utxo.note().value, receiver))
         .map_err(|err| format!("failed to add provisional output: {err}"))?
         .build()
         .map_err(|err| format!("failed to build provisional tx: {err}"))?;
@@ -295,10 +295,11 @@ fn build_wallet_transaction(
     let fee = provisional_tx
         .total_gas_cost::<MainnetGasConstants>(gas_context)?
         .into_inner();
-    let output_value = input.utxo.note.value.checked_sub(fee).ok_or_else(|| {
+    let output_value = input.utxo.note().value.checked_sub(fee).ok_or_else(|| {
         format!(
             "input note value {} below fee {}",
-            input.utxo.note.value, fee
+            input.utxo.note().value,
+            fee
         )
     })?;
 
@@ -330,7 +331,7 @@ fn wallet_utxo_map(
         .outputs
         .iter()
         .enumerate()
-        .map(|(idx, note)| (note.pk, Utxo::new(op_id, idx, None, *note)))
+        .map(|(idx, note)| (note.pk, Utxo::new_bedrock(op_id, idx, *note)))
         .collect()
 }
 

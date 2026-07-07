@@ -412,26 +412,13 @@ async fn start_sdp_manual_cluster(
                 .expect("manual-cluster deployment should include genesis tx")
                 .genesis_tx()
                 .genesis_transfer(),
-            vec![
-                None;
-                cluster_harness
-                    .deployment()
-                    .config
-                    .genesis_block
-                    .as_ref()
-                    .expect("manual-cluster deployment should include genesis tx")
-                    .genesis_tx()
-                    .genesis_transfer()
-                    .outputs
-                    .len()
-            ],
         )
         .collect();
 
     let spare_note_id = genesis_utxos
         .iter()
         .copied()
-        .find(|utxo| utxo.note.pk == spare_wallet.public_key())
+        .find(|utxo| utxo.note().pk == spare_wallet.public_key())
         .expect("wallet-backed spare note should exist at genesis")
         .id();
 

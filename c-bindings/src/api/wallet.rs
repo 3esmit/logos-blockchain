@@ -1303,7 +1303,7 @@ pub(crate) fn channel_deposit_sync(
         // 4. The deposit consumes the freshly-created note at output index 0.
         let deposit_note_id = transfer
             .outputs
-            .utxo_by_index(0, &transfer, None)
+            .utxo_by_index(0, &transfer)
             .ok_or_else(|| {
                 logging::error!(
                     "channel_deposit_sync",

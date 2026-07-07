@@ -1157,7 +1157,7 @@ pub fn build_zone_deposit(
 ) -> Result<ZoneDeposit, ZoneTestError> {
     let note = available_utxos
         .into_iter()
-        .find(|utxo| utxo.note.value == amount)
+        .find(|utxo| utxo.note().value == amount)
         .ok_or(ZoneTestError::MissingExactFundingNote { value: amount })?;
 
     Ok(ZoneDeposit {
@@ -1283,7 +1283,7 @@ fn build_atomic_deposit_op(
 ) -> Result<DepositOp, ZoneTestError> {
     let deposit_note_id = transfer
         .outputs
-        .utxo_by_index(0, transfer, None)
+        .utxo_by_index(0, transfer)
         .ok_or_else(|| ZoneTestError::BuildAtomicDeposit {
             message: "transfer did not produce the deposit note".to_owned(),
         })?

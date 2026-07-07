@@ -111,7 +111,7 @@ impl WalletChainState {
 
     pub fn seed_genesis_utxos(&mut self, genesis_utxos: &[Utxo]) {
         for utxo in genesis_utxos.iter().copied() {
-            let Some(wallet_name) = self.wallets_by_pk.get(&utxo.note.pk) else {
+            let Some(wallet_name) = self.wallets_by_pk.get(&utxo.note().pk) else {
                 continue;
             };
             let Some(utxos_by_note) = self.utxos_by_wallet.get_mut(wallet_name) else {
@@ -182,9 +182,7 @@ impl WalletChainState {
                     &mut changes.observed_spends,
                 );
                 self.apply_owned_outputs(
-                    transfer
-                        .outputs
-                        .utxos(transfer, vec![None; transfer.outputs.len()]),
+                    transfer.outputs.utxos(transfer),
                     &mut changes.observed_outputs,
                 );
             }
@@ -199,10 +197,10 @@ impl WalletChainState {
                 );
                 if amount != 0 {
                     self.apply_owned_outputs(
-                        std::iter::once(Utxo::new(
+                        std::iter::once(Utxo::new_channel(
                             deposit.op_id(),
                             0,
-                            Some(deposit.channel_id),
+                            deposit.channel_id,
                             Note::new(amount, ZkPublicKey::zero()),
                         )),
                         &mut changes.observed_outputs,
@@ -218,10 +216,7 @@ impl WalletChainState {
                     &mut changes.observed_spends,
                 );
                 self.apply_owned_outputs(
-                    stake_assignation.outputs.utxos(
-                        stake_assignation,
-                        vec![Some(stake_assignation.channel_id); stake_assignation.outputs.len()],
-                    ),
+                    stake_assignation.outputs.utxos(stake_assignation),
                     &mut changes.observed_outputs,
                 );
             }
@@ -235,9 +230,7 @@ impl WalletChainState {
                     &mut changes.observed_spends,
                 );
                 self.apply_owned_outputs(
-                    withdraw
-                        .outputs
-                        .utxos(withdraw, vec![None; withdraw.outputs.len()]),
+                    withdraw.outputs.utxos(withdraw),
                     &mut changes.observed_outputs,
                 );
                 let output_amount: u64 = withdraw.outputs.iter().map(|note| note.value).sum();
@@ -245,10 +238,10 @@ impl WalletChainState {
                     && returned != 0
                 {
                     self.apply_owned_outputs(
-                        std::iter::once(Utxo::new(
+                        std::iter::once(Utxo::new_channel(
                             withdraw.op_id(),
                             withdraw.outputs.len(),
-                            Some(withdraw.channel_id),
+                            withdraw.channel_id,
                             Note::new(returned, ZkPublicKey::zero()),
                         )),
                         &mut changes.observed_outputs,
@@ -270,7 +263,7 @@ impl WalletChainState {
         observed_outputs: &mut Vec<WalletObservedOutput>,
     ) {
         for utxo in utxos {
-            let Some(wallet_name) = self.wallets_by_pk.get(&utxo.note.pk) else {
+            let Some(wallet_name) = self.wallets_by_pk.get(&utxo.note().pk) else {
                 continue;
             };
             let Some(utxos_by_note) = self.utxos_by_wallet.get_mut(wallet_name) else {
@@ -295,7 +288,7 @@ impl WalletChainState {
                 self.utxos_by_wallet
                     .values()
                     .find_map(|utxos_by_note| utxos_by_note.get(&note_id))
-                    .map(|utxo| utxo.note.value)
+                    .map(|utxo| utxo.note().value)
             })
             .sum()
     }
@@ -417,12 +410,7 @@ mod tests {
     }
 
     fn utxo(value: u64, output_index: usize, pk: ZkPublicKey) -> Utxo {
-        Utxo::new(
-            [output_index as u8; 32],
-            output_index,
-            None,
-            Note::new(value, pk),
-        )
+        Utxo::new_bedrock([output_index as u8; 32], output_index, Note::new(value, pk))
     }
 
     fn wallet_utxo_values(chain_state: &WalletChainState, wallet_id: &WalletId) -> Vec<u64> {
@@ -432,7 +420,7 @@ mod tests {
             .map(|(_, utxos)| {
                 utxos
                     .into_iter()
-                    .map(|utxo| utxo.note.value)
+                    .map(|utxo| utxo.note().value)
                     .collect::<Vec<_>>()
             })
             .expect("wallet should be present");
@@ -477,7 +465,7 @@ mod tests {
             .get(wallet_id.as_str())
             .expect("wallet should be present")
             .iter()
-            .map(|utxo| utxo.note.value)
+            .map(|utxo| utxo.note().value)
             .collect::<Vec<_>>();
         values.sort_unstable();
 

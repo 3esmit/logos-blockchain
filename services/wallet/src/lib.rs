@@ -736,7 +736,7 @@ where
         let note = utxo_tree
             .utxos()
             .get(&declare_op.locked_note_id)
-            .map(|(utxo, _)| utxo.note)
+            .map(|(utxo, _)| utxo.note())
             .ok_or(WalletServiceError::MissingLockedNote(
                 declare_op.locked_note_id,
             ))?;
@@ -962,7 +962,7 @@ where
                     .latest_utxos()
                     .utxos()
                     .get(&note_id)
-                    .map(|(utxo, _)| utxo.note.pk)
+                    .map(|(utxo, _)| utxo.note().pk)
                     .ok_or(WalletServiceError::MissingInputNote(note_id))
             })
             .collect()
@@ -1026,7 +1026,7 @@ where
             .filter_map(|(_, utxo)| {
                 wallet
                     .known_keys()
-                    .get(&utxo.note.pk)
+                    .get(&utxo.note().pk)
                     .map(|key_id| UtxoWithKeyId {
                         utxo: *utxo,
                         key_id: key_id.clone(),

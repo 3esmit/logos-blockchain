@@ -83,9 +83,9 @@ fn wallet_reserved_inputs_from_inputs(
     let mut fee_sponsor = Vec::new();
 
     for utxo in inputs.iter().copied() {
-        if utxo.note.pk == wallet_pk {
+        if utxo.note().pk == wallet_pk {
             sender.push(utxo);
-        } else if utxo.note.pk == fee_sponsor_pk {
+        } else if utxo.note().pk == fee_sponsor_pk {
             fee_sponsor.push(utxo);
         }
     }

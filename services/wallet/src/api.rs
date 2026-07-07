@@ -2,9 +2,9 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, SignedMantleTx, TxHash, Value,
-        ops::leader_claim::VoucherCm,
-        tx::MantleTxContext,
-        tx_builder::{MantleTxBuilder, TxBuilderError},
+        gas::GasCost,
+        ops::leader_claim::{RewardsRoot, VoucherCm},
+        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError},
     },
 };
 use lb_key_management_system_service::keys::{
@@ -21,7 +21,7 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    TipResponse, UtxoWithKeyId, VoucherCommitmentAndNullifier, WalletMsg, WalletServiceError,
+    ClaimableVoucherInfo, TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError,
     WalletServiceSettings,
 };
 
@@ -71,6 +71,18 @@ where
 {
     relay: OutboundRelay<Wallet::Message>,
     _id: std::marker::PhantomData<RuntimeServiceId>,
+}
+
+impl<Wallet, RuntimeServiceId> Clone for WalletApi<Wallet, RuntimeServiceId>
+where
+    Wallet: WalletServiceData,
+{
+    fn clone(&self) -> Self {
+        Self {
+            relay: self.relay.clone(),
+            _id: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<Wallet, RuntimeServiceId> WalletApi<Wallet, RuntimeServiceId>
@@ -129,6 +141,30 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
+                resp_tx,
+            })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
+    pub async fn build_leader_claim_tx(
+        &self,
+        tip: HeaderId,
+        rewards_root: RewardsRoot,
+        reward_amount: Value,
+        funding_pk: ZkPublicKey,
+        max_tx_fee: GasCost,
+    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::BuildLeaderClaimTx {
+                tip,
+                rewards_root,
+                reward_amount,
+                funding_pk,
+                max_tx_fee,
                 resp_tx,
             })
             .await?;
@@ -239,13 +275,13 @@ where
         Ok(rx.await?)
     }
 
-    pub async fn get_claimable_voucher(
+    pub async fn get_claimable_vouchers(
         &self,
         tip: Option<HeaderId>,
-    ) -> Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletApiError> {
+    ) -> Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
-            .send(WalletMsg::GetClaimableVoucher { tip, resp_tx })
+            .send(WalletMsg::GetClaimableVouchers { tip, resp_tx })
             .await?;
         Ok(rx.await??)
     }
@@ -257,7 +293,7 @@ mod tests {
 
     use lb_core::mantle::{
         ops::channel::{ChannelId, ChannelKeyIndex},
-        tx::{GasPrices, MantleTxGasContext},
+        transactions::{GasPrices, MantleTxGasContext},
     };
     use overwatch::services::state::{NoOperator, NoState};
     use tokio::sync::mpsc;

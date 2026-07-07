@@ -8,11 +8,11 @@ use std::{
 use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
-use lb_chain_service::{ChainServiceMode, CryptarchiaInfo, State};
+use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, State};
 use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
-use lb_node::config::{DeploymentSettings, RunConfig, WellKnownDeployment};
+use lb_node::config::{DeploymentSettings, RunConfig};
 use lb_testing_framework::{
     LbcEnv, LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
 };
@@ -29,14 +29,21 @@ use crate::cucumber::{
         manual_nodes::{
             config_override::{apply_deployment_config_overrides, apply_user_config_overrides},
             snapshots::{
-                restore_node_state_from_snapshot, save_named_blockchain_snapshot,
-                validate_snapshot_path_component,
+                reset_named_snapshot, restore_node_state_from_snapshot,
+                save_named_node_state_snapshot, validate_snapshot_path_component,
             },
         },
     },
     utils::{
         display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
+    },
+    wallet::{
+        snapshot::{
+            restore_wallet_snapshot_if_present, save_wallet_snapshot_for_saved_nodes,
+            save_wallet_snapshot_from_saved_node_tips,
+        },
+        sync::current_wallet_states_for_wallets,
     },
     world::{
         ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
@@ -104,7 +111,7 @@ impl SyncTargetStats {
 
 #[must_use]
 pub(crate) fn genesis_block_utxos(
-    genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
+    genesis_tx: &lb_core::mantle::transactions::GenesisTx,
 ) -> Vec<Utxo> {
     let transfer_op = genesis_tx.genesis_transfer().clone();
     let transfer_id = transfer_op.op_id();
@@ -308,7 +315,7 @@ pub(crate) fn ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
 }
 
 pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
-    world: &CucumberWorld,
+    world: &mut CucumberWorld,
     step: &str,
 ) -> StepResult {
     let public_cryptarchia_endpoint_peers = world
@@ -347,6 +354,9 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
                 "All nodes synced to the chain in {:.2?}",
                 start.elapsed()
             );
+
+            catch_up_known_wallet_tracking_after_chain_sync(world, step).await?;
+
             return Ok(());
         }
 
@@ -363,6 +373,27 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
 
         sleep(CHAIN_SYNC_POLL_INTERVAL).await;
     }
+}
+
+async fn catch_up_known_wallet_tracking_after_chain_sync(
+    world: &mut CucumberWorld,
+    step: &str,
+) -> StepResult {
+    let wallets = world.wallet_info.values().cloned().collect::<Vec<_>>();
+    if wallets.is_empty() {
+        return Ok(());
+    }
+
+    let started_at = Instant::now();
+    current_wallet_states_for_wallets(world, step, &wallets).await?;
+
+    info!(
+        target: TARGET,
+        "Wallet state refreshed after chain sync in {:.2?}",
+        started_at.elapsed()
+    );
+
+    Ok(())
 }
 
 pub(crate) fn parse_url(raw: &str) -> Result<String, String> {
@@ -386,13 +417,13 @@ async fn fetch_public_peer_consensus_snapshots(
     for peer in peers {
         match fetch_public_peer_consensus(client, peer).await {
             Ok(info) => snapshots.push(PublicPeerConsensusSnapshot {
-                peer_url: peer.url.clone(),
+                peer_url: peer.base_url.clone(),
                 stats: SyncTargetStats::from_cryptarchia_info(&info),
             }),
             Err(e) => warn!(
                 target: TARGET,
                 "Failed to fetch public cryptarchia info from '{}': {e}",
-                peer.url
+                peer.base_url
             ),
         }
     }
@@ -400,31 +431,34 @@ async fn fetch_public_peer_consensus_snapshots(
     snapshots
 }
 
-async fn fetch_public_peer_consensus(
+/// Fetch the current consensus info from a public cryptarchia endpoint peer.
+/// Returns an error if the request fails or the response is invalid.
+pub async fn fetch_public_peer_consensus(
     client: &Client,
     peer: &PublicCryptarchiaEndpointPeer,
 ) -> Result<CryptarchiaInfo, StepError> {
     let request_url = Url::parse(&format!(
         "{peer_url}/{path}",
-        peer_url = peer.url.as_str(),
+        peer_url = peer.base_url.as_str(),
         path = CRYPTARCHIA_INFO.trim_start_matches('/')
     ))
     .map_err(|e| StepError::InvalidArgument {
         message: format!(
             "Invalid public cryptarchia info URL for '{}': {e}",
-            peer.url.as_str()
+            peer.base_url.as_str()
         ),
     })?;
 
-    client
+    Ok(client
         .get(request_url)
         .basic_auth(&peer.username, Some(&peer.password))
         .send()
         .await?
         .error_for_status()?
-        .json::<CryptarchiaInfo>()
+        .json::<ChainServiceInfo>()
         .await
-        .map_err(Into::into)
+        .map_err(StepError::from)?
+        .cryptarchia_info)
 }
 
 fn select_majority_public_sync_target(
@@ -603,7 +637,6 @@ pub async fn start_node(
         });
     }
     world.ensure_wallet_block_feed().await?;
-    let cluster = world.local_cluster.as_ref().expect("local cluster checked");
     let startup_settings = get_startup_settings(world, initial_peers).inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
@@ -612,31 +645,31 @@ pub async fn start_node(
     let persist_dir = world.scenario_base_dir.join(node_name);
     let runtime_dir_prefix = format!("{node_name}_");
     let final_dir_ignore_list = matching_child_dirs(&persist_dir, &runtime_dir_prefix);
-    let started_node = Box::pin(
-        cluster.start_node_with(
-            node_name,
-            StartNodeOptions::default()
-                .with_peers(startup_settings.peer_selection)
-                .with_persist_dir(persist_dir)
-                .create_patch(move |mut config: RunConfig| {
-                    prepare_config_patch(
-                        &mut config,
-                        startup_settings.join_external_network,
-                        startup_settings.deployment_settings_override.as_ref(),
-                        &startup_settings.manual_node_config_overrides,
-                        startup_settings.initial_peers_override.as_ref(),
-                        &startup_settings.ibd_peers,
-                        &startup_settings.user_config_overrides,
-                        &startup_settings.deployment_config_overrides,
-                    )?;
-                    Ok(config)
-                }),
-        ),
-    )
-    .await
-    .inspect_err(|e| {
-        warn!(target: TARGET, "Step `{step}` error: {e}");
-    })?;
+    let start_options = StartNodeOptions::default()
+        .with_peers(startup_settings.peer_selection)
+        .with_persist_dir(persist_dir)
+        .create_patch(move |mut config: RunConfig| {
+            prepare_config_patch(
+                &mut config,
+                startup_settings.join_external_network,
+                startup_settings.deployment_settings_override.as_ref(),
+                &startup_settings.manual_node_config_overrides,
+                startup_settings.initial_peers_override.as_ref(),
+                &startup_settings.ibd_peers,
+                &startup_settings.user_config_overrides,
+                &startup_settings.deployment_config_overrides,
+            )?;
+            Ok(config)
+        });
+
+    let started_node = {
+        let cluster = world.local_cluster.as_ref().expect("local cluster checked");
+        Box::pin(cluster.start_node_with(node_name, start_options))
+            .await
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{step}` error: {e}");
+            })?
+    };
 
     let node_final_dir = extract_child_dir_name(
         &world.scenario_base_dir,
@@ -657,28 +690,42 @@ pub async fn start_node(
     // `StartNodeOptions::with_persist_dir` currently creates a fresh runtime
     // directory for each launch. Seed that runtime directory and restart once
     // to effectively initialize from a named snapshot.
-    if let Some(node_snapshot) = world.blockchain_snapshot_on_startup.as_ref() {
-        cluster
-            .stop_node(&started_node_name)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{step}` error: {e}");
-            })?;
-        restore_node_state_from_snapshot(node_snapshot, &node_runtime_dir).inspect_err(|e| {
+    let restored_node_snapshot = if let Some(node_snapshot) = world.node_snapshot_on_startup.clone()
+    {
+        let stop_result = {
+            let cluster = world.local_cluster.as_ref().expect("local cluster checked");
+            cluster
+                .stop_node(&started_node_name)
+                .await
+                .inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{step}` error: {e}");
+                })
+        };
+        stop_result?;
+
+        restore_node_state_from_snapshot(&node_snapshot, &node_runtime_dir).inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
-        cluster
-            .restart_node(&started_node_name)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{step}` error: {e}");
-            })?;
+
+        let restart_result = {
+            let cluster = world.local_cluster.as_ref().expect("local cluster checked");
+            cluster
+                .restart_node(&started_node_name)
+                .await
+                .inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{step}` error: {e}");
+                })
+        };
+        restart_result?;
         info!(
             target: TARGET,
             "Node {node_name} started from snapshot {}/{}",
             node_snapshot.name, node_snapshot.node
         );
-    }
+        Some(node_snapshot)
+    } else {
+        None
+    };
 
     // Scrape the final node directory name to get the correct path to the node's
     // YAML file for extracting the peer ID, since the actual directory name has
@@ -719,11 +766,20 @@ pub async fn start_node(
             immediate_start,
         },
     );
-    world.register_wallet_block_feed_source(node_name, client.clone())?;
+
+    if let Some(node_snapshot) = restored_node_snapshot
+        && let Some(snapshot_name) = world.snapshot_restore_config.extensions.clone()
+    {
+        restore_wallet_snapshot_if_present(&snapshot_name, &node_snapshot.node, world)
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{step}` error: {e}");
+            })?;
+    }
 
     // All nodes are required to be network ready responsive, and bootstrap nodes
     // must be `Mode::OnLine` for IBD of other peers to succeed
     if !immediate_start {
+        let cluster = world.local_cluster.as_ref().expect("local cluster checked");
         ensure_node_ready(
             cluster,
             &client,
@@ -739,7 +795,11 @@ pub async fn start_node(
         })?;
     }
 
-    if world.blockchain_snapshot_on_startup.is_some() {
+    world
+        .register_wallet_block_feed_source(node_name, client.clone())
+        .await?;
+
+    if world.node_snapshot_on_startup.is_some() {
         match client.consensus_info().await {
             Ok(info) => {
                 info!(
@@ -760,6 +820,38 @@ pub async fn start_node(
         }
     }
 
+    Ok(())
+}
+
+/// Stop a node and leave it down.
+///
+/// Unlike [`restart_node`], which brings it back up and waits for readiness,
+/// this leaves the node down, useful to exercise reconnect behavior while the
+/// node is down.
+pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
+    let cluster = world
+        .local_cluster
+        .as_ref()
+        .ok_or(StepError::LogicalError {
+            message: "No local cluster available".into(),
+        })?;
+    let started_node_name = world
+        .resolve_node_runtime_name(node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+
+    cluster
+        .stop_node(&started_node_name)
+        .await
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+
+    info!(
+        target: TARGET,
+        "Stopped node `{node_name}` (runtime name `{started_node_name}`)"
+    );
     Ok(())
 }
 
@@ -913,7 +1005,7 @@ fn prepare_config_patch(
     if join_external_network {
         config.deployment = deployment_override
             .cloned()
-            .unwrap_or_else(|| DeploymentSettings::from(WellKnownDeployment::Devnet));
+            .unwrap_or_else(DeploymentSettings::default);
     } else if let Some(deployment_override) = deployment_override {
         config.deployment = deployment_override.clone();
     }
@@ -1603,13 +1695,14 @@ pub struct WalletStartInfo {
     pub account_index: usize,
 }
 
-/// Saves the current blockchain state of all nodes into a named snapshot
-/// location for later use.
+/// Saves the current node state of all nodes into a named snapshot location for
+/// later use.
 pub fn create_snapshots_all_nodes(
     world: &CucumberWorld,
     snapshot_name: &str,
 ) -> Result<(), StepError> {
     validate_snapshot_path_component(snapshot_name, "Snapshot name")?;
+    reset_named_snapshot(snapshot_name)?;
 
     let runtime_dir_by_node_name: Vec<(String, PathBuf)> = world
         .nodes_info
@@ -1618,13 +1711,59 @@ pub fn create_snapshots_all_nodes(
         .collect();
 
     for (node_name, node_runtime_dir) in &runtime_dir_by_node_name {
-        save_named_blockchain_snapshot(snapshot_name, node_name, node_runtime_dir)?;
+        save_named_node_state_snapshot(snapshot_name, node_name, node_runtime_dir)?;
         info!(
             target: TARGET,
-            "Saved blockchain snapshot `{snapshot_name}` for node `{node_name}`",
+            "Saved snapshot `{snapshot_name}` for node `{node_name}`",
         );
     }
     Ok(())
+}
+
+pub async fn create_snapshot_all_nodes_with_wallet_state(
+    world: &mut CucumberWorld,
+    snapshot_name: &str,
+) -> StepResult {
+    if world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "cannot create snapshot: no running nodes".to_owned(),
+        });
+    }
+
+    create_snapshots_all_nodes(world, snapshot_name)?;
+    save_wallet_snapshot_from_saved_node_tips(snapshot_name, world).await
+}
+
+pub async fn create_snapshot_node_with_wallet_state(
+    world: &mut CucumberWorld,
+    snapshot_name: &str,
+    node_name: &str,
+) -> StepResult {
+    if world.nodes_info.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "cannot create snapshot: no running nodes".to_owned(),
+        });
+    }
+
+    if let Some(runtime_dir) = world
+        .nodes_info
+        .get(node_name)
+        .map(|info| info.runtime_dir.clone())
+    {
+        reset_named_snapshot(snapshot_name)?;
+        save_named_node_state_snapshot(snapshot_name, node_name, &runtime_dir)?;
+        save_wallet_snapshot_for_saved_nodes(snapshot_name, world, [node_name]).await?;
+        info!(
+            target: TARGET,
+            "Saved snapshot `{snapshot_name}` for node {}",
+            runtime_dir.display()
+        );
+        Ok(())
+    } else {
+        Err(StepError::InvalidArgument {
+            message: format!("Node {node_name} does not exist"),
+        })
+    }
 }
 
 /// Fetches and logs the consensus info of all nodes, for debugging purposes.

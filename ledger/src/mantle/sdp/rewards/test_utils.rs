@@ -1,85 +1,66 @@
-use std::marker::PhantomData;
+use std::{collections::HashMap, sync::Arc};
 
 use lb_core::{
-    mantle::Note,
+    crypto::ZkHash,
     sdp::{
-        Declaration, DeclarationId, Locator, MinStake, ProviderId, ServiceParameters, ServiceType,
-        locked_notes::LockedNotes,
+        Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters,
+        ServiceType,
     },
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
-use rpds::HashTrieMapSync;
 
-use crate::{
-    EpochState, UtxoTree,
-    mantle::sdp::{SdpLedger, Service, ServiceState, rewards::blend},
-};
+use crate::{EpochState, UtxoTree};
 
 pub fn create_epoch_state(
     provider_ids: &[ProviderId],
     service_type: ServiceType,
     epoch: Epoch,
     nonce: Fr,
-    _params: &blend::RewardsParameters,
 ) -> EpochState {
-    let mut declarations = rpds::RedBlackTreeMapSync::new_sync();
-    let mut locked_notes = LockedNotes::new();
-    for (i, provider_id) in provider_ids.iter().enumerate() {
-        let note = Note::new(100, ZkPublicKey::zero());
-        let note_id = Fr::from(i as u64).into();
-        let declaration = Declaration {
-            service_type,
-            provider_id: *provider_id,
-            locked_note_id: note_id,
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
-            zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
-            created: 0.into(),
-            active: 0.into(),
-            withdrawn: None,
-            nonce: 0,
-        };
-        declarations = declarations.insert(DeclarationId([i as u8; 32]), declaration);
-        locked_notes = locked_notes
-            .lock(
-                &MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+    let entries: HashMap<DeclarationId, Declaration> = provider_ids
+        .iter()
+        .enumerate()
+        .map(|(i, provider_id)| {
+            let note_id = Fr::from(i as u64).into();
+            let declaration = Declaration {
                 service_type,
-                note,
-                &note_id,
-            )
-            .unwrap();
-    }
+                provider_id: *provider_id,
+                locked_note_id: note_id,
+                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+                zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
+                created: 0.into(),
+                active: 2.into(),
+                withdraw_at: None,
+                nonce: 0,
+            };
+            (DeclarationId([i as u8; 32]), declaration)
+        })
+        .collect();
 
-    let mut epoch_state = EpochState {
+    let active_declarations: Declarations = HashMap::from([(service_type, entries)]).into();
+
+    EpochState {
         epoch,
         nonce,
         utxos: UtxoTree::default(),
         total_stake: 0,
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
-        sdp: SdpLedger::new(epoch),
-    };
+        active_declarations: Arc::new(active_declarations),
+    }
+}
 
-    let ledger = SdpLedger {
-        services: HashTrieMapSync::new_sync().insert(
-            ServiceType::BlendNetwork,
-            Service::BlendNetwork(ServiceState {
-                declarations,
-                // TODO: enable after making `rewards` module stable
-                // rewards: blend::Rewards::new(params, &epoch_state),
-                _phantom: PhantomData,
-            }),
-        ),
-        locked_notes,
-        epoch,
-    };
-
-    epoch_state.sdp = ledger;
+pub fn new_epoch_state_with_same_snapshot(
+    epoch: u32,
+    nonce: i32,
+    last_epoch_state: &EpochState,
+) -> EpochState {
+    let mut epoch_state = last_epoch_state.clone();
+    epoch_state.epoch = epoch.into();
+    epoch_state.nonce = ZkHash::from(nonce);
     epoch_state
 }
 
@@ -92,8 +73,7 @@ pub fn create_provider_id(byte: u8) -> ProviderId {
 
 pub fn create_service_parameters() -> ServiceParameters {
     ServiceParameters {
-        inactivity_period: 1.into(),
-        retention_period: 1.into(),
+        inactivity_period: 2.try_into().unwrap(),
         epoch: 0.into(),
     }
 }

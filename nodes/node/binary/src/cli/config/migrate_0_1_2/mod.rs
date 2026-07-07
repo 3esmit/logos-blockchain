@@ -83,6 +83,8 @@ impl From<MigrateArgs> for InitArgs {
             sdp: migrate.sdp,
             api: migrate.api,
             state: migrate.state,
+            storage_path: None,
+            overwrite: false,
         }
     }
 }

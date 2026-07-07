@@ -1,16 +1,16 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx, Transaction as _,
         ops::channel::{MsgId, inscribe::Inscription},
-        tx::TxHash,
+        transactions::TxHash,
     },
 };
 use rpds::HashTrieSetSync;
 
-use super::types::{AtomicWithdrawInfo, InscriptionInfo, PendingTx, WithdrawInfo};
+use super::types::{AtomicWithdrawInfo, InscriptionInfo, PendingTx, TxSource, WithdrawInfo};
 
 /// Result of channel update detection — the linear block-level delta
 /// between two canonical chains.
@@ -54,6 +54,9 @@ pub struct TxState {
     pending_by_parent: HashMap<MsgId, Vec<TxHash>>,
     /// Non-inscription pending txs (e.g. `set_keys`).
     pending_other: HashMap<TxHash, SignedMantleTx>,
+    /// Bounded insertion-ordered tx hashes accepted locally by this sequencer
+    /// runtime or restored from its checkpoint.
+    local_txs: VecDeque<TxHash>,
     /// Per-block cumulative safe sets.
     block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
     /// Block parent relationships for pruning.
@@ -75,6 +78,7 @@ impl TxState {
             pending: HashMap::new(),
             pending_by_parent: HashMap::new(),
             pending_other: HashMap::new(),
+            local_txs: VecDeque::new(),
             block_states,
             parent_map: HashMap::new(),
             current_lib: lib,
@@ -122,6 +126,7 @@ impl TxState {
         withdraws: Option<Vec<WithdrawInfo>>,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
+        self.track_local_tx(tx_hash);
         self.pending_by_parent
             .entry(parent_msg)
             .or_default()
@@ -143,7 +148,24 @@ impl TxState {
     /// Submit a non-inscription tx for tracking (e.g. `set_keys`).
     pub fn submit_other(&mut self, signed_tx: SignedMantleTx) {
         let tx_hash = signed_tx.mantle_tx.hash();
+        self.track_local_tx(tx_hash);
         self.pending_other.insert(tx_hash, signed_tx);
+    }
+
+    fn track_local_tx(&mut self, tx_hash: TxHash) {
+        if !self.local_txs.contains(&tx_hash) {
+            self.local_txs.push_back(tx_hash);
+        }
+    }
+
+    pub fn prune_local_tx_tracking(&mut self, max_tracked: usize) {
+        while self.local_txs.len() > max_tracked {
+            self.local_txs.pop_front();
+        }
+    }
+
+    pub fn remove_local_tx(&mut self, tx_hash: &TxHash) {
+        self.local_txs.retain(|tracked| tracked != tx_hash);
     }
 
     /// Process a new block. Finalization is handled by backfill ground
@@ -326,18 +348,18 @@ impl TxState {
             return Vec::new();
         }
         let channel_tip = self.channel_tip_at(tip);
-        let on_branch: std::collections::HashSet<TxHash> = self
+        let on_branch: HashSet<TxHash> = self
             .collect_pending_suffix(channel_tip)
             .iter()
             .map(|i| i.tx_hash)
             .collect();
-        let safe: std::collections::HashSet<TxHash> = self
+        let safe: HashSet<TxHash> = self
             .block_states
             .get(&tip)
             .map(|s| s.iter().copied().collect())
             .unwrap_or_default();
 
-        let eligible: std::collections::HashSet<TxHash> = self
+        let eligible: HashSet<TxHash> = self
             .pending
             .keys()
             .filter(|h| !on_branch.contains(h) && !safe.contains(h))
@@ -350,7 +372,7 @@ impl TxState {
         // Find root parents: parent_msg values for eligible entries whose
         // parent is NOT the `this_msg` of another eligible entry. Sort for
         // determinism across HashMap iteration order.
-        let eligible_this_msgs: std::collections::HashSet<MsgId> = eligible
+        let eligible_this_msgs: HashSet<MsgId> = eligible
             .iter()
             .filter_map(|h| self.pending.get(h).map(|p| p.this_msg))
             .collect();
@@ -371,7 +393,7 @@ impl TxState {
         // BFS from each root parent via pending_by_parent; collect only
         // eligible entries in parent-first order.
         let mut ordered = Vec::with_capacity(eligible.len());
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         for root in root_parents {
             for info in self.collect_pending_suffix(root) {
                 if eligible.contains(&info.tx_hash) && seen.insert(info.tx_hash) {
@@ -418,6 +440,15 @@ impl TxState {
     #[must_use]
     pub fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
         self.pending.get(tx_hash)
+    }
+
+    #[must_use]
+    pub fn tx_source(&self, tx_hash: &TxHash) -> TxSource {
+        if self.local_txs.contains(tx_hash) {
+            TxSource::Local
+        } else {
+            TxSource::Other
+        }
     }
 
     /// Mark a pending inscription as posted. Returns true only for the first
@@ -475,8 +506,8 @@ impl TxState {
     #[must_use]
     pub fn publish_parent(&self, tip: HeaderId) -> MsgId {
         let channel_tip = self.channel_tip_at(tip);
-        self.pending_publish_tail(channel_tip)
-            .unwrap_or(channel_tip)
+        let tail = self.pending_publish_tail(channel_tip);
+        tail.unwrap_or(channel_tip)
     }
 
     /// Walk local pending lineage from `from_msg` to find the tail,
@@ -528,43 +559,36 @@ impl TxState {
 
     /// Detect a channel update between old and new L1 tips.
     ///
-    /// Returns the linear block-level delta between the two canonical chains:
-    /// - `orphaned`: inscriptions on blocks of the old canonical chain that are
-    ///   not on blocks of the new canonical chain (revert from state).
-    /// - `adopted`: inscriptions on blocks of the new canonical chain that are
-    ///   not on blocks of the old canonical chain (apply to state).
+    /// Diffs the two channel *lineages*. `old_lineage` must be captured by the
+    /// caller via [`Self::channel_lineage`] **before** this event's block is
+    /// inserted, so the "before" side isn't contaminated by the just-added
+    /// block; `new_lineage` is computed here, after the insert.
+    /// - `adopted`: inscriptions that entered the channel branch (first mined).
+    /// - `orphaned`: inscriptions that left it (replaced by a conflict). A bare
+    ///   un-mine is a no-op — the link stays in the lineage via its held block.
     ///
     /// Returns `None` if no channel state change.
     #[must_use]
     pub fn detect_channel_update(
         &self,
-        old_tip: HeaderId,
+        old_lineage: Vec<InscriptionInfo>,
         new_tip: HeaderId,
     ) -> Option<ChannelUpdateInfo> {
-        let old_channel_tip = self.channel_tip_at(old_tip);
         let new_channel_tip = self.channel_tip_at(new_tip);
+        let new_lineage = self.channel_lineage(new_tip);
 
-        if old_channel_tip == new_channel_tip {
-            return None;
-        }
+        let old_ids: HashSet<MsgId> = old_lineage.iter().map(|i| i.this_msg).collect();
+        let new_ids: HashSet<MsgId> = new_lineage.iter().map(|i| i.this_msg).collect();
 
-        let new_branch = self.collect_inscriptions_on_branch(new_tip);
-        let old_branch = self.collect_inscriptions_on_branch(old_tip);
-
-        let new_chain: std::collections::HashSet<MsgId> =
-            new_branch.iter().map(|i| i.this_msg).collect();
-        let old_chain: std::collections::HashSet<MsgId> =
-            old_branch.iter().map(|i| i.this_msg).collect();
-
-        let adopted: Vec<InscriptionInfo> = new_branch
+        let adopted: Vec<InscriptionInfo> = new_lineage
             .iter()
-            .filter(|i| !old_chain.contains(&i.this_msg))
+            .filter(|i| !old_ids.contains(&i.this_msg))
             .cloned()
             .collect();
 
-        let orphaned: Vec<InscriptionInfo> = old_branch
+        let orphaned: Vec<InscriptionInfo> = old_lineage
             .into_iter()
-            .filter(|i| !new_chain.contains(&i.this_msg))
+            .filter(|i| !new_ids.contains(&i.this_msg))
             .collect();
 
         if orphaned.is_empty() && adopted.is_empty() {
@@ -578,13 +602,55 @@ impl TxState {
         })
     }
 
+    /// The channel's inscription chain at an L1 tip: the mined inscriptions,
+    /// extended forward through on-chain links we still hold whose position
+    /// hasn't been taken by a competing inscription.
+    ///
+    /// Capture this at the *old* tip before inserting a new block; computing it
+    /// afterwards would let the just-added block bridge into the "before" view.
+    #[must_use]
+    pub(crate) fn channel_lineage(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
+        let mut lineage = self.collect_inscriptions_on_branch(tip);
+        let mut ids: HashSet<MsgId> = lineage.iter().map(|i| i.this_msg).collect();
+
+        // Index every inscription we hold to form the channel lineage.
+        let mut by_msg: HashMap<MsgId, InscriptionInfo> = HashMap::new();
+        let mut children: HashMap<MsgId, HashSet<MsgId>> = HashMap::new();
+        for inscriptions in self.block_inscriptions.values() {
+            for info in inscriptions {
+                children
+                    .entry(info.parent_msg)
+                    .or_default()
+                    .insert(info.this_msg);
+                by_msg.entry(info.this_msg).or_insert_with(|| info.clone());
+            }
+        }
+
+        // Walk forward from the mined tip, extending only where a single
+        // un-replaced inscription chains off the current link; a contested
+        // position (two competing children) ends the walk.
+        let mut current = self.channel_tip_at(tip);
+        while let Some(kids) = children.get(&current) {
+            let mut candidates = kids.iter().filter(|id| !ids.contains(*id));
+            let (Some(&next), None) = (candidates.next(), candidates.next()) else {
+                break;
+            };
+            if let Some(info) = by_msg.get(&next) {
+                lineage.push(info.clone());
+            }
+            ids.insert(next);
+            current = next;
+        }
+        lineage
+    }
+
     /// Collect ALL pending inscriptions reachable from `from_msg`.
     /// Uses the `pending_by_parent` index. Handles branching (multiple
     /// children per parent) by collecting all branches.
     /// Returns inscriptions in BFS order (parents before children).
     pub(crate) fn collect_pending_suffix(&self, from_msg: MsgId) -> Vec<InscriptionInfo> {
         let mut suffix = Vec::new();
-        let mut queue = std::collections::VecDeque::new();
+        let mut queue = VecDeque::new();
         queue.push_back(from_msg);
 
         while let Some(current) = queue.pop_front() {
@@ -889,6 +955,10 @@ mod tests {
 
         state.process_block(block1, genesis, genesis, vec![], vec![]);
 
+        // Capture the old lineage before inserting block2, mirroring the real
+        // caller; computing it after would let c1 bridge into the "before" view.
+        let old_lineage = state.channel_lineage(block1);
+
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
@@ -899,7 +969,7 @@ mod tests {
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
         let update = state
-            .detect_channel_update(block1, block2)
+            .detect_channel_update(old_lineage, block2)
             .expect("should detect channel update");
 
         assert!(update.orphaned.is_empty(), "extension never orphans");
@@ -926,6 +996,10 @@ mod tests {
 
         state.process_block(block1, genesis, genesis, vec![], vec![]);
 
+        // Capture the old lineage before inserting block2, mirroring the real
+        // caller; computing it after would let c1 bridge into the "before" view.
+        let old_lineage = state.channel_lineage(block1);
+
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
@@ -935,7 +1009,7 @@ mod tests {
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
-        let update = state.detect_channel_update(block1, block2).unwrap();
+        let update = state.detect_channel_update(old_lineage, block2).unwrap();
         assert!(update.orphaned.is_empty());
         assert_eq!(update.adopted.len(), 1);
         assert_eq!(update.adopted[0].this_msg, c1_msg);

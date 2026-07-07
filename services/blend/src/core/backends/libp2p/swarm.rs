@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{StreamExt as _, stream::FuturesUnordered};
+use futures::{Stream, StreamExt as _, future::OptionFuture, stream::FuturesUnordered};
 use lb_blend::{
     message::encap::validated::{
         EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
@@ -30,7 +30,10 @@ use lb_chain_service::Epoch;
 use lb_libp2p::{DialOpts, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
 use rand::RngCore;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::{
+    sync::{broadcast, mpsc, oneshot},
+    time::sleep,
+};
 
 use crate::{
     core::{
@@ -46,6 +49,13 @@ use crate::{
     message::{CoreInfo, NetworkInfo},
     metrics,
 };
+
+/// Cooldown before re-dialing the entire membership after every eligible peer
+/// has been tried and failed in a single cycle. Without it, a node that cannot
+/// reach any peer — e.g. one locked out after an epoch transition because all
+/// peers are already at their maximum peering degree — would re-dial the whole
+/// (rejecting) membership at event-loop speed, wasting CPU and flooding logs.
+const FULL_MEMBERSHIP_RETRY_DELAY: Duration = Duration::from_mins(1);
 
 #[derive(Debug)]
 pub enum BlendSwarmMessage {
@@ -90,6 +100,7 @@ impl DialAttempt {
 }
 
 type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
+type FullMembershipRetry = Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
 pub struct BlendSwarm<Rng, ObservationWindowProvider>
 where
@@ -104,7 +115,11 @@ where
     max_dial_attempts_per_connection: NonZeroU64,
     ongoing_dials: HashMap<PeerId, DialAttempt>,
     pending_retries: PendingRetries,
+    pending_full_membership_retry: FullMembershipRetry,
     minimum_network_size: NonZeroUsize,
+    /// Periodic timer that re-runs peering-degree maintenance to keep the
+    /// number of healthy peers at or above the minimum.
+    peering_degree_check_clock: Pin<Box<dyn Stream<Item = ()> + Send>>,
 }
 
 pub struct SwarmParams<'config, Rng> {
@@ -169,10 +184,12 @@ where
                 *config.backend.core_peering_degree.start() as usize
             ),
             pending_retries: FuturesUnordered::new(),
+            pending_full_membership_retry: None,
             minimum_network_size,
+            peering_degree_check_clock: config.peering_degree_check_clock(),
         };
 
-        self_instance.check_and_dial_new_peers_except(HashSet::new());
+        self_instance.check_and_dial_new_peers();
 
         self_instance
     }
@@ -188,17 +205,17 @@ where
     /// excluding the peers with a negotiated connection in the ongoing epoch,
     /// the peers that we are already trying to dial, the blocked peers, and
     /// any extra peers specified in `except`.
-    fn dial_random_peers_except(&mut self, amount: usize, mut except: HashSet<PeerId>) {
+    fn dial_random_peers_except(&mut self, amount: usize, except: &HashSet<PeerId>) {
+        // Nothing to do when the peering degree is already satisfied.
+        if amount == 0 {
+            return;
+        }
+
         let negotiated_peers = self.behaviour().blend.with_core().negotiated_peers().keys();
 
-        // We need to clone else we would not be able to call `self.dial` inside which
+        // We need to clone else we would not be able to call `self.dial` below, which
         // requires access to `&mut self`.
         let current_membership = self.current_epoch_info.0.clone();
-        // Membership contains local node, so we need to exclude that from the count.
-        if except.len() == current_membership.size() - 1 {
-            tracing::debug!(target: LOG_TARGET, "All eligible peers have been tried. Clearing failed peers memory and retrying from scratch.");
-            except.clear();
-        }
 
         let exclude_peers: HashSet<PeerId> = negotiated_peers
             .chain(self.swarm.behaviour().blocked_peers.blocked_peers())
@@ -209,18 +226,59 @@ where
 
         tracing::trace!(target: LOG_TARGET, amount, ?except, ?exclude_peers, "Dialing random peers");
 
-        current_membership
+        let mut peers_to_dial = current_membership
             .filter_and_choose_remote_nodes(&mut self.rng, amount, &exclude_peers)
-            .for_each(|peer| {
-                let peer_address = peer.address.clone();
-                let peer_id = peer.id;
-                self.dial(peer_id, peer_address, except.clone());
-            });
+            .map(|peer| (peer.id, peer.address.clone()))
+            .peekable();
+
+        let no_more_peers_to_dial = peers_to_dial.peek().is_none();
+
+        // When no membership peer is eligible to be dialed but we still have peers
+        // we gave up on earlier in this dial cycle (`except`), we want to clear
+        // that memory and retry the whole membership from scratch. Rather than
+        // doing so immediately — which spins at event-loop speed when every peer
+        // keeps rejecting us (e.g. a node locked out after an epoch transition
+        // because all peers are already at their maximum peering degree) — we
+        // schedule a single delayed retry. When `except` is empty there is
+        // genuinely nobody left to dial (everyone is already negotiated,
+        // in-flight, or blocked), so we stop.
+        if no_more_peers_to_dial && !except.is_empty() {
+            self.schedule_full_membership_retry();
+            return;
+        }
+
+        for (peer_id, peer_address) in peers_to_dial {
+            self.dial(peer_id, peer_address, except.clone());
+        }
+    }
+
+    /// Schedule a delayed re-dial of the entire membership, used when every
+    /// eligible peer has already been tried and failed in the current cycle.
+    /// Only one retry is kept pending at a time; when it fires, the peering
+    /// degree is re-checked and dialing starts over from scratch (with an empty
+    /// failed-peers set).
+    fn schedule_full_membership_retry(&mut self) {
+        if self.pending_full_membership_retry.is_some() {
+            // A retry is already pending; don't stack another.
+            return;
+        }
+        tracing::debug!(
+            target: LOG_TARGET,
+            "All eligible peers have been tried this cycle. Scheduling a retry from scratch in {} seconds.",
+            FULL_MEMBERSHIP_RETRY_DELAY.as_secs()
+        );
+        self.pending_full_membership_retry = Some(Box::pin(async {
+            sleep(FULL_MEMBERSHIP_RETRY_DELAY).await;
+        }));
+    }
+
+    fn check_and_dial_new_peers(&mut self) {
+        self.check_and_dial_new_peers_except(&HashSet::new());
     }
 
     /// Dial new peers, if necessary, to maintain the peering degree.
     /// We aim to have at least the peering degree number of "healthy" peers.
-    fn check_and_dial_new_peers_except(&mut self, except: HashSet<PeerId>) {
+    fn check_and_dial_new_peers_except(&mut self, except: &HashSet<PeerId>) {
         tracing::trace!(target: LOG_TARGET, ?except, "Checking if we need to dial new peers");
 
         let membership_size = self.current_epoch_info.0.size();
@@ -244,7 +302,7 @@ where
         if peer_state.is_spammy() {
             self.swarm.behaviour_mut().blocked_peers.block_peer(peer_id);
         }
-        self.check_and_dial_new_peers_except(HashSet::from([peer_id]));
+        self.check_and_dial_new_peers_except(&HashSet::from([peer_id]));
     }
 
     fn collect_network_info(&self) -> NetworkInfo<PeerId> {
@@ -269,7 +327,7 @@ where
 
     fn handle_unhealthy_peer(&mut self, peer_id: PeerId) {
         tracing::trace!(target: LOG_TARGET, "Peer {peer_id} is unhealthy");
-        self.check_and_dial_new_peers_except(HashSet::from([peer_id]));
+        self.check_and_dial_new_peers_except(&HashSet::from([peer_id]));
     }
 
     #[expect(
@@ -308,12 +366,12 @@ where
                             failed_peers.insert(peer);
                             failed_peers
                         };
-                        self.check_and_dial_new_peers_except(failed_peers);
+                        self.check_and_dial_new_peers_except(&failed_peers);
                     }
                     upgrade_error @ (ConnectionUpgradeFailureReason::DuplicateConnection | ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached | ConnectionUpgradeFailureReason::ReverseDirectionPreferred) => {
                         tracing::trace!(target: LOG_TARGET, "Outbound connection upgrade somewhat expectedly failed for {peer:?}. Reason: {upgrade_error:?}. Trying with a different peer if necessary.");
                         self.ongoing_dials.remove(&peer);
-                        self.check_and_dial_new_peers_except(HashSet::from([peer]));
+                        self.check_and_dial_new_peers_except(&HashSet::from([peer]));
                     }
                 }
             }
@@ -344,9 +402,15 @@ where
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. }
             | SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                let negotiated_count = self
+                    .swarm
+                    .behaviour()
+                    .blend
+                    .with_core()
+                    .num_negotiated_peers();
                 let connected_count = self.swarm.connected_peers().count();
-                tracing::trace!(target: LOG_TARGET, "New connection or disconnection with peer {peer_id:?}. Number of currently connected peers: {connected_count}.");
-                metrics::peers_connected(connected_count);
+                tracing::trace!(target: LOG_TARGET, "New connection or disconnection with peer {peer_id:?}. Number of core peers currently negotiated: {negotiated_count}. Number of peers currently connected: {connected_count}.");
+                metrics::core_peers_negotiated(negotiated_count);
             }
             SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithCore(
                 e,
@@ -373,7 +437,7 @@ where
                 // We don't retry if `peer_id` is `None` or if we've achieved the maximum number
                 // of retries for this peer.
                 let Some(peer_id) = peer_id else {
-                    self.check_and_dial_new_peers_except(HashSet::new());
+                    self.check_and_dial_new_peers();
                     return;
                 };
 
@@ -387,7 +451,7 @@ where
                             failed_peers.insert(peer_id);
                             failed_peers
                         };
-                        self.check_and_dial_new_peers_except(failed_peers);
+                        self.check_and_dial_new_peers_except(&failed_peers);
                     }
                     // Retry in progress.
                     EpochDialAttempt::OngoingEpoch(None) => {}
@@ -412,7 +476,8 @@ where
                     .start_new_epoch(self.current_epoch_info.clone());
                 self.ongoing_dials.clear();
                 self.pending_retries.clear();
-                self.check_and_dial_new_peers_except(HashSet::new());
+                self.pending_full_membership_retry = None;
+                self.check_and_dial_new_peers();
             }
             BlendSwarmMessage::CompleteEpochTransition => {
                 self.swarm.behaviour_mut().blend.finish_epoch_transition();
@@ -453,6 +518,17 @@ where
             }
             Some((peer_id, dial_attempt)) = self.pending_retries.next() => {
                 self.execute_retry(peer_id, dial_attempt);
+                false
+            }
+            Some(()) = self.peering_degree_check_clock.next() => {
+                tracing::trace!(target: LOG_TARGET, "Periodic peering-degree maintenance: re-checking healthy peer count.");
+                self.check_and_dial_new_peers();
+                false
+            }
+            Some(()) = OptionFuture::from(self.pending_full_membership_retry.as_mut()) => {
+                self.pending_full_membership_retry = None;
+                tracing::debug!(target: LOG_TARGET, "Cooldown elapsed: retrying to dial the full membership from scratch.");
+                self.check_and_dial_new_peers();
                 false
             }
         }
@@ -526,6 +602,11 @@ where
     }
 
     #[cfg(test)]
+    pub const fn has_pending_full_membership_retry(&self) -> bool {
+        self.pending_full_membership_retry.is_some()
+    }
+
+    #[cfg(test)]
     pub fn failed_peers_for(&self, peer_id: &PeerId) -> Option<&HashSet<PeerId>> {
         self.ongoing_dials
             .get(peer_id)
@@ -572,7 +653,7 @@ where
             delay.as_secs()
         );
         self.pending_retries.push(Box::pin(async move {
-            tokio::time::sleep(delay).await;
+            sleep(delay).await;
             (
                 peer_id,
                 DialAttempt {
@@ -741,7 +822,7 @@ where
 {
     #[cfg(test)]
     #[expect(clippy::too_many_arguments, reason = "necessary for testing")]
-    pub fn new_test<BehaviourConstructor>(
+    pub fn new_test<BehaviourConstructor, PeeringDegreeCheckClock>(
         identity: &libp2p::identity::Keypair,
         behaviour_constructor: BehaviourConstructor,
         swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
@@ -753,10 +834,12 @@ where
         rng: Rng,
         max_dial_attempts_per_connection: NonZeroU64,
         minimum_network_size: NonZeroUsize,
+        peering_degree_check_clock: PeeringDegreeCheckClock,
     ) -> Self
     where
         BehaviourConstructor:
             FnOnce(PeerId, Membership<PeerId>) -> BlendBehaviour<ObservationWindowProvider>,
+        PeeringDegreeCheckClock: Stream<Item = ()> + Send + 'static,
     {
         use crate::test_utils::memory_test_swarm;
 
@@ -767,6 +850,7 @@ where
             max_dial_attempts_per_connection,
             ongoing_dials: HashMap::new(),
             pending_retries: FuturesUnordered::new(),
+            pending_full_membership_retry: None,
             rng,
             swarm: memory_test_swarm(
                 identity,
@@ -776,6 +860,7 @@ where
             ),
             swarm_messages_receiver,
             minimum_network_size,
+            peering_degree_check_clock: Box::pin(peering_degree_check_clock),
         }
     }
 }

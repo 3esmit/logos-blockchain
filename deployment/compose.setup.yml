@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+
+  cfgsync:
+    container_name: cfgsync
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
+    volumes:
+      - node-data:/node-data
+      - ../nodes/node/binary/src/config/deployment/settings.yaml:/deployment.yaml
+      - .:/etc/logos-blockchain
+    ports:
+      - "4400:4400/tcp"
+    entrypoint: /etc/logos-blockchain/scripts/cleanup_node_data.sh
+
+  nginx:
+    container_name: nginx
+    image: docker.io/library/nginx:stable-trixie-perl
+    ports:
+      - "13000:13000"
+      - "13001:13001"
+    depends_on:
+      - cfgsync
+    environment:
+      - ENV_TITLE_STRING=${ENV_TITLE_STRING}
+    volumes:
+      - node-data:/node-data
+      - ./nginx/setup.conf:/etc/nginx/nginx.conf
+      - ./nginx/static/setup:/usr/share/nginx/html_template
+      - ./scripts/setup_nginx.sh:/etc/setup_nginx.sh
+    entrypoint: /etc/setup_nginx.sh
+
+volumes:
+  node-data:
+    name: logos-node-data

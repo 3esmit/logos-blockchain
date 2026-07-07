@@ -634,8 +634,12 @@ fn build_cryptarchia_user_config(
         network: NetworkConfig {
             bootstrap: network::BootstrapConfig {
                 ibd: network::IbdConfig {
-                    delay_before_new_download: Duration::from_secs(10),
                     peers: HashSet::new(),
+                    delay_before_new_download: Duration::from_secs(10),
+                    tips_fetch_max_attempts: 3,
+                    tips_fetch_min_delay: Duration::from_millis(250),
+                    tips_fetch_max_delay: Duration::from_secs(1),
+                    round_delay: Duration::from_secs(1),
                 },
             },
             network: network::NetworkConfig {
@@ -646,7 +650,9 @@ fn build_cryptarchia_user_config(
                 orphan: network::OrphanConfig {
                     max_orphan_cache_size: NonZeroUsize::new(1000)
                         .expect("max orphan cache size must be non-zero"),
+                    max_rejected_cache_size: 1000,
                 },
+                tip_poll: network::TipPollConfig::default(),
             },
         },
         service: ServiceConfig {
@@ -657,6 +663,12 @@ fn build_cryptarchia_user_config(
                     state_recording_interval: Duration::from_mins(1),
                 },
                 prolonged_bootstrap_period: consensus.prolonged_bootstrap_period,
+            },
+            sync: service::SyncConfig {
+                block_provider: service::BlockProviderConfig {
+                    batch_size: NonZeroUsize::new(1000)
+                        .expect("block_provider batch_size must be non-zero"),
+                },
             },
         },
         leader: LeaderConfig {

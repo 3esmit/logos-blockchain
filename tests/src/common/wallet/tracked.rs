@@ -1,10 +1,14 @@
 use std::collections::{BTreeMap, HashMap};
 
 use lb_core::mantle::{NoteId, TxHash, Utxo};
+use serde::{Deserialize, Serialize};
 
 use super::{
-    TrackedWallet, WalletId, WalletReservedInputs, WalletStateView,
-    chain::{state::TrackedWalletKeys, state_cache::WalletChainStateCache},
+    TrackedWallet, TrackedWalletState, WalletId, WalletReservedInputs, WalletStateView,
+    chain::{
+        state::{TrackedWalletKeys, WalletUtxos},
+        state_cache::WalletChainStateCache,
+    },
 };
 
 /// Collection of wallets tracked from a chain view.
@@ -15,7 +19,7 @@ use super::{
 #[derive(Debug, Default)]
 pub struct TrackedWallets {
     wallets: HashMap<WalletId, TrackedWallet>,
-    chain_state_cache: WalletChainStateCache<WalletId>,
+    chain_state_cache: WalletChainStateCache,
     submitted_tx_hashes: HashMap<WalletId, Vec<TxHash>>,
 }
 
@@ -113,6 +117,55 @@ impl TrackedWallets {
         }
     }
 
+    /// Export tracked wallet state for persistence by higher-level test code.
+    ///
+    /// The exported state intentionally omits transient chain sync caches;
+    /// those are rebuilt from subsequent block observations after restore.
+    #[must_use]
+    pub fn to_state(&self) -> TrackedWalletsState {
+        TrackedWalletsState {
+            wallets: self
+                .wallets
+                .iter()
+                .map(|(wallet_id, wallet)| (wallet_id.clone(), wallet.to_state()))
+                .collect(),
+            submitted_tx_hashes: self.submitted_tx_hashes.clone(),
+        }
+    }
+
+    /// Replace tracked wallet state from a previously exported state value.
+    ///
+    /// Chain sync caches are cleared because they are runtime-derived, while
+    /// wallet UTXOs, reservations, fees, and submitted transaction hashes are
+    /// restored from `state`.
+    pub fn replace_from_state(&mut self, state: TrackedWalletsState) {
+        self.wallets = state
+            .wallets
+            .into_iter()
+            .map(|(wallet_id, wallet)| (wallet_id, TrackedWallet::from_state(wallet)))
+            .collect();
+        self.submitted_tx_hashes = state.submitted_tx_hashes;
+        self.chain_state_cache = WalletChainStateCache::default();
+    }
+
+    /// Export wallet state observed from `node_name` at `header_id`.
+    #[must_use]
+    pub fn export_state_for_node_at_header(
+        &self,
+        node_name: &str,
+        header_id: &str,
+    ) -> Option<(String, u64, TrackedWalletsState)> {
+        self.chain_state_cache
+            .wallet_utxos_for_node_at_header(node_name, header_id)
+            .map(|(header_id, height, wallet_utxos)| {
+                (
+                    header_id,
+                    height,
+                    TrackedWalletsState::from_wallet_utxos(wallet_utxos),
+                )
+            })
+    }
+
     pub(crate) fn ensure_wallets_from_tracked_keys(
         &mut self,
         tracked_wallets: &[TrackedWalletKeys],
@@ -143,6 +196,18 @@ impl TrackedWallets {
         }
     }
 
+    pub(crate) fn replace_current_wallets_utxos(
+        &mut self,
+        wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<Utxo>)>,
+    ) {
+        for (wallet_id, utxos) in wallet_utxos {
+            self.ensure_wallet(wallet_id.clone());
+            if let Some(wallet) = self.wallet_mut(wallet_id.as_str()) {
+                wallet.replace_on_chain_utxos(utxos);
+            }
+        }
+    }
+
     pub(crate) fn record_header_height(&mut self, node_name: &str, header_id: &str, height: u64) {
         self.chain_state_cache
             .record_header_height(node_name, header_id, height);
@@ -155,7 +220,7 @@ impl TrackedWallets {
     }
 
     #[must_use]
-    pub(crate) fn observe_wallets(
+    pub(crate) fn current_wallet_states(
         &self,
         tracked_wallets: impl IntoIterator<Item = TrackedWalletKeys>,
     ) -> BTreeMap<WalletId, WalletStateView> {
@@ -163,7 +228,7 @@ impl TrackedWallets {
 
         for tracked_wallet in tracked_wallets {
             let wallet_id = tracked_wallet.wallet_id();
-            let observation = self.observe_wallet(wallet_id);
+            let observation = self.current_wallet_state(wallet_id);
 
             observations.insert(wallet_id.clone(), observation);
         }
@@ -183,7 +248,7 @@ impl TrackedWallets {
         self.wallets.get_mut(wallet_id)
     }
 
-    fn observe_wallet(&self, wallet_id: &WalletId) -> WalletStateView {
+    fn current_wallet_state(&self, wallet_id: &WalletId) -> WalletStateView {
         self.wallet(wallet_id.as_str()).map_or_else(
             || WalletStateView::new(wallet_id.clone(), Vec::new(), Vec::new()),
             |wallet| wallet.state_view(wallet_id.clone()),
@@ -270,6 +335,51 @@ pub struct WalletDiagnostics {
     pub pending_states: Vec<WalletPendingStateDiagnostics>,
     pub utxo_snapshots: Vec<WalletUtxoSnapshotDiagnostics>,
     pub header_heights: Vec<(String, Vec<u64>)>,
+}
+
+/// Serializable state for all tracked wallets.
+///
+/// This is the wallet module's export/import shape. Snapshot-specific code may
+/// store it, but the type itself is not tied to any snapshot store.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TrackedWalletsState {
+    wallets: HashMap<WalletId, TrackedWalletState>,
+    submitted_tx_hashes: HashMap<WalletId, Vec<TxHash>>,
+}
+
+impl TrackedWalletsState {
+    #[must_use]
+    pub fn from_wallet_utxos(wallet_utxos: WalletUtxos) -> Self {
+        Self {
+            wallets: wallet_utxos
+                .into_iter()
+                .map(|(wallet_id, utxos)| {
+                    let mut wallet = TrackedWallet::new();
+                    wallet.replace_on_chain_utxos(utxos);
+                    (wallet_id, wallet.to_state())
+                })
+                .collect(),
+            submitted_tx_hashes: HashMap::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn to_wallet_utxos(&self) -> WalletUtxos {
+        self.wallets
+            .iter()
+            .map(|(wallet_id, wallet)| {
+                (
+                    wallet_id.clone(),
+                    TrackedWallet::from_state(wallet.clone()).on_chain_utxos(),
+                )
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.wallets.is_empty() && self.submitted_tx_hashes.is_empty()
+    }
 }
 
 pub struct WalletPendingStateDiagnostics {

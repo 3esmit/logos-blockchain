@@ -41,11 +41,11 @@ pub fn run(args: InitArgs) -> Result<()> {
             .join("keystore.yaml")
     });
 
-    if user_config_path.exists() {
+    if user_config_path.exists() && !args.overwrite {
         return Err(InitError::UserFileExists.into());
     }
 
-    if keystore_path.exists() {
+    if keystore_path.exists() && !args.overwrite {
         return Err(InitError::KeystoreFileExists.into());
     }
 
@@ -71,12 +71,16 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
         sdp: sdp_args,
         api: api_args,
         state: state_args,
+        storage_path: storage_args,
         ..
     } = args;
 
     let time_config = TimeConfig::default();
 
-    let storage_config = StorageConfig::default();
+    let mut storage_config = StorageConfig::default();
+    if let Some(storage_path) = storage_args {
+        storage_config.backend.folder_name = storage_path.to_string_lossy().into_owned();
+    }
 
     let mut state_config = StateConfig::default();
     update_state(&mut state_config, state_args);

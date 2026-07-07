@@ -17,6 +17,7 @@ use tokio::{
     task::JoinHandle,
     time::{error::Elapsed, timeout},
 };
+use tracing::warn;
 
 use super::{
     errors::{log_step_error, zone_step_error},
@@ -27,7 +28,7 @@ use super::{
         ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included, keygen,
         publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
         sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
-        start_republish_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
+        start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
         submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
@@ -49,7 +50,7 @@ use crate::{
                 },
             },
         },
-        wallet::sync::sync_available_utxos_for_wallet,
+        wallet::sync::current_available_utxos_for_wallet,
         world::{CucumberWorld, WalletInfo},
     },
 };
@@ -65,7 +66,9 @@ pub(super) enum DriveMode {
     Passive {
         republish_orphans: bool,
     },
-    Republish,
+    RepublishLineage {
+        planned: Vec<Inscription>,
+    },
     Sorted {
         discarded: DiscardedPayloads,
     },
@@ -97,12 +100,13 @@ struct PublishedZoneMessage {
 
 struct StartedSequencerRuntime {
     task: JoinHandle<()>,
-    client: SequencerClient<ZoneNodeHttpClient>,
+    client: SequencerClient,
     events: broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
+    tx_status_rx: broadcast::Receiver<lb_zone_sdk::sequencer::TxStatusUpdate>,
     discarded_payloads: Option<DiscardedPayloads>,
 }
 
@@ -129,7 +133,7 @@ pub(super) async fn start_nodes_with_zone_resources(
 
     let nodes = collect_zone_nodes_to_start(&rows);
     let nodes = start_nodes_order_respecting_dependencies(nodes).inspect_err(|error| {
-        tracing::warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+        warn!(target: TARGET, "Step `{}` error: {error}", step.value);
     })?;
 
     for (node_name, wallet_start_info, mut initial_peers) in nodes {
@@ -398,7 +402,7 @@ pub(super) async fn submit_zone_deposit_transaction(
     let public_key = log_step_error(step, wallet.public_key())?;
     let available_utxos = log_step_error(
         step,
-        sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
     )?;
     let ZoneDeposit {
         deposit,
@@ -438,7 +442,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     let public_key = log_step_error(step, wallet.public_key())?;
     let available_utxos = log_step_error(
         step,
-        sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
     )?;
     let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Mint {amount} to Alice"));
@@ -786,6 +790,7 @@ async fn start_named_sequencer_with_config(
         runtime.ready_rx,
         runtime.channel_view_rx,
         runtime.turn_to_write_rx,
+        runtime.tx_status_rx,
         runtime.discarded_payloads,
     );
 
@@ -852,6 +857,7 @@ fn from_policy_runtime(
         ready_rx: rt.ready_rx,
         channel_view_rx: rt.channel_view_rx,
         turn_to_write_rx: rt.turn_to_write_rx,
+        tx_status_rx: rt.tx_status_rx,
         discarded_payloads,
     }
 }
@@ -865,7 +871,9 @@ fn start_sequencer_runtime(
             start_sequencer_event_loop(sequencer, republish_orphans),
             None,
         ),
-        DriveMode::Republish => from_policy_runtime(start_republish_policy(sequencer), None),
+        DriveMode::RepublishLineage { planned } => {
+            from_policy_runtime(start_republish_lineage_policy(sequencer, planned), None)
+        }
         DriveMode::Sorted { discarded } => from_policy_runtime(
             start_sorted_conflict_policy(sequencer, &discarded),
             Some(discarded),

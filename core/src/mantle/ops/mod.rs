@@ -5,6 +5,7 @@ pub mod transfer;
 
 pub(crate) mod internal;
 
+pub(crate) mod codec;
 mod serde_;
 
 use std::sync::LazyLock;
@@ -15,8 +16,7 @@ use channel::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use nom::{
-    IResult, Parser as _,
-    combinator::map,
+    IResult,
     error::{Error, ErrorKind},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -31,11 +31,6 @@ use super::{
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        encoding::{
-            decode_leader_claim, decode_sdp_active, decode_sdp_declare, decode_sdp_withdraw,
-            decode_transfer, encode_leader_claim, encode_sdp_active, encode_sdp_declare,
-            encode_sdp_withdraw, encode_transfer_op,
-        },
         nom::{NomDecode, NomEncode},
         ops::{
             internal::{OpDe, OpSer},
@@ -146,48 +141,61 @@ impl NomEncode for Op {
             Self::ChannelWithdraw(op) => {
                 bytes.extend(op.encode());
             }
-            // TODO: Use `.encode()` once implemented for all other ops
             Self::SDPDeclare(op) => {
-                bytes.extend(encode_sdp_declare(op));
+                bytes.extend(op.encode());
             }
             Self::SDPWithdraw(op) => {
-                bytes.extend(encode_sdp_withdraw(op));
+                bytes.extend(op.encode());
             }
             Self::SDPActive(op) => {
-                bytes.extend(encode_sdp_active(op));
+                bytes.extend(op.encode());
             }
             Self::LeaderClaim(op) => {
-                bytes.extend(encode_leader_claim(op));
+                bytes.extend(op.encode());
             }
-            Self::Transfer(op) => {
-                bytes.extend(encode_transfer_op(op));
-            }
+            Self::Transfer(op) => bytes.extend(op.encode()),
         }
         bytes
     }
 }
 
 impl NomDecode for Op {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (input, opcode) = u8::decode(bytes)?;
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, opcode) = u8::decode(bytes)?;
 
         match opcode {
-            INSCRIBE => map(InscriptionOp::decode, Self::ChannelInscribe).parse(input),
-            CHANNEL_CONFIG => map(ChannelConfigOp::decode, Self::ChannelConfig).parse(input),
-            CHANNEL_DEPOSIT => map(DepositOp::decode, Self::ChannelDeposit).parse(input),
-            CHANNEL_WITHDRAW => map(ChannelWithdrawOp::decode, Self::ChannelWithdraw).parse(input),
-            // TODO: Use `.decode()` once implemented for all other ops
-            SDP_DECLARE => map(decode_sdp_declare, Self::SDPDeclare).parse(input),
-            SDP_WITHDRAW => map(decode_sdp_withdraw, Self::SDPWithdraw).parse(input),
-            SDP_ACTIVE => map(decode_sdp_active, Self::SDPActive).parse(input),
-            LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(input),
-            TRANSFER => map(decode_transfer, Self::Transfer).parse(input),
-            _ => Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
+            INSCRIBE => {
+                InscriptionOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelInscribe(op)))
+            }
+            CHANNEL_CONFIG => {
+                ChannelConfigOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelConfig(op)))
+            }
+            CHANNEL_DEPOSIT => {
+                DepositOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelDeposit(op)))
+            }
+            CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(bytes)
+                .map(|(bytes, op)| (bytes, Self::ChannelWithdraw(op))),
+            SDP_DECLARE => {
+                SDPDeclareOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPDeclare(op)))
+            }
+            SDP_WITHDRAW => {
+                SDPWithdrawOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPWithdraw(op)))
+            }
+            SDP_ACTIVE => {
+                SDPActiveOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPActive(op)))
+            }
+            LEADER_CLAIM => {
+                LeaderClaimOp::decode(bytes).map(|(bytes, op)| (bytes, Self::LeaderClaim(op)))
+            }
+            TRANSFER => TransferOp::decode(bytes).map(|(bytes, op)| (bytes, Self::Transfer(op))),
+            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
         }
     }
 }
+
+// We just check that the enum discriminant tag is encoded correctly, so a
+// single fixture is fine here.
+// TODO: Remove once the `NomCodec` macro supports enums.
 
 impl Op {
     #[must_use]

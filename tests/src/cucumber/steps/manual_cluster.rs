@@ -79,12 +79,19 @@ pub fn build_manual_cluster_deployment(
         None => None,
     };
 
-    let deployment =
-        DeploymentBuilder::new(config)
-            .build()
-            .map_err(|e| StepError::LogicalError {
-                message: format!("failed to build manual cluster: {e}"),
-            })?;
+    world.node_provisioned_wallet_pks = config
+        .wallet_config
+        .accounts
+        .iter()
+        .map(WalletAccount::public_key)
+        .collect();
+
+    let deployment = DeploymentBuilder::new(config)
+        .with_deployment_seed(world.manual_cluster_deployment_seed())
+        .build()
+        .map_err(|e| StepError::LogicalError {
+            message: format!("failed to build manual cluster: {e}"),
+        })?;
 
     if let Some(genesis_block) = deployment.config.genesis_block.clone() {
         world.genesis_block_utxos =
@@ -121,6 +128,7 @@ fn build_devnet_manual_cluster_deployment(
     // wallet tracking.
     world.genesis_block_utxos.clear();
     world.wallet_accounts.clear();
+    world.node_provisioned_wallet_pks.clear();
 
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
@@ -129,6 +137,7 @@ fn build_devnet_manual_cluster_deployment(
     let config = apply_blend_core_nodes(world, config, nodes_count)?;
 
     DeploymentBuilder::new(config)
+        .with_deployment_seed(world.manual_cluster_deployment_seed())
         .build()
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build devnet manual cluster: {e}"),
@@ -361,7 +370,7 @@ pub fn build_user_wallets(
     Ok(wallet_info)
 }
 
-pub fn insert_started_node_info<S: BuildHasher>(
+pub async fn insert_started_node_info<S: BuildHasher>(
     world: &mut CucumberWorld,
     logical_node_name: &str,
     started_node: StartedNode<LbcEnv>,
@@ -386,7 +395,9 @@ pub fn insert_started_node_info<S: BuildHasher>(
             immediate_start: world.network_immediate_start(logical_node_name),
         },
     );
-    world.register_wallet_block_feed_source(logical_node_name, client)?;
+    world
+        .register_wallet_block_feed_source(logical_node_name, client)
+        .await?;
 
     Ok(())
 }

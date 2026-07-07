@@ -239,14 +239,111 @@ async fn get_block_ids() {
     ));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays =
+        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
+            OutboundRelay::new(broadcast_tx),
+            OutboundRelay::new(storage_tx),
+            OutboundRelay::new(time_tx),
+        )
+        .await;
+
+    let lib = [0; 32].into();
+    let missing_tip = [1; 32].into();
+
+    let recovery_blocks = CryptarchiaConsensus::<
+        _,
+        RocksBackend,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::load_recovery_blocks_or_fall_back_to_lib(
+        missing_tip, lib, relays.storage_adapter().clone()
+    )
+    .await;
+
+    assert!(recovery_blocks.fell_back_to_lib);
+    assert!(recovery_blocks.blocks.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn process_block_does_not_mutate_state_when_storage_send_fails() {
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    // Close the storage relay before processing so the initial combined store
+    // request fails.
+    drop(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays =
+        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
+            OutboundRelay::new(broadcast_tx),
+            OutboundRelay::new(storage_tx),
+            OutboundRelay::new(time_tx),
+        )
+        .await;
+    let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
+    let (lib_tx, mut lib_rx) = broadcast::channel(10);
+
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let initial_info = cryptarchia.info();
+    let block_slot = block.header().slot();
+
+    let result = CryptarchiaConsensus::<
+        _,
+        RocksBackend,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::process_block(
+        &mut cryptarchia,
+        block,
+        block_slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await;
+
+    match &result {
+        Err(Error::Storage(_)) => {}
+        Err(e) => panic!("expected storage error, got {e:?}"),
+        Ok(_) => panic!("expected storage error, got Ok"),
+    }
+    assert_eq!(cryptarchia.info(), initial_info);
+    assert!(new_block_rx.try_recv().is_err());
+    assert!(lib_rx.try_recv().is_err());
+}
+
+fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx>) {
+    let k = 3.try_into().unwrap();
+    let config = ledger_config(k);
+    let genesis_id = [0; 32].into();
+    let (zk_key, utxo) = utxo();
+    let cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Online,
+        Slot::genesis(),
+        0,
+    );
+    let block =
+        try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, Slot::new(1)).unwrap();
+
+    (cryptarchia, block)
+}
+
 #[must_use]
 pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
     let mut service_params = HashMap::new();
     service_params.insert(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
-            inactivity_period: 1.into(),
-            retention_period: 1.into(),
+            inactivity_period: 2.try_into().unwrap(),
             epoch: 0.into(),
         },
     );

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
 use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -77,9 +79,11 @@ impl CurrentEpochTracker {
     ///
     /// It returns [`CurrentEpochTrackerOutput::WithTargetEpoch`] by
     /// creating a [`TargetEpochState`] using the collected information,
-    /// if the network size of the new target epoch is not below the
-    /// minimum required. Otherwise, it returns
-    /// [`CurrentEpochTrackerOutput::WithoutTargetEpoch`].
+    /// if the following conditions are met:
+    /// - The network size of the new target epoch is not below the minimum.
+    /// - No multi-epoch jump has occurred.
+    ///
+    /// Otherwise, it returns [`CurrentEpochTrackerOutput::WithoutTargetEpoch`].
     pub fn finalize<ProofsVerifier>(
         &self,
         current_reward_epoch_state: &CurrentEpochState,
@@ -104,18 +108,29 @@ impl CurrentEpochTracker {
             last_epoch_state.epoch,
         );
 
-        let declarations = last_epoch_state
-            .sdp
-            .declarations()
-            .iter()
-            .filter(|(service_type, _)| matches!(service_type, ServiceType::BlendNetwork))
-            .flat_map(|(_, declarations)| declarations.values())
-            .cloned()
-            .collect::<Vec<_>>();
+        // On a multi-epoch jump, skip target epoch setup.
+        // See the details in the [`Rewards::update_epoch`] documentation.
+        if next_epoch_state.epoch > last_epoch_state.epoch.strict_add(1.into()) {
+            debug!(
+                target: LOG_TARGET,
+                "Multi-epoch jump from {} to {}. Switching to WithoutTargetEpoch mode",
+                last_epoch_state.epoch,
+                next_epoch_state.epoch,
+            );
+            return CurrentEpochTrackerOutput::WithoutTargetEpoch {
+                current_epoch_state: CurrentEpochState::new(next_epoch_state, settings),
+                current_epoch_tracker: Self::new(),
+            };
+        }
 
-        if declarations.len() < settings.minimum_network_size.get() as usize {
+        let maybe_declarations = last_epoch_state
+            .active_declarations
+            .for_service(&ServiceType::BlendNetwork);
+
+        let declaration_count = maybe_declarations.map_or(0, HashMap::len);
+        if declaration_count < settings.minimum_network_size.get() as usize {
             debug!(target: LOG_TARGET, "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetEpoch mode",
-                declarations.len(),
+                declaration_count,
                 settings.minimum_network_size.get()
             );
             return CurrentEpochTrackerOutput::WithoutTargetEpoch {
@@ -124,7 +139,11 @@ impl CurrentEpochTracker {
             };
         }
 
-        let (providers, zk_root) = Self::providers_and_zk_root(declarations.iter());
+        let (providers, zk_root) = Self::providers_and_zk_root(
+            maybe_declarations
+                .expect("declaration set must exist since it's larger than minimum network size")
+                .values(),
+        );
 
         let (core_quota, token_evaluation) = settings.core_quota_and_token_evaluation(
             providers.size() as u64,

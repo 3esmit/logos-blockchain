@@ -11,13 +11,14 @@ use lb_core::{
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
-        tx::TxHash,
+        transactions::TxHash,
     },
 };
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+const DEFAULT_MAX_LOCAL_TX_TRACKING: usize = 10_000;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -83,6 +84,16 @@ pub enum OrphanedTx {
     AtomicWithdraw(AtomicWithdrawInfo),
 }
 
+impl OrphanedTx {
+    #[must_use]
+    pub const fn tx_hash(&self) -> TxHash {
+        match self {
+            Self::Inscription(i) => i.tx_hash,
+            Self::AtomicWithdraw(a) => a.tx_hash,
+        }
+    }
+}
+
 /// Configuration for the zone sequencer.
 #[derive(Clone)]
 pub struct SequencerConfig {
@@ -91,6 +102,7 @@ pub struct SequencerConfig {
     pub publish_channel_capacity: usize,
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
+    pub max_local_tx_tracking: usize,
 }
 
 impl Default for SequencerConfig {
@@ -101,6 +113,7 @@ impl Default for SequencerConfig {
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
+            max_local_tx_tracking: DEFAULT_MAX_LOCAL_TX_TRACKING,
         }
     }
 }
@@ -183,6 +196,9 @@ pub enum Event {
     /// catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
     /// `BlocksProcessed` once the stream resumes.
     Ready,
+    /// Transaction was accepted by the node post API and is expected to be in
+    /// the mempool.
+    MempoolPending(TxHash),
     /// Turn-to-write status update for this sequencer.
     ///
     /// Emitted on the same change boundary as the `turn_to_write` watch
@@ -190,28 +206,86 @@ pub enum Event {
     TurnNotification { notification: TurnNotification },
 }
 
-/// Channel state delta from one [`Event::BlocksProcessed`].
+/// Tx-hash lifecycle status for a transaction observed by the sequencer.
 ///
-/// Both vecs are empty when there is nothing for the consumer to adopt or
-/// orphan in this block. `safe → pending` transitions whose original signed
-/// tx is still valid (parent unchanged on the new branch) are not surfaced
-/// — the SDK keeps retrying them internally.
+/// This enum tracks the lifecycle of a specific transaction hash, not a
+/// publish intent. Republishing after an orphan or any other retry produces a
+/// new tx hash and therefore a new lifecycle.
+///
+/// Typical flows:
+/// - Plain success: `AcceptedLocally -> PendingMempool -> OnChain(_) ->
+///   Finalized(_)`
+/// - Reorg on the same hash: `... -> OnChain(_) -> Orphaned(_) -> OnChain(_) ->
+///   Finalized(_)`
+/// - Republish after orphan: original hash reaches `Orphaned(_)`; the
+///   republished tx starts over at `AcceptedLocally` under its new hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TxStatus {
+    /// Accepted by the SDK and tracked locally.
+    AcceptedLocally,
+    /// Accepted by the node post API and expected to be in the mempool.
+    PendingMempool,
+    /// Observed in the canonical non-finalized chain.
+    OnChain(TxSource),
+    /// Previously tracked tx was invalidated on the current canonical branch.
+    ///
+    /// This is branch-local, not a permanent tombstone: the same hash can
+    /// later resurface as [`TxStatus::OnChain`] or [`TxStatus::Finalized`]
+    /// after a deeper reorg.
+    Orphaned(TxSource),
+    /// Observed in finalized chain history.
+    Finalized(TxSource),
+}
+
+/// Status update for a single transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TxStatusUpdate {
+    pub tx_hash: TxHash,
+    pub status: TxStatus,
+}
+
+/// Whether an observed transaction is still attributable to this sequencer
+/// runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TxSource {
+    /// The tx was accepted locally by this sequencer or restored from its
+    /// checkpoint.
+    Local,
+    /// The tx was observed on chain but is not currently known as local to
+    /// this sequencer.
+    ///
+    /// This includes both genuinely external txs and txs that were previously
+    /// local but have since been evicted from the bounded local-tracking set.
+    Other,
+}
+
+/// How the channel changed across one [`Event::BlocksProcessed`].
+///
+/// The channel is an ordered chain of inscriptions. It can momentarily fork —
+/// competing inscriptions chain off the same parent — and this reports how the
+/// canonical chain moved since the last event:
+///
+/// - `adopted`: inscriptions now on the channel that weren't before — apply
+///   them.
+/// - `orphaned`: inscriptions that were on the channel (or that you published
+///   and were still waiting to land) and no longer are — revert them and treat
+///   them as republish candidates.
+///
+/// Both empty means nothing changed.
 ///
 /// Consumer pattern:
-/// 1. On publish-return: optimistically apply your own inscription to local
-///    state and record its `this_msg`.
-/// 2. On [`Event::BlocksProcessed`]: apply `adopted` (filtered against your
-///    local outbox of `this_msg`s if you don't want to double-apply your own
-///    publishes) to local state, revert `orphaned` (yours that can no longer
-///    land). Both being empty is a no-op.
-/// 3. For each entry in `orphaned`, decide whether to republish (with a fresh
-///    parent — SDK handles parent selection).
+/// 1. On each event, mirror the channel: revert every `orphaned` entry and
+///    apply every `adopted` entry.
+/// 2. Process the orphans so no useful work is lost — e.g. if your inscriptions
+///    carry Zone transactions, return them to your mempool. Reprocessing is
+///    idempotent: anything still valid is already pending and no-ops, so only
+///    genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
-    /// Our pending whose original signed tx is permanently invalid because
-    /// a competing inscription claimed the parent slot (or because the
-    /// parent is now off the canonical chain transitively). These need a
-    /// user decision — re-creation requires your signing key.
+    /// Inscriptions removed from the channel: ones that were on chain, plus our
+    /// own pending that can no longer finalize because a conflicting
+    /// inscription took their place in the chain (a parent double-spend).
+    /// Revert from state and treat as republish candidates.
     ///
     /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
     /// via [`super::SequencerHandle::publish`]. For
@@ -221,9 +295,9 @@ pub struct ChannelUpdate {
     /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
     /// `withdraw_nonce` internally on each publish.
     pub orphaned: Vec<OrphanedTx>,
-    /// Inscriptions newly on the canonical branch (block-delta). Includes
-    /// entries this instance submitted — consumers dedup by `this_msg`
-    /// against the values returned from their publish calls.
+    /// Inscriptions added to the channel. Includes entries this instance
+    /// submitted — consumers dedup by `this_msg` against the values returned
+    /// from their publish calls.
     pub adopted: Vec<InscriptionInfo>,
 }
 

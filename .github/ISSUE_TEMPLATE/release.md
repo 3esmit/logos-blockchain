@@ -32,11 +32,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Commit and push the changes
 - [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch specifying the `testnet` image tag and the right version number `X.Y.Z`
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch with the updated testnet deployment settings.
-- [ ] Checkout and hard reset the `testnet` branch to point to the latest commit of the current release branch
-- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
-- [ ] Commit and push to `testnet` branch to trigger the cleanup
-- [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Testnet web UI][testnet-web-ui] and make sure it's in setup mode.
+- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the testnet settings.
 
 ## Release preparation
 
@@ -63,18 +59,24 @@ Most of the template content is the same or very similar to what is in `release-
 
 ## Testnet deployment
 
+### Existing state cleanup (optional, only whenever a new genesis has been created in the genesis step)
+
+- [ ] Checkout and hard reset the `testnet` branch to point to the latest commit of the current release branch
+- [ ] Symlink the environment file to the repo root with `ln -sf deployment/.env.testnet .env.testnet`
+- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
+- [ ] Commit and push to `testnet` branch to trigger the cleanup
+- [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Testnet web UI][testnet-web-ui] and make sure it's in setup mode.
+
+### Released version deployment
+
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z` tag.
-- [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml compose.static.yml`
-- [ ] Update `.env.testnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to version being released
+- [ ] Checkout `testnet` branch again and change the `deployment/compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml deployment/compose.static.yml`
+- [ ] Update `deployment/.env.testnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to version being released
 - [ ] Commit and push the changes to trigger environment re-deployment
 - [ ] Wait around 1 minute for deployment to be updated. Environment is now live.
 - [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://testnet.blockchain.logos.co/internal/node-data/](https://testnet.blockchain.logos.co/internal/node-data/)
 - [ ] Go back to the [GitHub Release][github-release-section] section and finalize the release
-
-## Release branch wind-down
-
-- [ ] Open a PR against `master` to merge the release branch into it. Make sure the diff between the two show only release-relevant changes. I.e., make sure no unrelated changes, e.g., bug-fixes have landed on the release branch instead of landing on `master`.
 
 # Post-Release
 

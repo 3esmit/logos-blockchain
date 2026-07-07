@@ -1,11 +1,11 @@
-use std::{collections::HashSet, sync::LazyLock};
+use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded_vec::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -13,14 +13,26 @@ use thiserror::Error;
 
 use crate::{
     crypto::{Hash, ZkHasher},
-    events::Events,
-    mantle::{
-        encoding::{BoundedInputs, BoundedOutputs, NomInputs, decode_uint64, decode_zk_public_key},
-        nom::{NomDecode, NomEncode},
-        ops::OpId,
-    },
+    events::TxEvent,
+    mantle::{nom::NomCodec, ops::OpId},
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
+
+// ==============================================================================
+// Memory Safety Limits
+// ==============================================================================
+// These limits are not designed to mimic system limits, but rather to prevent
+// unbounded memory usage from malicious inputs. They prevent memory
+// over-allocation attacks where untrusted input specifies allocation sizes.
+// Values are chosen to not limit normal operations while preventing excessive
+// memory usage (e.g., 68GB allocation). As an example, if the network currently
+// limits maximum transaction size to 1MiB, for memory safety limits we can
+// allow 4MiB.
+const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
+const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
+pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
+pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
+pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
 pub trait Operation<ValidationContext> {
     type ExecutionContext<'a>
@@ -31,7 +43,7 @@ pub trait Operation<ValidationContext> {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error>;
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error>;
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -71,7 +83,7 @@ pub enum LedgerError {
     Outputs(#[from] OutputsError),
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, NomCodec)]
 pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
@@ -147,6 +159,14 @@ impl Outputs {
     pub fn iter(&self) -> impl Iterator<Item = &Note> {
         <&Self as IntoIterator>::into_iter(self)
     }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, Note> {
+        self.0.iter_mut()
+    }
+
+    pub fn try_push(&mut self, note: Note) -> Result<(), BoundedError> {
+        self.0.try_push(note)
+    }
 }
 
 impl AsRef<BoundedOutputs> for Outputs {
@@ -155,9 +175,21 @@ impl AsRef<BoundedOutputs> for Outputs {
     }
 }
 
-impl AsMut<BoundedOutputs> for Outputs {
-    fn as_mut(&mut self) -> &mut BoundedOutputs {
-        &mut self.0
+impl<'a> IntoIterator for &'a mut Outputs {
+    type Item = &'a mut Note;
+    type IntoIter = IterMut<'a, Note>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+impl<I> From<I> for Outputs
+where
+    I: Into<BoundedOutputs>,
+{
+    fn from(value: I) -> Self {
+        Self(value.into())
     }
 }
 
@@ -170,7 +202,7 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct Inputs(BoundedInputs);
 
 impl Inputs {
@@ -303,21 +335,9 @@ impl<'input> IntoIterator for &'input Inputs {
     }
 }
 
-impl NomEncode for Inputs {
-    fn encode(&self) -> Vec<u8> {
-        NomInputs::from(&self.0).encode()
-    }
-}
-
-impl NomDecode for Inputs {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        NomInputs::decode(bytes).map(|(remaining, items)| (remaining, Self(items)))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, NomCodec,
+)]
 #[serde(transparent)]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
 
@@ -345,21 +365,7 @@ impl From<Fr> for NoteId {
     }
 }
 
-impl NomEncode for NoteId {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for NoteId {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        Fr::decode(bytes).map(|(remaining, fr)| (remaining, Self(fr)))
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, NomCodec)]
 pub struct Note {
     pub value: Value,
     pub pk: ZkPublicKey,
@@ -374,27 +380,6 @@ impl Note {
     #[must_use]
     pub fn as_fr_components(&self) -> [Fr; 2] {
         [BigUint::from(self.value).into(), *self.pk.as_fr()]
-    }
-}
-
-impl NomEncode for Note {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(crate::mantle::encoding::encode_uint64(self.value));
-        bytes.extend(crate::mantle::encoding::encode_field_element(
-            self.pk.as_fr(),
-        ));
-        bytes
-    }
-}
-
-impl NomDecode for Note {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        let (bytes, value) = decode_uint64(bytes)?;
-        let (bytes, pk) = decode_zk_public_key(bytes)?;
-        Ok((bytes, Self::new(value, pk)))
     }
 }
 

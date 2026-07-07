@@ -103,8 +103,6 @@ pub enum Error {
     },
     #[error("Channel {channel_id:?} not found")]
     ChannelNotFound { channel_id: ChannelId },
-    #[error("Insufficient funds")]
-    InsufficientFunds,
     #[error("Unbalanced operation")]
     UnbalancedOperation,
     #[error("Balance overflow")]
@@ -238,17 +236,17 @@ mod tests {
     use rand::thread_rng;
 
     use super::*;
-    use crate::mantle::{
-        Note, NoteId, Utxo,
-        ledger::{Inputs, Outputs, Utxos},
-        ops::channel::{
-            Ed25519PublicKey as PublicKey,
-            withdraw::{ChannelWithdrawOp, WithdrawValidationContext},
-        },
-        tx::{GasPrices, MantleTxGasContext},
-    };
     use crate::{
-        mantle::TxHash, proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+        mantle::{
+            Note, NoteId, TxHash, Utxo,
+            ledger::{Inputs, Outputs, Utxos},
+            ops::channel::{
+                Ed25519PublicKey as PublicKey,
+                withdraw::{ChannelWithdrawOp, WithdrawValidationContext},
+            },
+            tx::{GasPrices, MantleTxGasContext},
+        },
+        proofs::channel_multi_sig_proof::ChannelMultiSigProof,
         sdp::locked_notes::LockedNotes,
     };
 

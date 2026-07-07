@@ -53,8 +53,6 @@ pub enum InputsError {
     InputsOverflow,
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
-    #[error("Inputs are empty")]
-    EmptyInputs,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -239,11 +237,8 @@ impl Inputs {
         utxos: &Utxos,
         channel_ids: Vec<Option<ChannelId>>,
     ) -> Result<(), InputsError> {
-        // Check that there is no duplicate and it's not empty
+        // Check that there is no duplicate
         let unique: HashSet<_> = self.0.iter().collect();
-        if unique.is_empty() {
-            return Err(InputsError::EmptyInputs);
-        }
         if unique.len() != self.0.len() {
             return Err(InputsError::DoubleSpend);
         }

@@ -106,8 +106,8 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         // Check the operation is balanced
         let input_amount = self.inputs.amount(ctx.utxos)?;
         let output_amount = self.outputs.amount()?;
-        if input_amount < output_amount {
-            return Err(Error::InsufficientFunds);
+        if input_amount != output_amount {
+            return Err(Error::UnbalancedOperation);
         }
 
         // Check that the indexes are unique and there is the same number of proof and
@@ -140,26 +140,13 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
-        // compute the returning amount (checked_sub is not necessary because we
-        // validated the balance before)
-        let input_amount = self.inputs.amount(&ctx.utxos)?;
-        let output_amount = self.outputs.amount()?;
-        let returned_amount = input_amount - output_amount;
-
         // Remove inputs from the ledger
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
         // Add the ouputs to the ledger
-        let mut outputs = self.outputs.clone();
-        let mut channels = vec![None; self.outputs.len()];
-        if returned_amount != 0 {
-            outputs
-                .as_mut()
-                .try_push(Note::new(returned_amount, ZkPublicKey::zero()))
-                .map_err(|_| OutputsError::OutputsOverflow)?;
-            channels.push(Some(self.channel_id));
-        }
-        ctx.utxos = outputs.execute(ctx.utxos, self, channels);
+        ctx.utxos = self
+            .outputs
+            .execute(ctx.utxos, self, vec![None; self.outputs.len()]);
 
         Ok((ctx, Events::new()))
     }

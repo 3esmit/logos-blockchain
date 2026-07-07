@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::{Event, EventPayload, Events},
     mantle::{
-        Note, TxHash,
+        TxHash,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Outputs, Utxos},
         nom::{NomBoundedVec, NomDecode, NomEncode},
@@ -107,31 +107,29 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
-        // Get the amount deposited
-        let amount_deposited = self.inputs.amount(&ctx.utxos)?;
+        for input in &self.inputs {
+            // get the note
+            let note = ctx
+                .utxos
+                .get(input)
+                .expect("note existence was checked in validate")
+                .note;
 
-        // Get the public key
-        let key = self
-            .inputs
-            .get_pk(&ctx.utxos)
-            .expect("the inputs was checked to exist in validate")[0];
+            // create the deposit channel note
+            ctx.utxos = Outputs::new(note).execute(ctx.utxos, self, vec![Some(self.channel_id)]);
+        }
+
+        let amount = self.inputs.amount(&ctx.utxos)?;
 
         // Remove inputs from the ledger
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
-
-        // Create the deposit note channel
-        ctx.utxos = Outputs::new(Note {
-            value: amount_deposited,
-            pk: key,
-        })
-        .execute(ctx.utxos, self, vec![Some(self.channel_id)]);
 
         let events = std::iter::once(Event::from_tx(
             ctx.tx_hash,
             self.op_id(),
             EventPayload::Deposit {
                 channel_id: self.channel_id,
-                amount: amount_deposited,
+                amount,
                 metadata: self.metadata.clone(),
             },
         ))

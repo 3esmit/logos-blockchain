@@ -12,7 +12,7 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
-use lb_wire::WireEncode;
+use lb_wire::WireEncode as _;
 
 pub(crate) use crate::{
     cli::{

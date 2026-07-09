@@ -10,7 +10,6 @@ repository.workspace  = true
 version.workspace     = true
 
 [dependencies]
-lb-wire = { workspace = true }
 anyhow                        = { workspace = true }
 clap                          = { features = ["derive", "help", "std", "string"], workspace = true }
 lb-common-http-client         = { workspace = true }
@@ -21,6 +20,7 @@ lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
 lb-utils                      = { workspace = true }
+lb-wire                       = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 serde_with                    = { features = ["hex"], workspace = true }
 serde_yml                     = { workspace = true }

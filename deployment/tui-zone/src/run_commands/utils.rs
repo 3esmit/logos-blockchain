@@ -21,7 +21,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::{
     ED25519_SECRET_KEY_SIZE, Ed25519Key, Ed25519PublicKey, ZkPublicKey,
 };
-use lb_wire::WireDecode;
+use lb_wire::WireDecode as _;
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
@@ -228,7 +228,7 @@ pub fn decode_exported_utxos(funds: &WalletFundsExport) -> RunResult<Vec<Utxo>> 
 /// Decode a hex-encoded mantle transaction and reject trailing bytes.
 pub fn decode_mantle_tx_hex(value: &str) -> RunResult<MantleTx> {
     let bytes = decode_hex(value)?;
-    let (remaining, tx) = MantleTx::decode(&bytes, ()).map_err(|error| format!("{error:?}"))?;
+    let (remaining, tx) = MantleTx::decode(&bytes, &()).map_err(|error| format!("{error:?}"))?;
     if !remaining.is_empty() {
         return Err("mantle tx has trailing bytes".into());
     }

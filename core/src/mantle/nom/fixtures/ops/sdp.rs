@@ -1,5 +1,5 @@
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-use lb_core_macros::nom_wire_fixtures;
+use crate::mantle::nom::nom_wire_fixtures;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};

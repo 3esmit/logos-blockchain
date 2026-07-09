@@ -4,6 +4,7 @@ use lb_poseidon2::Digest;
 
 pub mod quota;
 pub mod selection;
+mod wire;
 
 trait ZkHashExt {
     fn hash(&self) -> ZkHash;

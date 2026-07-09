@@ -26,7 +26,7 @@ pub struct DepositOp {
 
 impl OpId for DepositOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 

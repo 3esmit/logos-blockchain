@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use lb_core_macros::NomCodec;
+use crate::mantle::nom::NomCodec;
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
@@ -64,7 +64,7 @@ impl LeaderClaimOp {
 
 impl OpId for LeaderClaimOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 

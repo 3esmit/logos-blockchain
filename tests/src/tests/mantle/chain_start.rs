@@ -102,7 +102,7 @@ fn test_config(mut config: RunConfig, genesis_time: GenesisTime) -> RunConfig {
     cryptarchia_parameter.genesis_time = genesis_time;
 
     let inscription = InscriptionOp {
-        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode()),
+        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode_to_vec()),
         ..genesis_tx.genesis_inscription().clone()
     };
 

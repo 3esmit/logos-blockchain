@@ -1,4 +1,4 @@
-use lb_core_macros::nom_wire_fixtures;
+use crate::mantle::nom::nom_wire_fixtures;
 
 use crate::mantle::channel::{SlotTimeframe, SlotTimeout};
 

@@ -1259,7 +1259,7 @@ mod tests {
                     genesis_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
                 }
-                .encode(),
+                .encode_to_vec(),
             ),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
@@ -1275,7 +1275,7 @@ mod tests {
                     genesis_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
                 }
-                .encode(),
+                .encode_to_vec(),
             ),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),

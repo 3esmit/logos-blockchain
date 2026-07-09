@@ -1,4 +1,4 @@
-use lb_core_macros::nom_wire_fixtures;
+use crate::mantle::nom::nom_wire_fixtures;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
 
 use crate::{

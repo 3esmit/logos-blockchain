@@ -40,7 +40,7 @@ impl InscriptionOp {
     #[must_use]
     pub fn id(&self) -> MsgId {
         let mut hasher = Hasher::new();
-        hasher.update(self.encode().as_slice());
+        hasher.update(self.encode_to_vec().as_slice());
         MsgId(hasher.finalize().into())
     }
 }
@@ -195,7 +195,7 @@ mod tests {
     fn encode_decode_round_trip() {
         let op = sample();
         let encoded = op.encode();
-        let decoded = InscriptionOp::decode(&encoded).unwrap().1;
+        let decoded = InscriptionOp::decode(&encoded, ()).unwrap().1;
         assert_eq!(op, decoded);
     }
 

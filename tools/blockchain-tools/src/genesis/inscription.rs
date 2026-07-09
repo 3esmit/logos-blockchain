@@ -53,7 +53,7 @@ pub fn inscribe<D: ZkDigest>(
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
         inscription: params
-            .encode()
+            .encode_to_vec()
             .try_into()
             .expect("CryptarchiaParameter encoding exceeded MAX_BYTES"),
         parent: MsgId::root(),

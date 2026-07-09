@@ -1,12 +1,7 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_core_macros::NomCodec;
 use lb_groth16::Fr;
 use lb_utils::bounded::{BoundedString, BoundedVec};
-use nom::{
-    IResult,
-    error::{Error as NomError, ErrorKind},
-};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -16,7 +11,7 @@ use crate::{
     mantle::{
         MantleTx, OpProof, Transaction, TransactionHasher,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
-        nom::{NomDecode, NomEncode},
+        nom::{DecodeError, NomCodec, NomDecode, NomEncode},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -156,7 +151,7 @@ fn valid_cryptarchia_inscription(
     }
 
     Ok(
-        CryptarchiaParameter::decode(inscription.inscription.as_ref())
+        CryptarchiaParameter::decode(inscription.inscription.as_ref(), ())
             .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))?
             .1,
     )
@@ -354,21 +349,30 @@ impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for C
 }
 
 impl NomEncode for ChainId {
-    fn encode(&self) -> Vec<u8> {
-        let bounded_bytes =
-            ChainIdBoundedVec::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned());
-        bounded_bytes.encode()
+    fn encoded_length(&self) -> usize {
+        self.as_bounded_bytes().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.as_bounded_bytes().encode_into(out);
+    }
+}
+
+impl ChainId {
+    /// The length-prefixed byte view used by the wire codec.
+    fn as_bounded_bytes(&self) -> ChainIdBoundedVec {
+        ChainIdBoundedVec::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned())
     }
 }
 
 impl NomDecode for ChainId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, value) = ChainIdBoundedVec::decode(bytes)?;
-        Ok((
-            remaining_bytes,
-            Self::try_from(value)
-                .map_err(|_| nom::Err::Error(NomError::new(bytes, ErrorKind::MapRes)))?,
-        ))
+    type Context = ();
+
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
+        let (rest, value) = ChainIdBoundedVec::decode(input, ())?;
+        let chain_id = Self::try_from(value)
+            .map_err(|_| DecodeError::invalid_value::<Self>("invalid chain id bytes"))?;
+        Ok((rest, chain_id))
     }
 }
 
@@ -432,7 +436,7 @@ mod tests {
     ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
-            inscription: Inscription::new_unchecked(cryptarchia_param.encode()),
+            inscription: Inscription::new_unchecked(cryptarchia_param.encode_to_vec()),
             parent,
             signer,
         }
@@ -716,7 +720,7 @@ mod tests {
     fn test_cryptarchia_parameter_roundtrip() {
         let param = cryptarchia_param();
         let encoded = param.encode();
-        let (_, decoded) = CryptarchiaParameter::decode(&encoded).unwrap();
+        let (_, decoded) = CryptarchiaParameter::decode(&encoded, ()).unwrap();
         assert_eq!(param, decoded);
     }
 
@@ -743,43 +747,31 @@ mod tests {
         // A single byte is a complete 1-byte chain_id length prefix of 0, which
         // is below the chain_id minimum length of 1.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[0; 1]).unwrap_err(),
-            nom::Err::Error(NomError {
-                code: ErrorKind::LengthValue,
-                ..
-            })
+            CryptarchiaParameter::decode(&[0; 1], ()).unwrap_err(),
+            DecodeError::LengthOutOfBounds { .. }
         ));
 
         // Genuinely too short: not even the length prefix can be read.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[]).unwrap_err(),
-            nom::Err::Error(NomError {
-                code: ErrorKind::Eof,
-                ..
-            })
+            CryptarchiaParameter::decode(&[], ()).unwrap_err(),
+            DecodeError::UnexpectedEnd { .. }
         ));
 
         // Wrong length (chain_id_len says 100 but only a few bytes follow)
         let mut bad = vec![0; 48];
         bad[0] = 100; // chain_id_len = 100
         assert!(matches!(
-            CryptarchiaParameter::decode(&bad).unwrap_err(),
-            nom::Err::Error(NomError {
-                code: ErrorKind::Eof,
-                ..
-            })
+            CryptarchiaParameter::decode(&bad, ()).unwrap_err(),
+            DecodeError::UnexpectedEnd { .. }
         ));
 
         // Invalid UTF-8 chain_id. The chain_id bytes begin right after its
         // single-byte length prefix, so index 1 is the first UTF-8 byte.
-        let mut encoded = cryptarchia_param().encode();
+        let mut encoded = cryptarchia_param().encode_to_vec();
         encoded[1] = 0xFF; // corrupt the first chain_id UTF-8 byte
         assert!(matches!(
-            CryptarchiaParameter::decode(&encoded).unwrap_err(),
-            nom::Err::Error(NomError {
-                code: ErrorKind::MapRes,
-                ..
-            })
+            CryptarchiaParameter::decode(&encoded, ()).unwrap_err(),
+            DecodeError::InvalidValue { .. }
         ));
     }
 

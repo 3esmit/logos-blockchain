@@ -5,7 +5,7 @@ use std::{
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_core_macros::NomCodec;
+use crate::mantle::nom::NomCodec;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -219,7 +219,7 @@ impl<'de> Deserialize<'de> for MantleTx {
             <MantleTxDeSerImpl as Deserialize>::deserialize(deserializer).map(Into::into)
         } else {
             let bytes: Vec<u8> = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes)
+            Self::decode(&bytes, ())
                 .map(|(_, tx)| tx)
                 .map_err(serde::de::Error::custom)
         }

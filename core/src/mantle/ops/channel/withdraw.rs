@@ -22,7 +22,7 @@ pub struct ChannelWithdrawOp {
 
 impl OpId for ChannelWithdrawOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 

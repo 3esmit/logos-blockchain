@@ -7,7 +7,7 @@ use tracing::error;
 
 use crate::{
     mantle::{
-        nom::{NomDecode, NomEncode},
+        nom::{DecodeError, NomDecode, NomEncode},
         ops::leader_claim::VoucherSecret,
     },
     proofs::merkle::mmr_path_to_witness,
@@ -22,16 +22,22 @@ pub struct Groth16LeaderClaimProof {
 }
 
 impl NomEncode for Groth16LeaderClaimProof {
-    fn encode(&self) -> Vec<u8> {
-        self.proof.to_bytes().encode()
+    fn encoded_length(&self) -> usize {
+        self.proof.to_bytes().len()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.proof.to_bytes());
     }
 }
 
 impl NomDecode for Groth16LeaderClaimProof {
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self> {
-        let (remaining_bytes, inner) = <[u8; _]>::decode(bytes)?;
+    type Context = ();
+
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
+        let (rest, inner) = <[u8; _]>::decode(input, ())?;
         Ok((
-            remaining_bytes,
+            rest,
             Self {
                 proof: lb_poc::PoCProof::from_bytes(&inner),
             },

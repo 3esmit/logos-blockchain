@@ -1,5 +1,6 @@
 pub mod config;
 pub mod time;
+mod wire;
 
 use core::{fmt::Debug, hash::Hash};
 use std::{

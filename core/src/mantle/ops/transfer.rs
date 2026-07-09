@@ -1,4 +1,4 @@
-use lb_core_macros::NomCodec;
+use crate::mantle::nom::NomCodec;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -47,7 +47,7 @@ impl TransferOp {
 
 impl OpId for TransferOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 

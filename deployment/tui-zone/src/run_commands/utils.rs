@@ -228,7 +228,7 @@ pub fn decode_exported_utxos(funds: &WalletFundsExport) -> RunResult<Vec<Utxo>> 
 /// Decode a hex-encoded mantle transaction and reject trailing bytes.
 pub fn decode_mantle_tx_hex(value: &str) -> RunResult<MantleTx> {
     let bytes = decode_hex(value)?;
-    let (remaining, tx) = MantleTx::decode(&bytes).map_err(|error| format!("{error:?}"))?;
+    let (remaining, tx) = MantleTx::decode(&bytes, ()).map_err(|error| format!("{error:?}"))?;
     if !remaining.is_empty() {
         return Err("mantle tx has trailing bytes".into());
     }

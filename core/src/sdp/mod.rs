@@ -215,7 +215,7 @@ impl Display for Locator {
 
 impl WireEncode for Locator {
     fn encoded_length(&self) -> usize {
-        MAX_LOCATOR_BYTE_SIZE
+        self.as_bounded_bytes().encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {

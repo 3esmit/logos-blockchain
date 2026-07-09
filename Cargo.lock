@@ -4019,6 +4019,7 @@ dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-utils",
  "logos-blockchain-wire",
+ "rand 0.8.6",
  "serde",
  "serde_with",
  "test-log",

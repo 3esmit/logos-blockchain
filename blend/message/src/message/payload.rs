@@ -1,4 +1,5 @@
 use lb_wire::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
+use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -91,7 +92,9 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
             .into_boxed_slice()
             .try_into()
             .expect("body must be created with the correct size");
-        padded[..value.len()].copy_from_slice(value);
+        let (to_be_set, to_be_random) = padded.split_at_mut(value.len());
+        to_be_set.copy_from_slice(value);
+        rand::thread_rng().fill(to_be_random);
 
         Ok(Self { actual_len, padded })
     }
@@ -99,7 +102,10 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
 
 impl WireEncode for PaddedPayloadBody {
     fn encoded_length(&self) -> usize {
-        size_of::<u16>().checked_add(MAX_PAYLOAD_BODY_SIZE).unwrap()
+        self.actual_len
+            .encoded_length()
+            .checked_add(MAX_PAYLOAD_BODY_SIZE)
+            .unwrap()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -126,8 +132,9 @@ impl WireDecode for PaddedPayloadBody {
     }
 }
 
-// Well-known bytes: a `u16` length of 3, the body `[1, 2, 3]`, then zero padding
-// to `MAX_PAYLOAD_BODY_SIZE`. Externalised as hex because it is ~34 KiB.
+// Well-known bytes: a `u16` length of 3, the body `[1, 2, 3]`, then zero
+// padding to `MAX_PAYLOAD_BODY_SIZE`. Externalised as hex because it is ~34
+// KiB.
 wire_fixtures!(
     PaddedPayloadBody,
     PaddedPayloadBody::try_from([1u8, 2, 3].as_slice()).unwrap()
@@ -198,7 +205,8 @@ impl WireDecode for Payload {
 }
 
 // Well-known bytes: the `Data` discriminant (`0x01`), a `u16` length of 3, the
-// body `[4, 5, 6]`, then zero padding. Externalised as hex because it is ~34 KiB.
+// body `[4, 5, 6]`, then zero padding. Externalised as hex because it is ~34
+// KiB.
 wire_fixtures!(
     Payload,
     Payload::new(

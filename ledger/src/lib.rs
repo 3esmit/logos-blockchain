@@ -354,6 +354,21 @@ impl LedgerState {
         }
     }
 
+    /// Adds a block's storage gas to the current epoch's consumption, which
+    /// drives the storage price update at the epoch boundary. See the
+    /// specification <https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5>
+    fn add_storage_gas_consumed(
+        self,
+        block_storage_gas_consumed: Gas,
+    ) -> Result<Self, GasOverflow> {
+        Ok(Self {
+            cryptarchia_ledger: self
+                .cryptarchia_ledger
+                .add_storage_gas_consumed(block_storage_gas_consumed)?,
+            ..self
+        })
+    }
+
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<Id, Constants: GasConstants>(
         mut self,
@@ -361,6 +376,7 @@ impl LedgerState {
         txs: impl Iterator<Item = impl AuthenticatedMantleTx<Context = GasPrices>>,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let mut total_block_execution_gas: Gas = 0.into();
+        let mut total_block_storage_gas: Gas = 0.into();
         let mut total_fee_burned: GasCost = 0.into();
         let mut total_fee_tip: GasCost = 0.into();
         let mut tx_events = Vec::new();
@@ -409,7 +425,13 @@ impl LedgerState {
             total_fee_burned = total_fee_burned.checked_add(tx_fee_burned)?;
             total_fee_tip = total_fee_tip.checked_add(tx_fee_tip)?;
             total_block_execution_gas = total_block_execution_gas.checked_add(
-                AuthenticatedMantleTx::execution_gas_consumption::<Constants>(&tx, gas_prices)?,
+                AuthenticatedMantleTx::execution_gas_consumption::<Constants>(
+                    &tx,
+                    gas_prices.clone(),
+                )?,
+            )?;
+            total_block_storage_gas = total_block_storage_gas.checked_add(
+                AuthenticatedMantleTx::storage_gas_consumption(&tx, gas_prices)?,
             )?;
 
             // Check that the block is not exceeding the Gas limit
@@ -424,6 +446,8 @@ impl LedgerState {
         self = self.compute_block_rewards(total_fee_burned, total_fee_tip)?;
         // Update Execution market state
         self = self.update_execution_market(total_block_execution_gas);
+        // Add the block's storage gas to the storage market
+        self = self.add_storage_gas_consumed(total_block_storage_gas)?;
         Ok((self, tx_events))
     }
 

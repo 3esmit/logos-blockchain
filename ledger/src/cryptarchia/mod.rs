@@ -9,7 +9,7 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
-        gas::{Gas, GasConstants, GasCost, GasPrice},
+        gas::{Gas, GasConstants, GasCost, GasOverflow, GasPrice},
         ledger::Operation as _,
         ops::transfer::{TransferOp, TransferValidationContext},
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
@@ -388,6 +388,20 @@ impl LedgerState {
                 ..self
             })
         }
+    }
+
+    /// Adds a block's storage gas to the current epoch's consumption, read
+    /// by `update_storage_market` at the epoch boundary.
+    pub fn add_storage_gas_consumed(
+        self,
+        block_storage_gas_consumed: Gas,
+    ) -> Result<Self, GasOverflow> {
+        Ok(Self {
+            storage_gas_consumed_in_epoch: self
+                .storage_gas_consumed_in_epoch
+                .checked_add(block_storage_gas_consumed)?,
+            ..self
+        })
     }
 
     #[must_use]

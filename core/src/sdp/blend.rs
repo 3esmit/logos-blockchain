@@ -16,11 +16,13 @@ const BLEND_ACTIVE_METADATA_VERSION_BYTE: u8 = 1;
 
 impl WireEncode for ActivityProof {
     fn encoded_length(&self) -> usize {
-        BLEND_ACTIVE_METADATA_VERSION_BYTE.encoded_length()
-            + self.epoch.encoded_length()
-            + self.signing_key.encoded_length()
-            + self.proof_of_quota.encoded_length()
-            + self.proof_of_selection.encoded_length()
+        BLEND_ACTIVE_METADATA_VERSION_BYTE
+            .encoded_length()
+            .checked_add(self.epoch.encoded_length())
+            .and_then(|len| len.checked_add(self.signing_key.encoded_length()))
+            .and_then(|len| len.checked_add(self.proof_of_quota.encoded_length()))
+            .and_then(|len| len.checked_add(self.proof_of_selection.encoded_length()))
+            .unwrap()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -42,7 +44,7 @@ impl WireDecode for ActivityProof {
         let (input, proof_version) = u8::decode(input, &())?;
         if proof_version != BLEND_ACTIVE_METADATA_VERSION_BYTE {
             return Err(DecodeError::invalid_value::<Self>(
-                "unsupported activity proof version",
+                "Unsupported activity proof version",
             ));
         }
         let (input, epoch) = Epoch::decode(input, &())?;
@@ -60,8 +62,6 @@ impl WireDecode for ActivityProof {
         ))
     }
 }
-
-// TODO: Remove once the `WireCodec` macro supports logic for custom tags.
 
 #[cfg(test)]
 mod tests {

@@ -335,7 +335,7 @@ mod tests {
         let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = MantleTx::decode(&encoded, ()).unwrap();
+        let (remaining, decoded_tx) = MantleTx::decode(&encoded, &()).unwrap();
 
         // Verify
         assert!(remaining.is_empty());
@@ -356,7 +356,7 @@ mod tests {
         let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = MantleTx::decode(&encoded, ()).unwrap();
+        let (remaining, decoded_tx) = MantleTx::decode(&encoded, &()).unwrap();
 
         // Verify
         assert!(remaining.is_empty());
@@ -802,7 +802,7 @@ mod tests {
         let op = Op::LeaderClaim(leader_claim_op);
 
         let encoded = op.encode();
-        let (remaining, decoded_op) = Op::decode(&encoded, ()).unwrap();
+        let (remaining, decoded_op) = Op::decode(&encoded, &()).unwrap();
         assert!(remaining.is_empty());
         assert_eq!(decoded_op, op);
     }
@@ -876,7 +876,7 @@ mod tests {
         // the decoder should reject it before trying to read that much
 
         // Try to decode - should fail with TooLarge error
-        let result = InscriptionOp::decode(&malicious_input, ());
+        let result = InscriptionOp::decode(&malicious_input, &());
         assert!(result.is_err(), "Should reject oversized inscription");
 
         // Verify it fails with the right error kind
@@ -918,7 +918,7 @@ mod tests {
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
-        let result = Ops::decode(&valid_input, ());
+        let result = Ops::decode(&valid_input, &());
         if let Err(err) = result {
             assert!(
                 !matches!(err, DecodeError::LengthOutOfBounds { .. }),
@@ -950,7 +950,7 @@ mod tests {
         valid_input.extend_from_slice(&pk.to_bytes());
 
         // Should succeed (though signature validation might fail later)
-        let result = InscriptionOp::decode(&valid_input, ());
+        let result = InscriptionOp::decode(&valid_input, &());
         assert!(
             result.is_ok(),
             "Should accept inscription at MAX_INSCRIPTION_SIZE: {result:?}",
@@ -974,7 +974,7 @@ mod tests {
         }
         .encode();
 
-        let err = ChannelConfigOp::decode(&encoded_config_op, ()).unwrap_err();
+        let err = ChannelConfigOp::decode(&encoded_config_op, &()).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 0, .. }));
     }
 
@@ -1013,7 +1013,7 @@ mod tests {
         // Withdraw Threshold (16 bytes)
         valid_input.extend_from_slice(&[0; 16]);
 
-        let result = ChannelConfigOp::decode(&valid_input, ());
+        let result = ChannelConfigOp::decode(&valid_input, &());
         assert!(result.is_ok(), "Should accept max key count: {result:?}");
 
         let (_, set_keys_op) = result.unwrap();
@@ -1039,7 +1039,7 @@ mod tests {
 
         // ... rest of SDPDeclare fields ...
 
-        let result = SDPDeclareOp::decode(&malicious_input, ());
+        let result = SDPDeclareOp::decode(&malicious_input, &());
         assert!(
             matches!(result, Err(DecodeError::LengthOutOfBounds { .. })),
             "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`",
@@ -1065,7 +1065,7 @@ mod tests {
 
         // ... rest of SDPDeclare fields ...
 
-        let result = SDPDeclareOp::decode(&malicious_input, ());
+        let result = SDPDeclareOp::decode(&malicious_input, &());
         if let Err(ref err) = result {
             assert!(
                 !matches!(err, DecodeError::LengthOutOfBounds { .. }),
@@ -1089,7 +1089,7 @@ mod tests {
         };
 
         let encoded = op.encode();
-        let result = SDPDeclareOp::decode(&encoded, ());
+        let result = SDPDeclareOp::decode(&encoded, &());
 
         assert!(
             matches!(result, Err(DecodeError::InvalidValue { .. })),
@@ -1111,7 +1111,7 @@ mod tests {
         );
 
         // Decode should succeed and produce the same number of inputs
-        let result = BoundedInputs::decode(&encoded, ());
+        let result = BoundedInputs::decode(&encoded, &());
         assert!(result.is_ok(), "Should decode max input count");
         let (_, decoded_inputs) = result.unwrap();
         assert_eq!(
@@ -1135,7 +1135,7 @@ mod tests {
         );
 
         // Decode should succeed and produce the same number of outputs
-        let result = BoundedOutputs::decode(&encoded, ());
+        let result = BoundedOutputs::decode(&encoded, &());
         assert!(result.is_ok(), "Should decode max output count");
         let (_, decoded_outputs) = result.unwrap();
         assert_eq!(
@@ -1156,7 +1156,7 @@ mod tests {
             valid_input.extend_from_slice(&[0x01; 32]);
         }
 
-        let result = BoundedInputs::decode(&valid_input, ());
+        let result = BoundedInputs::decode(&valid_input, &());
         assert!(result.is_ok(), "Should accept max input count");
         let (_, inputs) = result.unwrap();
         assert_eq!(inputs.len(), u8::MAX as usize);
@@ -1170,7 +1170,7 @@ mod tests {
             valid_output.extend_from_slice(&[0x02; 32]); // public key
         }
 
-        let result = BoundedOutputs::decode(&valid_output, ());
+        let result = BoundedOutputs::decode(&valid_output, &());
         assert!(result.is_ok(), "Should accept max output count");
         let (_, outputs) = result.unwrap();
         assert_eq!(outputs.len(), u8::MAX as usize);

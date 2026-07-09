@@ -92,7 +92,7 @@ impl WireDecode for ChannelMultiSigProof {
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (rest, inner) = IndexedSignatures::decode(input, &())?;
         let proof = Self::try_new(inner)
-            .map_err(|_| DecodeError::invalid_value::<Self>("invalid channel multi-sig proof"))?;
+            .map_err(|_| DecodeError::invalid_value::<Self>("Invalid channel multi-sig proof"))?;
         Ok((rest, proof))
     }
 }
@@ -268,7 +268,7 @@ mod tests {
         .into();
         let bytes = raw.encode();
         assert!(
-            ChannelMultiSigProof::decode(&bytes, ()).is_err(),
+            ChannelMultiSigProof::decode(&bytes, &()).is_err(),
             "decoding a proof with a repeated index must fail"
         );
     }
@@ -285,7 +285,7 @@ mod tests {
         .into();
         let bytes = raw.encode();
         assert!(
-            ChannelMultiSigProof::decode(&bytes, ()).is_err(),
+            ChannelMultiSigProof::decode(&bytes, &()).is_err(),
             "decoding a proof with out-of-order indices must fail"
         );
     }

@@ -1,4 +1,4 @@
-use lb_groth16::{Fr, serde::serde_fr};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
 use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
 use lb_wire::{DecodeError, WireDecode, WireEncode};
@@ -18,7 +18,7 @@ pub struct Groth16LeaderClaimProof {
 
 impl WireEncode for Groth16LeaderClaimProof {
     fn encoded_length(&self) -> usize {
-        self.proof.to_bytes().len()
+        COMPRESSED_PROOF_SIZE
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {

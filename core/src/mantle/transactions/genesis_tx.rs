@@ -720,7 +720,7 @@ mod tests {
     fn test_cryptarchia_parameter_roundtrip() {
         let param = cryptarchia_param();
         let encoded = param.encode();
-        let (_, decoded) = CryptarchiaParameter::decode(&encoded, ()).unwrap();
+        let (_, decoded) = CryptarchiaParameter::decode(&encoded, &()).unwrap();
         assert_eq!(param, decoded);
     }
 
@@ -747,13 +747,13 @@ mod tests {
         // A single byte is a complete 1-byte chain_id length prefix of 0, which
         // is below the chain_id minimum length of 1.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[0; 1], ()).unwrap_err(),
+            CryptarchiaParameter::decode(&[0; 1], &()).unwrap_err(),
             DecodeError::LengthOutOfBounds { .. }
         ));
 
         // Genuinely too short: not even the length prefix can be read.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[], ()).unwrap_err(),
+            CryptarchiaParameter::decode(&[], &()).unwrap_err(),
             DecodeError::UnexpectedEnd { .. }
         ));
 
@@ -761,7 +761,7 @@ mod tests {
         let mut bad = vec![0; 48];
         bad[0] = 100; // chain_id_len = 100
         assert!(matches!(
-            CryptarchiaParameter::decode(&bad, ()).unwrap_err(),
+            CryptarchiaParameter::decode(&bad, &()).unwrap_err(),
             DecodeError::UnexpectedEnd { .. }
         ));
 
@@ -770,7 +770,7 @@ mod tests {
         let mut encoded = cryptarchia_param().encode_to_vec();
         encoded[1] = 0xFF; // corrupt the first chain_id UTF-8 byte
         assert!(matches!(
-            CryptarchiaParameter::decode(&encoded, ()).unwrap_err(),
+            CryptarchiaParameter::decode(&encoded, &()).unwrap_err(),
             DecodeError::InvalidValue { .. }
         ));
     }

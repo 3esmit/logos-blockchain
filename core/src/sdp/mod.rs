@@ -11,7 +11,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
+use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
 use lb_wire::{DecodeError, WireCodec, WireDecode, WireEncode};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
@@ -94,13 +94,7 @@ pub struct InactivityPeriodTooSmall {
 
 pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 
-/// A [`Multiaddr`] whose byte length is bounded to `[0,
-/// MAX_LOCATOR_BYTE_SIZE]`.
-///
-/// The shared `lb_utils::bounded` wrapper enforces the byte-length invariant
-/// using `Multiaddr::len()`. `Locator::try_from` performs the additional
-/// locator-specific validation below, such as rejecting unspecified, loopback,
-/// multicast, documentation, and link-local addresses.
+type BoundedMultiaddrBytes = BoundedVec<u8, 0, MAX_LOCATOR_BYTE_SIZE>;
 type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LOCATOR_BYTE_SIZE>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -129,10 +123,8 @@ impl Locator {
     }
 
     /// The length-prefixed byte view used by the wire codec.
-    fn as_bounded_bytes(&self) -> UpperBoundedVec<u8, MAX_LOCATOR_BYTE_SIZE> {
-        UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::new_unchecked(
-            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
-        )
+    fn as_bounded_bytes(&self) -> BoundedMultiaddrBytes {
+        BoundedMultiaddrBytes::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned())
     }
 }
 
@@ -223,7 +215,7 @@ impl Display for Locator {
 
 impl WireEncode for Locator {
     fn encoded_length(&self) -> usize {
-        self.as_bounded_bytes().encoded_length()
+        MAX_LOCATOR_BYTE_SIZE
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -238,9 +230,9 @@ impl WireDecode for Locator {
         input: &'input [u8],
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, value) = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::decode(input, &())?;
+        let (rest, value) = BoundedMultiaddrBytes::decode(input, &())?;
         let locator = Self::try_from(value)
-            .map_err(|_| DecodeError::invalid_value::<Self>("invalid locator bytes"))?;
+            .map_err(|_| DecodeError::invalid_value::<Self>("Invalid locator bytes"))?;
         Ok((rest, locator))
     }
 }

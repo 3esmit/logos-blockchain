@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
-use lb_wire::{WireCodec, WireEncode};
+use lb_wire::{WireCodec, WireEncode as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

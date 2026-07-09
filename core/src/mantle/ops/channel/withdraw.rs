@@ -1,4 +1,4 @@
-use lb_wire::{WireCodec, WireEncode};
+use lb_wire::{WireCodec, WireEncode as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{

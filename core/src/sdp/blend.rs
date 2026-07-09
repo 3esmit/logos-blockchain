@@ -35,17 +35,20 @@ impl WireEncode for ActivityProof {
 impl WireDecode for ActivityProof {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (input, proof_version) = u8::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, proof_version) = u8::decode(input, &())?;
         if proof_version != BLEND_ACTIVE_METADATA_VERSION_BYTE {
             return Err(DecodeError::invalid_value::<Self>(
                 "unsupported activity proof version",
             ));
         }
-        let (input, epoch) = Epoch::decode(input, ())?;
-        let (input, signing_key) = Ed25519PublicKey::decode(input, ())?;
-        let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
-        let (input, proof_of_selection) = ProofOfSelection::decode(input, ())?;
+        let (input, epoch) = Epoch::decode(input, &())?;
+        let (input, signing_key) = Ed25519PublicKey::decode(input, &())?;
+        let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
+        let (input, proof_of_selection) = ProofOfSelection::decode(input, &())?;
         Ok((
             input,
             Self {
@@ -84,7 +87,7 @@ mod tests {
         };
 
         let bytes = proof.encode_to_vec();
-        let (_, decoded) = ActivityProof::decode(&bytes, ()).unwrap();
+        let (_, decoded) = ActivityProof::decode(&bytes, &()).unwrap();
 
         assert_eq!(proof, decoded);
     }
@@ -100,7 +103,7 @@ mod tests {
         let mut bytes = proof.encode_to_vec();
         bytes[0] = 0x99; // Invalid version
 
-        let err = ActivityProof::decode(&bytes, ()).unwrap_err();
+        let err = ActivityProof::decode(&bytes, &()).unwrap_err();
         assert!(matches!(err, DecodeError::InvalidValue { .. }));
     }
 
@@ -108,7 +111,7 @@ mod tests {
     fn activity_proof_too_short() {
         let bytes = vec![BLEND_ACTIVE_METADATA_VERSION_BYTE, 0x01, 0x02]; // Only 3 bytes
 
-        let err = ActivityProof::decode(&bytes, ()).unwrap_err();
+        let err = ActivityProof::decode(&bytes, &()).unwrap_err();
         assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
     }
 
@@ -123,7 +126,7 @@ mod tests {
         let metadata = ActivityMetadata::Blend(Box::new(proof.clone()));
 
         let bytes = metadata.encode_to_vec();
-        let (_, decoded) = ActivityMetadata::decode(&bytes, ()).unwrap();
+        let (_, decoded) = ActivityMetadata::decode(&bytes, &()).unwrap();
 
         assert_eq!(metadata, decoded);
 

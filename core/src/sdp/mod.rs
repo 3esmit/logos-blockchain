@@ -127,6 +127,13 @@ impl Locator {
     pub fn is_empty(&self) -> bool {
         self.0.as_inner().is_empty()
     }
+
+    /// The length-prefixed byte view used by the wire codec.
+    fn as_bounded_bytes(&self) -> UpperBoundedVec<u8, MAX_LOCATOR_BYTE_SIZE> {
+        UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::new_unchecked(
+            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
+        )
+    }
 }
 
 impl AsRef<Multiaddr> for Locator {
@@ -224,20 +231,14 @@ impl WireEncode for Locator {
     }
 }
 
-impl Locator {
-    /// The length-prefixed byte view used by the wire codec.
-    fn as_bounded_bytes(&self) -> UpperBoundedVec<u8, MAX_LOCATOR_BYTE_SIZE> {
-        UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::new_unchecked(
-            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
-        )
-    }
-}
-
 impl WireDecode for Locator {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (rest, value) = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::decode(input, &())?;
         let locator = Self::try_from(value)
             .map_err(|_| DecodeError::invalid_value::<Self>("invalid locator bytes"))?;
         Ok((rest, locator))
@@ -290,8 +291,11 @@ impl WireEncode for ServiceType {
 impl WireDecode for ServiceType {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (rest, value) = u8::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = u8::decode(input, &())?;
         let service = Self::try_from(value)
             .map_err(|()| DecodeError::invalid_value::<Self>("unknown service type"))?;
         Ok((rest, service))
@@ -534,11 +538,14 @@ impl WireEncode for ActivityMetadata {
 impl WireDecode for ActivityMetadata {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (input, metadata_type) = u8::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, metadata_type) = u8::decode(input, &())?;
         match metadata_type {
             ACTIVE_METADATA_BLEND_TYPE => {
-                let (input, proof) = blend::ActivityProof::decode(input, ())?;
+                let (input, proof) = blend::ActivityProof::decode(input, &())?;
                 Ok((input, Self::Blend(Box::new(proof))))
             }
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),

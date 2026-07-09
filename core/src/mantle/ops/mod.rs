@@ -110,7 +110,7 @@ impl<'de> Deserialize<'de> for Op {
             OpDe::deserialize(deserializer).map(Self::from)
         } else {
             let bytes = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes, ())
+            Self::decode(&bytes, &())
                 .map(|(_, op)| op)
                 .map_err(serde::de::Error::custom)
         }
@@ -153,34 +153,35 @@ impl WireEncode for Op {
 impl WireDecode for Op {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (input, opcode) = u8::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, opcode) = u8::decode(input, &())?;
 
         match opcode {
-            INSCRIBE => {
-                InscriptionOp::decode(input, ()).map(|(rest, op)| (rest, Self::ChannelInscribe(op)))
-            }
-            CHANNEL_CONFIG => {
-                ChannelConfigOp::decode(input, ()).map(|(rest, op)| (rest, Self::ChannelConfig(op)))
-            }
+            INSCRIBE => InscriptionOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ChannelInscribe(op))),
+            CHANNEL_CONFIG => ChannelConfigOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ChannelConfig(op))),
             CHANNEL_DEPOSIT => {
-                DepositOp::decode(input, ()).map(|(rest, op)| (rest, Self::ChannelDeposit(op)))
+                DepositOp::decode(input, &()).map(|(rest, op)| (rest, Self::ChannelDeposit(op)))
             }
-            CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(input, ())
+            CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelWithdraw(op))),
             SDP_DECLARE => {
-                SDPDeclareOp::decode(input, ()).map(|(rest, op)| (rest, Self::SDPDeclare(op)))
+                SDPDeclareOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPDeclare(op)))
             }
             SDP_WITHDRAW => {
-                SDPWithdrawOp::decode(input, ()).map(|(rest, op)| (rest, Self::SDPWithdraw(op)))
+                SDPWithdrawOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPWithdraw(op)))
             }
             SDP_ACTIVE => {
-                SDPActiveOp::decode(input, ()).map(|(rest, op)| (rest, Self::SDPActive(op)))
+                SDPActiveOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPActive(op)))
             }
             LEADER_CLAIM => {
-                LeaderClaimOp::decode(input, ()).map(|(rest, op)| (rest, Self::LeaderClaim(op)))
+                LeaderClaimOp::decode(input, &()).map(|(rest, op)| (rest, Self::LeaderClaim(op)))
             }
-            TRANSFER => TransferOp::decode(input, ()).map(|(rest, op)| (rest, Self::Transfer(op))),
+            TRANSFER => TransferOp::decode(input, &()).map(|(rest, op)| (rest, Self::Transfer(op))),
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
     }

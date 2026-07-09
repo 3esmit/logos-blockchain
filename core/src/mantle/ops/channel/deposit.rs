@@ -1,6 +1,6 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_utils::bounded::UpperBoundedVec;
-use lb_wire::{WireCodec, WireEncode};
+use lb_wire::{WireCodec, WireEncode as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{

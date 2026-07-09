@@ -1,6 +1,6 @@
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_wire::{DecodeError, WireDecode as _, WireEncode as _};
 
 use crate::{
     mantle::{
@@ -13,7 +13,7 @@ use crate::{
 
 pub fn decode_signed_mantle_tx(input: &[u8]) -> Result<(&[u8], SignedMantleTx), DecodeError> {
     // SignedMantleTx = MantleTx OpsProofs
-    let (input, mantle_tx) = MantleTx::decode(input, ())?;
+    let (input, mantle_tx) = MantleTx::decode(input, &())?;
     let (input, ops_proofs) = decode_ops_proofs(input, mantle_tx.ops())?;
 
     let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs)

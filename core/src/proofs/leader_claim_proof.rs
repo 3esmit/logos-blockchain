@@ -29,8 +29,11 @@ impl WireEncode for Groth16LeaderClaimProof {
 impl WireDecode for Groth16LeaderClaimProof {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (rest, inner) = <[u8; _]>::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = <[u8; _]>::decode(input, &())?;
         Ok((
             rest,
             Self {

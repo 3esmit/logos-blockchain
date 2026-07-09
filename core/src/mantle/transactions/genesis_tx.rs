@@ -151,7 +151,7 @@ fn valid_cryptarchia_inscription(
     }
 
     Ok(
-        CryptarchiaParameter::decode(inscription.inscription.as_ref(), ())
+        CryptarchiaParameter::decode(inscription.inscription.as_ref(), &())
             .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))?
             .1,
     )
@@ -293,6 +293,10 @@ impl ChainId {
     pub const fn is_empty(&self) -> bool {
         self.0.as_inner().is_empty()
     }
+
+    fn as_bounded_bytes(&self) -> ChainIdBoundedVec {
+        ChainIdBoundedVec::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned())
+    }
 }
 
 impl Display for ChainId {
@@ -358,18 +362,14 @@ impl WireEncode for ChainId {
     }
 }
 
-impl ChainId {
-    /// The length-prefixed byte view used by the wire codec.
-    fn as_bounded_bytes(&self) -> ChainIdBoundedVec {
-        ChainIdBoundedVec::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned())
-    }
-}
-
 impl WireDecode for ChainId {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (rest, value) = ChainIdBoundedVec::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = ChainIdBoundedVec::decode(input, &())?;
         let chain_id = Self::try_from(value)
             .map_err(|_| DecodeError::invalid_value::<Self>("invalid chain id bytes"))?;
         Ok((rest, chain_id))

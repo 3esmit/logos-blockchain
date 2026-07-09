@@ -86,8 +86,11 @@ impl WireEncode for ChannelMultiSigProof {
 impl WireDecode for ChannelMultiSigProof {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (rest, inner) = IndexedSignatures::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = IndexedSignatures::decode(input, &())?;
         let proof = Self::try_new(inner)
             .map_err(|_| DecodeError::invalid_value::<Self>("invalid channel multi-sig proof"))?;
         Ok((rest, proof))

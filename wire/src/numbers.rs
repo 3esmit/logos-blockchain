@@ -18,7 +18,10 @@ macro_rules! impl_le_integer {
         impl WireDecode for $ty {
             type Context = ();
 
-            fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
+            fn decode<'input>(
+                input: &'input [u8],
+                (): &Self::Context,
+            ) -> Result<(&'input [u8], Self), DecodeError> {
                 let (head, rest) = take::<Self>(input, ::core::mem::size_of::<$ty>())?;
                 let value =
                     <$ty>::from_le_bytes(head.try_into().expect("take took the right length"));
@@ -52,11 +55,14 @@ impl WireEncode for Fr {
 impl WireDecode for Fr {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
         let (head, rest) = take::<Self>(input, 32)?;
         let bytes: [u8; 32] = head.try_into().expect("take took the right length");
         let value = fr_from_bytes(&bytes)
-            .map_err(|_| DecodeError::invalid_value::<Self>("not a canonical field element"))?;
+            .map_err(|_| DecodeError::invalid_value::<Self, _>("not a canonical field element"))?;
         Ok((rest, value))
     }
 }

@@ -10,7 +10,7 @@ use crate::{WireDecode, WireEncode};
 /// Sealed via [`crate::sealed::Sealed`], so the only ways to satisfy it are
 /// `#[derive(WireCodec)]` and `wire_fixtures!`, both of which demand a fixture.
 /// It is a supertrait of both codec traits, so `impl WireEncode for Foo`
-/// without a fixture is a `cargo build` error (E0277).
+/// without a fixture is a compilation error.
 pub trait WireExamples: crate::sealed::Sealed + Sized {
     #[must_use]
     fn fixtures() -> WireFixtures<Self>;
@@ -41,7 +41,7 @@ pub fn assert_wire_fixtures<T>()
 where
     T: WireEncode + WireDecode<Context = ()> + PartialEq + core::fmt::Debug,
 {
-    assert_wire_fixtures_with::<T>(|| ());
+    assert_wire_fixtures_with::<T, _>(|| ());
 }
 
 /// Like [`assert_wire_fixtures`], but for encode-only codecs (types that
@@ -76,9 +76,10 @@ where
 /// Like [`assert_wire_fixtures`], but for codecs whose `Context` is not `()`:
 /// `make_context` produces a fresh context per decode.
 #[doc(hidden)]
-pub fn assert_wire_fixtures_with<T>(make_context: impl Fn() -> T::Context)
+pub fn assert_wire_fixtures_with<T, ContextBuilder>(make_context: ContextBuilder)
 where
     T: WireEncode + WireDecode + PartialEq + core::fmt::Debug,
+    ContextBuilder: Fn() -> T::Context,
 {
     let type_name = core::any::type_name::<T>();
 
@@ -107,7 +108,8 @@ where
 
         // Golden decode: the pinned bytes decode back to the value, leaving
         // nothing behind.
-        let (rest, decoded) = T::decode(expected, make_context()).unwrap_or_else(|err| {
+        let context = make_context();
+        let (rest, decoded) = T::decode(expected, &context).unwrap_or_else(|err| {
             panic!(
                 "{type_name}: well-known bytes failed to decode: {err:?}\n  bytes (hex): {}",
                 hex::encode(expected),
@@ -127,7 +129,7 @@ where
 
         // Round-trip: encode then decode is the identity (independent of the
         // pinned bytes, so it catches encode/decode asymmetry directly).
-        let (rest, round_tripped) = T::decode(&encoded, make_context())
+        let (rest, round_tripped) = T::decode(&encoded, &context)
             .unwrap_or_else(|err| panic!("{type_name}: round-trip decode failed: {err:?}"));
         assert!(
             rest.is_empty(),

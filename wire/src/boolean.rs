@@ -14,12 +14,15 @@ impl WireEncode for bool {
 impl WireDecode for bool {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (rest, byte) = u8::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, byte) = u8::decode(input, context)?;
         match byte {
             0 => Ok((rest, false)),
             1 => Ok((rest, true)),
-            _ => Err(DecodeError::invalid_value::<Self>(
+            _ => Err(DecodeError::invalid_value::<Self, _>(
                 "a bool byte must be 0 or 1",
             )),
         }

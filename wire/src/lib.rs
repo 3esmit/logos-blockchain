@@ -4,18 +4,13 @@
 //! every on-the-wire type implements, replacing the previously separate
 //! `WireEncode`/`WireDecode` (Mantle) and `WireEncode`/`WireDecode` (Blend)
 //! families. Primitives, fixed-size arrays and `BoundedVec` get default impls
-//! here; domain types implement the traits in their own crate (orphan rule) via
-//! `#[derive(WireCodec)]` for the trivial field-order case, or by hand.
+//! here.
 //!
 //! Every codec must also ship at least one **well-known fixture** (a value and
 //! its exact wire bytes). This is enforced at compile time: both codec traits
 //! require [`WireExamples`], whose only sanctioned implementation path is
 //! [`wire_fixtures!`] / `#[derive(WireCodec)]`, so a codec without a fixture is
-//! a `cargo build` error.
-//!
-//! `encode`/`decode` never allocate beyond the caller's buffer, use
-//! little-endian integers, and decode returns the value plus the unconsumed
-//! remainder (`(rest, value)`, as in `nom`).
+//! a compilation error.
 
 // The derive and `wire_fixtures!` expansions refer to this crate as
 // `::lb_wire`, so the crate must be able to name itself that way when it uses
@@ -25,11 +20,12 @@ extern crate self as lb_wire;
 mod array;
 mod boolean;
 mod bounded_vec;
-#[cfg(test)]
-mod derive_smoke;
 mod error;
 mod fixtures;
 mod numbers;
+
+#[cfg(test)]
+mod derive_smoke;
 
 pub use error::DecodeError;
 pub use fixtures::{
@@ -65,9 +61,7 @@ pub trait WireEncode: WireExamples {
 
     /// Encode into a freshly allocated, exactly-sized boxed slice.
     fn encode(&self) -> Box<[u8]> {
-        let mut out = Vec::with_capacity(self.encoded_length());
-        self.encode_into(&mut out);
-        out.into_boxed_slice()
+        self.encode_to_vec().into_boxed_slice()
     }
 
     /// Encode into a freshly allocated `Vec<u8>` — the ergonomic bridge for the
@@ -88,18 +82,21 @@ pub trait WireEncode: WireExamples {
 pub trait WireDecode: WireExamples + Sized {
     type Context;
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), DecodeError>;
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError>;
 }
 
 /// Ergonomic decode for the common `Context = ()` case:
-/// `T::decode_default(bytes)` instead of `T::decode(bytes, ())`.
+/// `T::decode_without_context(bytes)` instead of `T::decode(bytes, ())`.
 pub trait WireDecodeExt: WireDecode<Context = ()> {
-    fn decode_default(input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
-        Self::decode(input, ())
+    fn decode_without_context(input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
+        Self::decode(input, &())
     }
 }
 
-impl<T: WireDecode<Context = ()>> WireDecodeExt for T {}
+impl<T> WireDecodeExt for T where T: WireDecode<Context = ()> {}
 
 /// Split `n` bytes off the front of `input`, returning `(head, rest)`, or fail
 /// with [`DecodeError::UnexpectedEnd`] naming `T`.

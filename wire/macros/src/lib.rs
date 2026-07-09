@@ -84,13 +84,13 @@ fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         impl ::lb_wire::WireDecode for #ident {
             type Context = ();
 
-            fn decode(
-                input: &[u8],
-                (): Self::Context,
-            ) -> ::core::result::Result<(&[u8], Self), ::lb_wire::DecodeError> {
+            fn decode<'input>(
+                input: &'input [u8],
+                (): &Self::Context,
+            ) -> ::core::result::Result<(&'input [u8], Self), ::lb_wire::DecodeError> {
                 #(
                     let (input, #decode_bindings) =
-                        <#field_types as ::lb_wire::WireDecode>::decode(input, ())?;
+                        <#field_types as ::lb_wire::WireDecode>::decode(input, &())?;
                 )*
                 ::core::result::Result::Ok((input, #constructor))
             }
@@ -168,25 +168,29 @@ struct Fixture {
 /// `encode_to_vec`.
 fn fixture_tokens(fixture: &Fixture) -> TokenStream2 {
     let value = &fixture.value;
-    match &fixture.bytes {
-        Some(bytes) => quote! {
-            ::lb_wire::WireFixture {
-                value: #value,
-                bytes: ::std::borrow::Cow::Borrowed(&[ #(#bytes),* ]),
-            }
-        },
-        None => quote! {
-            {
-                let __fixture_value = #value;
-                ::lb_wire::WireFixture {
-                    bytes: ::std::borrow::Cow::Owned(
-                        ::lb_wire::WireEncode::encode_to_vec(&__fixture_value),
-                    ),
-                    value: __fixture_value,
+    fixture.bytes.as_ref().map_or_else(
+        || {
+            quote! {
+                {
+                    let __fixture_value = #value;
+                    ::lb_wire::WireFixture {
+                        bytes: ::std::borrow::Cow::Owned(
+                            ::lb_wire::WireEncode::encode_to_vec(&__fixture_value),
+                        ),
+                        value: __fixture_value,
+                    }
                 }
             }
         },
-    }
+        |bytes| {
+            quote! {
+                ::lb_wire::WireFixture {
+                    value: #value,
+                    bytes: ::std::borrow::Cow::Borrowed(&[ #(#bytes),* ]),
+                }
+            }
+        },
+    )
 }
 
 /// Attach well-known fixtures (and a round-trip test) to a hand-written codec.

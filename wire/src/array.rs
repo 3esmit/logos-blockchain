@@ -21,23 +21,24 @@ where
 
 impl<T, const N: usize> WireDecode for [T; N]
 where
-    T: WireDecode<Context = ()>,
+    T: WireDecode,
 {
-    type Context = ();
+    type Context = T::Context;
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), crate::DecodeError> {
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), crate::DecodeError> {
         let mut rest = input;
         let mut items = Vec::with_capacity(N);
         for _ in 0..N {
-            let (next, item) = T::decode(rest, ())?;
+            let (next, item) = T::decode(rest, context)?;
             rest = next;
             items.push(item);
         }
 
-        let array = match <[T; N]>::try_from(items) {
-            Ok(array) => array,
-            Err(_) => unreachable!("decoded exactly `N` elements"),
-        };
+        let array = <[T; N]>::try_from(items)
+            .unwrap_or_else(|_| unreachable!("decoded exactly `N` elements"));
         Ok((rest, array))
     }
 }

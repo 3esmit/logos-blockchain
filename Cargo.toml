@@ -39,7 +39,6 @@ members = [
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
   "core",
-  "core/macros",
   "deployment/faucet",
   "deployment/l2-sequencer-archival-demo/archiver",
   "deployment/l2-sequencer-archival-demo/sequencer",

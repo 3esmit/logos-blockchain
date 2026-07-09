@@ -518,7 +518,9 @@ const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
 impl NomEncode for ActivityMetadata {
     fn encoded_length(&self) -> usize {
         match self {
-            Self::Blend(proof) => ACTIVE_METADATA_BLEND_TYPE.encoded_length() + proof.encoded_length(),
+            Self::Blend(proof) => {
+                ACTIVE_METADATA_BLEND_TYPE.encoded_length() + proof.encoded_length()
+            }
         }
     }
 

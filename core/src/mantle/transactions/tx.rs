@@ -5,7 +5,6 @@ use std::{
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use crate::mantle::nom::NomCodec;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -16,7 +15,7 @@ use crate::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         channel::Channels,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
-        nom::{NomDecode as _, NomEncode as _},
+        nom::{NomCodec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},

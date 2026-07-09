@@ -1,6 +1,5 @@
 use std::sync::LazyLock;
 
-use crate::mantle::nom::NomCodec;
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
@@ -13,7 +12,7 @@ use crate::{
     mantle::{
         Note, TxHash, Utxo, Value,
         ledger::{Operation, Utxos},
-        nom::NomEncode as _,
+        nom::{NomCodec, NomEncode as _},
         ops::OpId,
     },
     proofs::leader_claim_proof::{

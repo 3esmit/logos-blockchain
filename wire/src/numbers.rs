@@ -1,21 +1,6 @@
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 
-use crate::{DecodeError, WireDecode, WireEncode, wire_fixtures};
-
-/// Split `n` bytes off the front of `input`, or fail with an
-/// [`UnexpectedEnd`](DecodeError::UnexpectedEnd) that names `T`.
-///
-/// Returns `(head, rest)`. This is the single length check for every fixed-size
-/// primitive decode — replacing the panicking `split_at`/index the two legacy
-/// codecs used.
-pub(crate) fn split_prefix<T: ?Sized>(
-    input: &[u8],
-    n: usize,
-) -> Result<(&[u8], &[u8]), DecodeError> {
-    input
-        .split_at_checked(n)
-        .ok_or_else(|| DecodeError::end_of_input::<T>(n.saturating_sub(input.len())))
-}
+use crate::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
 
 /// `WireEncode`/`WireDecode` for a little-endian fixed-width integer.
 macro_rules! impl_le_integer {
@@ -34,8 +19,9 @@ macro_rules! impl_le_integer {
             type Context = ();
 
             fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-                let (head, rest) = split_prefix::<Self>(input, ::core::mem::size_of::<$ty>())?;
-                let value = <$ty>::from_le_bytes(head.try_into().expect("split_prefix took the right length"));
+                let (head, rest) = take::<Self>(input, ::core::mem::size_of::<$ty>())?;
+                let value =
+                    <$ty>::from_le_bytes(head.try_into().expect("take took the right length"));
                 Ok((rest, value))
             }
         }
@@ -67,8 +53,8 @@ impl WireDecode for Fr {
     type Context = ();
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (head, rest) = split_prefix::<Self>(input, 32)?;
-        let bytes: [u8; 32] = head.try_into().expect("split_prefix took the right length");
+        let (head, rest) = take::<Self>(input, 32)?;
+        let bytes: [u8; 32] = head.try_into().expect("take took the right length");
         let value = fr_from_bytes(&bytes)
             .map_err(|_| DecodeError::invalid_value::<Self>("not a canonical field element"))?;
         Ok((rest, value))

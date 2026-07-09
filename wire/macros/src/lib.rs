@@ -2,22 +2,23 @@
 //! crate `lb-wire`).
 //!
 //! - [`macro@WireCodec`] — `#[derive(WireCodec)]` for named or tuple structs.
-//!   Generates *only* the codec: `WireEncode` (field-order concatenation, with a
-//!   summed `encoded_length`) and `WireDecode` (decode each field in order with a
-//!   `()` context, then `Self { .. }` / `Self(..)`). The decode is infallible
-//!   positional construction, so a newtype needing a fallible `try_from` keeps a
-//!   hand-written impl. The well-known fixture is supplied separately by
-//!   [`wire_fixtures!`]; because both codec traits require `WireExamples`, a
-//!   derived type that lacks a `wire_fixtures!` does not compile.
+//!   Generates *only* the codec: `WireEncode` (field-order concatenation, with
+//!   a summed `encoded_length`) and `WireDecode` (decode each field in order
+//!   with a `()` context, then `Self { .. }` / `Self(..)`). The decode is
+//!   infallible positional construction, so a newtype needing a fallible
+//!   `try_from` keeps a hand-written impl. The well-known fixture is supplied
+//!   separately by [`wire_fixtures!`]; because both codec traits require
+//!   `WireExamples`, a derived type that lacks a `wire_fixtures!` does not
+//!   compile.
 //! - [`wire_fixtures!`] — the single source of fixtures. Emits the sealed
 //!   `WireExamples` impl and a `#[cfg(test)]` round-trip test for any codec
 //!   (derived, hand-written, primitive, or foreign). For codecs whose
-//!   `WireDecode::Context` is not `()`, pass `context = <expr>` so the generated
-//!   test can build a context.
+//!   `WireDecode::Context` is not `()`, pass `context = <expr>` so the
+//!   generated test can build a context.
 //!
-//! Generated code refers to the codec crate by the absolute path `::lb_wire::…`,
-//! so the macros expand correctly in any crate that depends on `lb-wire` (the
-//! crate itself uses `extern crate self as lb_wire;`).
+//! Generated code refers to the codec crate by the absolute path
+//! `::lb_wire::…`, so the macros expand correctly in any crate that depends on
+//! `lb-wire` (the crate itself uses `extern crate self as lb_wire;`).
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -31,8 +32,8 @@ use syn::{
 /// Derive `WireEncode` + `WireDecode` for a named or tuple struct with an
 /// infallible positional decode and a `()` decode context.
 ///
-/// Both codec traits require `WireExamples`, so a derived type must also pin its
-/// well-known fixture with [`wire_fixtures!`] or it will not compile.
+/// Both codec traits require `WireExamples`, so a derived type must also pin
+/// its well-known fixture with [`wire_fixtures!`] or it will not compile.
 #[proc_macro_derive(WireCodec)]
 pub fn derive_wire_codec(input: TokenStream) -> TokenStream {
     let parsed_input = parse_macro_input!(input as DeriveInput);
@@ -151,34 +152,51 @@ fn field_layout<'a>(ident: &Ident, fields: &'a Fields) -> syn::Result<FieldLayou
     })
 }
 
-/// A single parsed well-known fixture: a value expression and its canonical wire
-/// bytes (decoded from hex at macro-expansion time).
+/// A single parsed well-known fixture: a value expression and its canonical
+/// wire bytes. `bytes` is `Some` when pinned as hex (`value => "hex"`) and
+/// `None` for `value => roundtrip`, where the bytes are computed from
+/// `encode()` at runtime (a round-trip / `encoded_length` check, for components
+/// too large to pin as a literal).
 struct Fixture {
     value: Expr,
-    bytes: Vec<u8>,
+    bytes: Option<Vec<u8>>,
 }
 
-/// Render a [`Fixture`] into a `WireFixture { .. }` literal. The bytes were
-/// decoded at expansion time, so they are emitted as a borrowed `&'static`
-/// slice — no runtime hex decoding.
+/// Render a [`Fixture`] into a `WireFixture { .. }` expression. Pinned bytes
+/// were decoded at expansion time and are emitted as a borrowed `&'static`
+/// slice; `roundtrip` bytes are computed once from the value via
+/// `encode_to_vec`.
 fn fixture_tokens(fixture: &Fixture) -> TokenStream2 {
     let value = &fixture.value;
-    let bytes = &fixture.bytes;
-    quote! {
-        ::lb_wire::WireFixture {
-            value: #value,
-            bytes: ::std::borrow::Cow::Borrowed(&[ #(#bytes),* ]),
-        }
+    match &fixture.bytes {
+        Some(bytes) => quote! {
+            ::lb_wire::WireFixture {
+                value: #value,
+                bytes: ::std::borrow::Cow::Borrowed(&[ #(#bytes),* ]),
+            }
+        },
+        None => quote! {
+            {
+                let __fixture_value = #value;
+                ::lb_wire::WireFixture {
+                    bytes: ::std::borrow::Cow::Owned(
+                        ::lb_wire::WireEncode::encode_to_vec(&__fixture_value),
+                    ),
+                    value: __fixture_value,
+                }
+            }
+        },
     }
 }
 
 /// Attach well-known fixtures (and a round-trip test) to a hand-written codec.
 ///
-/// For primitives, foreign types, newtypes, and the element types of the generic
-/// blanket impls — anything `#[derive(WireCodec)]` cannot reach. Takes one or
-/// more `value => "hex"` pairs. For a codec whose `WireDecode::Context` is not
-/// `()`, prefix the pairs with `context = <expr>,` so the generated round-trip
-/// test can build a context (the expression must not reference `Self`).
+/// For primitives, foreign types, newtypes, and the element types of the
+/// generic blanket impls — anything `#[derive(WireCodec)]` cannot reach. Takes
+/// one or more `value => "hex"` pairs. For a codec whose `WireDecode::Context`
+/// is not `()`, prefix the pairs with `context = <expr>,` so the generated
+/// round-trip test can build a context (the expression must not reference
+/// `Self`).
 ///
 /// ```ignore
 /// wire_fixtures!(u32, 0x0403_0201_u32 => "01020304");
@@ -187,11 +205,7 @@ fn fixture_tokens(fixture: &Fixture) -> TokenStream2 {
 /// ```
 #[proc_macro]
 pub fn wire_fixtures(input: TokenStream) -> TokenStream {
-    let WireFixtureInput {
-        ty,
-        context,
-        fixtures,
-    } = parse_macro_input!(input as WireFixtureInput);
+    let WireFixtureInput { ty, mode, fixtures } = parse_macro_input!(input as WireFixtureInput);
     let fixture_exprs = fixtures.iter().map(fixture_tokens);
 
     let sanitized: String = quote!(#ty)
@@ -201,12 +215,15 @@ pub fn wire_fixtures(input: TokenStream) -> TokenStream {
         .collect();
     let test_mod = Ident::new(&format!("__wire_fixture_{sanitized}"), Span::call_site());
 
-    let round_trip = match context {
-        Some(context) => quote! {
-            ::lb_wire::assert_wire_fixtures_with::<#ty>(|| #context);
-        },
-        None => quote! {
+    let round_trip = match mode {
+        FixtureMode::Normal => quote! {
             ::lb_wire::assert_wire_fixtures::<#ty>();
+        },
+        FixtureMode::EncodeOnly => quote! {
+            ::lb_wire::assert_wire_fixtures_encode_only::<#ty>();
+        },
+        FixtureMode::Context(context) => quote! {
+            ::lb_wire::assert_wire_fixtures_with::<#ty>(|| #context);
         },
     };
 
@@ -235,11 +252,21 @@ pub fn wire_fixtures(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Parsed input of [`wire_fixtures!`]: `Type, [context = <expr>,] value => "hex",
-/// …` — at least one `value => "hex"` pair.
+/// Which round-trip driver the generated test calls.
+enum FixtureMode {
+    /// Full encode + decode round trip (the default).
+    Normal,
+    /// Encode-only codec (implements `WireEncode` but not `WireDecode`).
+    EncodeOnly,
+    /// Non-`()` decode context, built from the given expression.
+    Context(Expr),
+}
+
+/// Parsed input of [`wire_fixtures!`]: `Type, [encode_only,|context = <expr>,]
+/// value => "hex", …` — at least one `value => "hex"` pair.
 struct WireFixtureInput {
     ty: Type,
-    context: Option<Expr>,
+    mode: FixtureMode,
     fixtures: Vec<Fixture>,
 }
 
@@ -248,31 +275,54 @@ impl Parse for WireFixtureInput {
         let ty: Type = input.parse()?;
         input.parse::<Token![,]>()?;
 
-        // Optional `context = <expr>,` for codecs whose decode context is not `()`.
-        let context = if input.peek(Ident) && input.peek2(Token![=]) && !input.peek2(Token![==]) {
+        // Optional mode selector: `encode_only,` or `context = <expr>,`.
+        let mode = if input.peek(Ident) && input.peek2(Token![,]) {
+            let keyword: Ident = input.parse()?;
+            if keyword != "encode_only" {
+                return Err(syn::Error::new_spanned(
+                    &keyword,
+                    "expected `encode_only`, `context = <expr>`, or a `value => \"hex\"` pair",
+                ));
+            }
+            input.parse::<Token![,]>()?;
+            FixtureMode::EncodeOnly
+        } else if input.peek(Ident) && input.peek2(Token![=]) && !input.peek2(Token![==]) {
             let keyword: Ident = input.parse()?;
             if keyword != "context" {
                 return Err(syn::Error::new_spanned(
                     &keyword,
-                    "expected `context = <expr>` or a `value => \"hex\"` pair",
+                    "expected `encode_only`, `context = <expr>`, or a `value => \"hex\"` pair",
                 ));
             }
             input.parse::<Token![=]>()?;
             let expr: Expr = input.parse()?;
             input.parse::<Token![,]>()?;
-            Some(expr)
+            FixtureMode::Context(expr)
         } else {
-            None
+            FixtureMode::Normal
         };
 
         let mut fixtures = Vec::new();
         while !input.is_empty() {
             let value: Expr = input.parse()?;
             input.parse::<Token![=>]>()?;
-            let lit: LitStr = input.parse()?;
-            let bytes = hex::decode(lit.value()).map_err(|err| {
-                syn::Error::new(lit.span(), format!("`bytes` is not valid hex: {err}"))
-            })?;
+            // RHS is either a hex string literal (pinned) or the `roundtrip`
+            // keyword (bytes computed from `encode()` at runtime).
+            let bytes = if input.peek(LitStr) {
+                let lit: LitStr = input.parse()?;
+                Some(hex::decode(lit.value()).map_err(|err| {
+                    syn::Error::new(lit.span(), format!("`bytes` is not valid hex: {err}"))
+                })?)
+            } else {
+                let keyword: Ident = input.parse()?;
+                if keyword != "roundtrip" {
+                    return Err(syn::Error::new_spanned(
+                        &keyword,
+                        "expected a `\"hex\"` string or the `roundtrip` keyword",
+                    ));
+                }
+                None
+            };
             fixtures.push(Fixture { value, bytes });
 
             if input.is_empty() {
@@ -282,12 +332,9 @@ impl Parse for WireFixtureInput {
         }
 
         if fixtures.is_empty() {
-            return Err(input.error("`wire_fixtures!` needs at least one `value => \"hex\"` pair"));
+            return Err(input
+                .error("`wire_fixtures!` needs at least one `value => \"hex\"|roundtrip` entry"));
         }
-        Ok(Self {
-            ty,
-            context,
-            fixtures,
-        })
+        Ok(Self { ty, mode, fixtures })
     }
 }

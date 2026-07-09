@@ -2,9 +2,7 @@ use std::borrow::Cow;
 
 use lb_utils::bounded::BoundedVec;
 
-use crate::{
-    DecodeError, WireDecode, WireEncode, WireExamples, WireFixture, WireFixtures, sealed,
-};
+use crate::{DecodeError, WireDecode, WireEncode, WireExamples, WireFixture, WireFixtures, sealed};
 
 #[derive(Debug, Clone, Copy)]
 enum NOfBytes {
@@ -120,13 +118,13 @@ impl<T, const MIN: usize, const MAX: usize> sealed::Sealed for BoundedVec<T, MIN
 {
 }
 
-// The fixture is derived from the element's fixture, giving *every* `BoundedVec`
-// monomorphization compile-time fixture existence for free. It reuses
-// `encode_length_prefix_into`, so it is circular w.r.t. the length prefix —
-// prefix drift is covered by the hand-pinned `#[test]`s below.
+// The fixture is derived from the element's fixture, giving *every*
+// `BoundedVec` monomorphization compile-time fixture existence for free. It
+// reuses `encode_length_prefix_into`, so it is circular w.r.t. the length
+// prefix — prefix drift is covered by the hand-pinned `#[test]`s below.
 //
-// `MIN` may be 0 (`UpperBoundedVec`), so we force at least one element; otherwise
-// the fixture would be empty and never touch `T`'s codec.
+// `MIN` may be 0 (`UpperBoundedVec`), so we force at least one element;
+// otherwise the fixture would be empty and never touch `T`'s codec.
 impl<T, const MIN: usize, const MAX: usize> WireExamples for BoundedVec<T, MIN, MAX>
 where
     T: WireExamples,

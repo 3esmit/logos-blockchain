@@ -159,8 +159,9 @@ impl NomDecode for Op {
         let (input, opcode) = u8::decode(input, ())?;
 
         match opcode {
-            INSCRIBE => InscriptionOp::decode(input, ())
-                .map(|(rest, op)| (rest, Self::ChannelInscribe(op))),
+            INSCRIBE => {
+                InscriptionOp::decode(input, ()).map(|(rest, op)| (rest, Self::ChannelInscribe(op)))
+            }
             CHANNEL_CONFIG => {
                 ChannelConfigOp::decode(input, ()).map(|(rest, op)| (rest, Self::ChannelConfig(op)))
             }
@@ -181,9 +182,7 @@ impl NomDecode for Op {
             LEADER_CLAIM => {
                 LeaderClaimOp::decode(input, ()).map(|(rest, op)| (rest, Self::LeaderClaim(op)))
             }
-            TRANSFER => {
-                TransferOp::decode(input, ()).map(|(rest, op)| (rest, Self::Transfer(op)))
-            }
+            TRANSFER => TransferOp::decode(input, ()).map(|(rest, op)| (rest, Self::Transfer(op))),
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
     }

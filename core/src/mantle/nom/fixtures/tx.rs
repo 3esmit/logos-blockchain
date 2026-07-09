@@ -1,9 +1,9 @@
 use ark_ff::AdditiveGroup as _;
-use crate::mantle::nom::nom_wire_fixtures;
 use lb_groth16::Fr;
 
 use crate::mantle::{
-    MantleTx, NoteId, Op, ledger::Outputs, ops::transfer::TransferOp, transactions::Ops,
+    MantleTx, NoteId, Op, ledger::Outputs, nom::nom_wire_fixtures, ops::transfer::TransferOp,
+    transactions::Ops,
 };
 
 nom_wire_fixtures!(MantleTx,

@@ -1,4 +1,3 @@
-use crate::mantle::nom::NomCodec;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -8,7 +7,7 @@ use crate::{
     mantle::{
         TxHash,
         ledger::{self, Inputs, Operation, Outputs, Utxos},
-        nom::NomEncode as _,
+        nom::{NomCodec, NomEncode as _},
         ops::OpId,
     },
     sdp::locked_notes::LockedNotes,

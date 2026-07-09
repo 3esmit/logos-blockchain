@@ -4018,6 +4018,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-utils",
+ "logos-blockchain-wire",
  "serde",
  "serde_with",
  "test-log",
@@ -4421,7 +4422,6 @@ dependencies = [
  "hasher",
  "hex",
  "logos-blockchain-blend-proofs",
- "logos-blockchain-core-macros",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4446,16 +4446,6 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "logos-blockchain-core-macros"
-version = "0.0.0"
-dependencies = [
- "hex",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]

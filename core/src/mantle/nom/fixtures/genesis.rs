@@ -1,8 +1,10 @@
 use ark_ff::AdditiveGroup as _;
-use crate::mantle::nom::nom_wire_fixtures;
 use lb_groth16::Fr;
 
-use crate::mantle::transactions::genesis_tx::{ChainId, CryptarchiaParameter, GenesisTime};
+use crate::mantle::{
+    nom::nom_wire_fixtures,
+    transactions::genesis_tx::{ChainId, CryptarchiaParameter, GenesisTime},
+};
 
 nom_wire_fixtures!(
     ChainId,

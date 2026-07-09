@@ -1,4 +1,3 @@
-mod codec;
 pub mod crypto;
 pub mod encap;
 mod error;

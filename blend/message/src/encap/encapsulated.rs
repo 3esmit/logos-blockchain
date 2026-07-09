@@ -10,12 +10,12 @@ use lb_blend_proofs::{
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
+use lb_wire::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use crate::{
     Error, PayloadType,
-    codec::{WireDecode, WireDecodeError, WireEncode},
     crypto::{domains, key_ext::SharedKeyExt as _},
     encap::{
         ProofsVerifier,
@@ -294,6 +294,10 @@ impl EncapsulatedPart {
 }
 
 impl WireEncode for EncapsulatedPart {
+    fn encoded_length(&self) -> usize {
+        self.private_header.encoded_length() + self.payload.encoded_length()
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.private_header.encode_into(out);
         self.payload.encode_into(out);
@@ -303,7 +307,7 @@ impl WireEncode for EncapsulatedPart {
 impl WireDecode for EncapsulatedPart {
     type Context = NonZeroU64;
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
+    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), DecodeError> {
         let (input, private_header) = EncapsulatedPrivateHeader::decode(input, context)?;
         let (input, payload) = EncapsulatedPayload::decode(input, ())?;
         Ok((
@@ -570,6 +574,10 @@ impl EncapsulatedPrivateHeader {
 }
 
 impl WireEncode for EncapsulatedPrivateHeader {
+    fn encoded_length(&self) -> usize {
+        self.0.iter().map(WireEncode::encoded_length).sum()
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         for layer in &self.0 {
             layer.encode_into(out);
@@ -580,7 +588,7 @@ impl WireEncode for EncapsulatedPrivateHeader {
 impl WireDecode for EncapsulatedPrivateHeader {
     type Context = NonZeroU64;
 
-    fn decode(mut input: &[u8], context: Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
+    fn decode(mut input: &[u8], context: Self::Context) -> Result<(&[u8], Self), DecodeError> {
         let mut layers = Vec::with_capacity(context.get() as usize);
         for _ in 0..context.get() {
             let (remaining, layer) = EncapsulatedBlendingHeader::decode(input, ())?;
@@ -644,6 +652,10 @@ impl EncapsulatedBlendingHeader {
 // No length checks: the network-side size gate guarantees the input is large
 // enough (`split_at`/`try_into` therefore never fail).
 impl WireEncode for EncapsulatedBlendingHeader {
+    fn encoded_length(&self) -> usize {
+        BLENDING_HEADER_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.0);
     }
@@ -652,11 +664,11 @@ impl WireEncode for EncapsulatedBlendingHeader {
 impl WireDecode for EncapsulatedBlendingHeader {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (bytes, remaining) = input.split_at(BLENDING_HEADER_ENCODED_SIZE);
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
+        let (bytes, remaining) = take::<Self>(input, BLENDING_HEADER_ENCODED_SIZE)?;
         Ok((
             remaining,
-            Self(bytes.try_into().expect("split_at guarantees the length")),
+            Self(bytes.try_into().expect("take guarantees the length")),
         ))
     }
 }
@@ -711,6 +723,10 @@ impl EncapsulatedPayload {
 }
 
 impl WireEncode for EncapsulatedPayload {
+    fn encoded_length(&self) -> usize {
+        PAYLOAD_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.0[..]);
     }
@@ -719,13 +735,42 @@ impl WireEncode for EncapsulatedPayload {
 impl WireDecode for EncapsulatedPayload {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (bytes, remaining) = input.split_at(PAYLOAD_ENCODED_SIZE);
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
+        let (bytes, remaining) = take::<Self>(input, PAYLOAD_ENCODED_SIZE)?;
         let boxed = bytes
             .to_vec()
             .into_boxed_slice()
             .try_into()
-            .expect("split_at guarantees the length");
+            .expect("take guarantees the length");
         Ok((remaining, Self(boxed)))
     }
 }
+
+wire_fixtures!(
+    EncapsulatedBlendingHeader,
+    EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE]) => roundtrip
+);
+
+wire_fixtures!(
+    EncapsulatedPayload,
+    EncapsulatedPayload(Box::new([0u8; PAYLOAD_ENCODED_SIZE])) => roundtrip
+);
+
+wire_fixtures!(
+    EncapsulatedPrivateHeader,
+    context = NonZeroU64::new(1).unwrap(),
+    EncapsulatedPrivateHeader(
+        vec![EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
+    ) => roundtrip
+);
+
+wire_fixtures!(
+    EncapsulatedPart,
+    context = NonZeroU64::new(1).unwrap(),
+    EncapsulatedPart {
+        private_header: EncapsulatedPrivateHeader(
+            vec![EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
+        ),
+        payload: EncapsulatedPayload(Box::new([0u8; PAYLOAD_ENCODED_SIZE])),
+    } => roundtrip
+);

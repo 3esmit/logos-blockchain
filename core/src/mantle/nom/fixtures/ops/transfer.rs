@@ -1,7 +1,6 @@
-use crate::mantle::nom::nom_wire_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 
-use crate::mantle::{Note, NoteId, ops::transfer::TransferOp};
+use crate::mantle::{Note, NoteId, nom::nom_wire_fixtures, ops::transfer::TransferOp};
 
 nom_wire_fixtures!(
     TransferOp,

@@ -4,13 +4,13 @@ use lb_utils::bounded::LowerBoundedVec;
 
 use crate::{WireDecode, WireEncode};
 
-/// Carries the mandatory [`WireFixtures`] for a codec. The non-empty return type
-/// means a codec cannot exist without at least one fixture.
+/// Carries the mandatory [`WireFixtures`] for a codec. The non-empty return
+/// type means a codec cannot exist without at least one fixture.
 ///
 /// Sealed via [`crate::sealed::Sealed`], so the only ways to satisfy it are
 /// `#[derive(WireCodec)]` and `wire_fixtures!`, both of which demand a fixture.
-/// It is a supertrait of both codec traits, so `impl WireEncode for Foo` without
-/// a fixture is a `cargo build` error (E0277).
+/// It is a supertrait of both codec traits, so `impl WireEncode for Foo`
+/// without a fixture is a `cargo build` error (E0277).
 pub trait WireExamples: crate::sealed::Sealed + Sized {
     #[must_use]
     fn fixtures() -> WireFixtures<Self>;
@@ -27,21 +27,50 @@ pub struct WireFixture<T> {
 }
 
 /// A codec's well-known fixtures: at least one `(value, bytes)` pair, up to as
-/// many as needed. The `1`-lower-bounded type is what makes "a codec cannot exist
-/// without a fixture" part of the contract.
+/// many as needed. The `1`-lower-bounded type is what makes "a codec cannot
+/// exist without a fixture" part of the contract.
 pub type WireFixtures<T> = LowerBoundedVec<WireFixture<T>, 1>;
 
 /// Drives every fixture of a `Context = ()` codec through the wire-format
 /// invariants. Called by the round-trip test the macros generate.
 ///
-/// `#[doc(hidden)] pub` (not `#[cfg(test)]`) because the generated test lives in
-/// *downstream* crates and calls this against `lb-wire`'s non-test build.
+/// `#[doc(hidden)] pub` (not `#[cfg(test)]`) because the generated test lives
+/// in *downstream* crates and calls this against `lb-wire`'s non-test build.
 #[doc(hidden)]
 pub fn assert_wire_fixtures<T>()
 where
     T: WireEncode + WireDecode<Context = ()> + PartialEq + core::fmt::Debug,
 {
     assert_wire_fixtures_with::<T>(|| ());
+}
+
+/// Like [`assert_wire_fixtures`], but for encode-only codecs (types that
+/// implement [`WireEncode`] but not [`WireDecode`], e.g. post-verification
+/// wrappers). Checks the golden bytes and `encoded_length`; there is no decode
+/// or round-trip leg.
+#[doc(hidden)]
+pub fn assert_wire_fixtures_encode_only<T>()
+where
+    T: WireEncode + core::fmt::Debug,
+{
+    let type_name = core::any::type_name::<T>();
+
+    for fixture in T::fixtures() {
+        let expected = fixture.bytes.as_ref();
+        let encoded = fixture.value.encode();
+        assert!(
+            &*encoded == expected,
+            "{type_name}: encode(value) drifted from the well-known bytes\n  value: {:?}\n  actual   (hex): {actual}\n  expected (hex): {expected_hex}",
+            fixture.value,
+            actual = hex::encode(&*encoded),
+            expected_hex = hex::encode(expected),
+        );
+        assert_eq!(
+            fixture.value.encoded_length(),
+            encoded.len(),
+            "{type_name}: encoded_length() disagrees with encode().len()",
+        );
+    }
 }
 
 /// Like [`assert_wire_fixtures`], but for codecs whose `Context` is not `()`:

@@ -19,7 +19,9 @@ impl WireDecode for bool {
         match byte {
             0 => Ok((rest, false)),
             1 => Ok((rest, true)),
-            _ => Err(DecodeError::invalid_value::<Self>("a bool byte must be 0 or 1")),
+            _ => Err(DecodeError::invalid_value::<Self>(
+                "a bool byte must be 0 or 1",
+            )),
         }
     }
 }

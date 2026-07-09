@@ -10,16 +10,16 @@
 //! Every codec must also ship at least one **well-known fixture** (a value and
 //! its exact wire bytes). This is enforced at compile time: both codec traits
 //! require [`WireExamples`], whose only sanctioned implementation path is
-//! [`wire_fixtures!`] / `#[derive(WireCodec)]`, so a codec without a fixture is a
-//! `cargo build` error.
+//! [`wire_fixtures!`] / `#[derive(WireCodec)]`, so a codec without a fixture is
+//! a `cargo build` error.
 //!
-//! `encode`/`decode` never allocate beyond the caller's buffer, use little-endian
-//! integers, and decode returns the value plus the unconsumed remainder
-//! (`(rest, value)`, as in `nom`).
+//! `encode`/`decode` never allocate beyond the caller's buffer, use
+//! little-endian integers, and decode returns the value plus the unconsumed
+//! remainder (`(rest, value)`, as in `nom`).
 
-// The derive and `wire_fixtures!` expansions refer to this crate as `::lb_wire`,
-// so the crate must be able to name itself that way when it uses them for its own
-// primitives.
+// The derive and `wire_fixtures!` expansions refer to this crate as
+// `::lb_wire`, so the crate must be able to name itself that way when it uses
+// them for its own primitives.
 extern crate self as lb_wire;
 
 mod array;
@@ -33,15 +33,17 @@ mod numbers;
 
 pub use error::DecodeError;
 pub use fixtures::{
-    WireExamples, WireFixture, WireFixtures, assert_wire_fixtures, assert_wire_fixtures_with,
+    WireExamples, WireFixture, WireFixtures, assert_wire_fixtures,
+    assert_wire_fixtures_encode_only, assert_wire_fixtures_with,
 };
 pub use lb_wire_macros::{WireCodec, wire_fixtures};
 
 /// Sealed marker that gates [`WireExamples`] to the blessed macro path.
 ///
 /// `#[doc(hidden)] pub` (rather than `pub(crate)`) so the `wire_fixtures!` /
-/// `#[derive(WireCodec)]` expansions can implement it from any downstream crate;
-/// undocumented, so the macros remain the only sanctioned way to satisfy it.
+/// `#[derive(WireCodec)]` expansions can implement it from any downstream
+/// crate; undocumented, so the macros remain the only sanctioned way to satisfy
+/// it.
 #[doc(hidden)]
 pub mod sealed {
     pub trait Sealed {}
@@ -49,15 +51,16 @@ pub mod sealed {
 
 /// Append a value's wire bytes to a caller-owned buffer.
 ///
-/// Requires [`WireExamples`]: a type cannot be a wire codec without also pinning
-/// a well-known fixture.
+/// Requires [`WireExamples`]: a type cannot be a wire codec without also
+/// pinning a well-known fixture.
 pub trait WireEncode: WireExamples {
-    /// The exact number of bytes [`encode_into`](Self::encode_into) will append,
-    /// computed without encoding or allocating.
+    /// The exact number of bytes [`encode_into`](Self::encode_into) will
+    /// append, computed without encoding or allocating.
     fn encoded_length(&self) -> usize;
 
     /// Append this value's wire bytes to `out`. The single required
-    /// serialization primitive; composites chain their children's `encode_into`.
+    /// serialization primitive; composites chain their children's
+    /// `encode_into`.
     fn encode_into(&self, out: &mut Vec<u8>);
 
     /// Encode into a freshly allocated, exactly-sized boxed slice.
@@ -88,8 +91,8 @@ pub trait WireDecode: WireExamples + Sized {
     fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), DecodeError>;
 }
 
-/// Ergonomic decode for the common `Context = ()` case: `T::decode_default(bytes)`
-/// instead of `T::decode(bytes, ())`.
+/// Ergonomic decode for the common `Context = ()` case:
+/// `T::decode_default(bytes)` instead of `T::decode(bytes, ())`.
 pub trait WireDecodeExt: WireDecode<Context = ()> {
     fn decode_default(input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
         Self::decode(input, ())
@@ -97,3 +100,15 @@ pub trait WireDecodeExt: WireDecode<Context = ()> {
 }
 
 impl<T: WireDecode<Context = ()>> WireDecodeExt for T {}
+
+/// Split `n` bytes off the front of `input`, returning `(head, rest)`, or fail
+/// with [`DecodeError::UnexpectedEnd`] naming `T`.
+///
+/// The checked building block for fixed-size decoders — use it instead of
+/// `split_at`/indexing so malformed (short) input is a typed error, not a
+/// panic.
+pub fn take<T: ?Sized>(input: &[u8], n: usize) -> Result<(&[u8], &[u8]), DecodeError> {
+    input
+        .split_at_checked(n)
+        .ok_or_else(|| DecodeError::end_of_input::<T>(n.saturating_sub(input.len())))
+}

@@ -7,11 +7,11 @@ use lb_blend_proofs::{
     selection::inputs::VerifyInputs,
 };
 use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
+use lb_wire::WireEncode as _;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, MessageIdentifier, PaddedPayloadBody, PayloadType,
-    codec::WireEncode as _,
     crypto::key_ext::Ed25519SecretKeyExt as _,
     encap::{
         ProofsVerifier,

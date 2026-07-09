@@ -1,9 +1,11 @@
-use crate::mantle::nom::nom_wire_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 use lb_poc::PoCProof;
 
 use crate::{
-    mantle::ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
+    mantle::{
+        nom::nom_wire_fixtures,
+        ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
+    },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
 };
 

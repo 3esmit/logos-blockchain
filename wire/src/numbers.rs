@@ -62,7 +62,7 @@ impl WireDecode for Fr {
         let (head, rest) = take::<Self>(input, 32)?;
         let bytes: [u8; 32] = head.try_into().expect("take took the right length");
         let value = fr_from_bytes(&bytes)
-            .map_err(|_| DecodeError::invalid_value::<Self, _>("not a canonical field element"))?;
+            .map_err(|_| DecodeError::invalid_value::<Self>("not a canonical field element"))?;
         Ok((rest, value))
     }
 }

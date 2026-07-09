@@ -47,10 +47,9 @@ impl DecodeError {
 
     /// The bytes for a `T` were well-sized but semantically invalid.
     #[must_use]
-    pub fn invalid_value<T, Message>(message: Message) -> Self
+    pub fn invalid_value<T>(message: impl Into<Cow<'static, str>>) -> Self
     where
         T: ?Sized,
-        Message: Into<Cow<'static, str>>,
     {
         Self::InvalidValue {
             type_name: type_name::<T>(),

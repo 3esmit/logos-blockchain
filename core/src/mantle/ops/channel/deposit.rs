@@ -1,5 +1,6 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_utils::bounded::UpperBoundedVec;
+use lb_wire::{WireCodec, WireEncode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -8,7 +9,6 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Utxos},
-        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
     sdp::locked_notes::LockedNotes,
@@ -17,7 +17,7 @@ use crate::{
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,

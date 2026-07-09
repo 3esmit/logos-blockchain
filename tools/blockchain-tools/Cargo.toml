@@ -10,6 +10,7 @@ repository.workspace  = true
 version.workspace     = true
 
 [dependencies]
+lb-wire = { workspace = true }
 anyhow                        = { workspace = true }
 clap                          = { features = ["derive", "help", "std", "string"], workspace = true }
 lb-common-http-client         = { workspace = true }

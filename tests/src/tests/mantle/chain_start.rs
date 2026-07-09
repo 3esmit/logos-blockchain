@@ -5,13 +5,13 @@ use lb_core::{
     block::genesis::GenesisBlockBuilder,
     mantle::{
         GenesisTime, GenesisTx as _,
-        nom::NomEncode as _,
         ops::channel::inscribe::{Inscription, InscriptionOp},
     },
 };
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
+use lb_wire::WireEncode;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,

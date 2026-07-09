@@ -1,17 +1,12 @@
 use lb_groth16::{Fr, serde::serde_fr};
 use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 
-use crate::{
-    mantle::{
-        nom::{DecodeError, NomDecode, NomEncode},
-        ops::leader_claim::VoucherSecret,
-    },
-    proofs::merkle::mmr_path_to_witness,
-};
+use crate::{mantle::ops::leader_claim::VoucherSecret, proofs::merkle::mmr_path_to_witness};
 
 const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 
@@ -21,7 +16,7 @@ pub struct Groth16LeaderClaimProof {
     proof: lb_poc::PoCProof,
 }
 
-impl NomEncode for Groth16LeaderClaimProof {
+impl WireEncode for Groth16LeaderClaimProof {
     fn encoded_length(&self) -> usize {
         self.proof.to_bytes().len()
     }
@@ -31,7 +26,7 @@ impl NomEncode for Groth16LeaderClaimProof {
     }
 }
 
-impl NomDecode for Groth16LeaderClaimProof {
+impl WireDecode for Groth16LeaderClaimProof {
     type Context = ();
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {

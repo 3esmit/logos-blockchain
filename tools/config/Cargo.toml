@@ -17,6 +17,7 @@ workspace = true
 testing = ["lb-node/testing"]
 
 [dependencies]
+lb-wire = { workspace = true }
 hex                              = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }

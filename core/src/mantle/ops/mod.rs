@@ -15,6 +15,7 @@ use channel::{
     withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
@@ -26,12 +27,9 @@ use super::{
 };
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
-    mantle::{
-        nom::{DecodeError, NomDecode, NomEncode},
-        ops::{
-            internal::{OpDe, OpSer},
-            transfer::TransferOp,
-        },
+    mantle::ops::{
+        internal::{OpDe, OpSer},
+        transfer::TransferOp,
     },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
@@ -120,7 +118,7 @@ impl<'de> Deserialize<'de> for Op {
 }
 
 // Op = Opcode OpPayload
-impl NomEncode for Op {
+impl WireEncode for Op {
     fn encoded_length(&self) -> usize {
         let payload = match self {
             Self::ChannelInscribe(op) => op.encoded_length(),
@@ -152,7 +150,7 @@ impl NomEncode for Op {
     }
 }
 
-impl NomDecode for Op {
+impl WireDecode for Op {
     type Context = ();
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
@@ -190,7 +188,7 @@ impl NomDecode for Op {
 
 // We just check that the enum discriminant tag is encoded correctly, so a
 // single fixture is fine here.
-// TODO: Remove once the `NomCodec` macro supports enums.
+// TODO: Remove once the `WireCodec` macro supports enums.
 
 impl Op {
     #[must_use]

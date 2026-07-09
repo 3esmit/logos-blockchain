@@ -4,7 +4,6 @@ use lb_core::{
     mantle::{
         Note, Op, OpProof, SignedMantleTx, Transaction as _,
         ledger::Outputs,
-        nom::NomEncode as _,
         ops::channel::{
             ChannelId, ChannelKeyIndex, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -13,6 +12,7 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
+use lb_wire::WireEncode;
 
 pub(crate) use crate::{
     cli::{

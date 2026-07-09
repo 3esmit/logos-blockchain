@@ -2,9 +2,9 @@ pub mod channel;
 pub mod gas;
 pub mod ledger;
 pub mod mock;
-pub mod nom;
 pub mod ops;
 pub mod transactions;
+mod wire_fixtures;
 
 use std::hash::Hash;
 

@@ -1,10 +1,8 @@
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 
 use crate::{
-    mantle::{
-        Op, OpProof,
-        nom::{DecodeError, NomDecode as _, NomEncode as _},
-    },
+    mantle::{Op, OpProof},
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
     },

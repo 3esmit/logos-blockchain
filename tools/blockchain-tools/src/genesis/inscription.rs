@@ -3,13 +3,13 @@ use lb_core::{
     crypto::ZkDigest,
     mantle::{
         CryptarchiaParameter, GenesisTime,
-        nom::NomEncode as _,
         ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
         transactions::genesis_tx::ChainId,
     },
 };
 use lb_groth16::{FrBytes, fr_from_bytes};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_wire::WireEncode;
 use serde_with::{hex::Hex, serde_as};
 use time::OffsetDateTime;
 

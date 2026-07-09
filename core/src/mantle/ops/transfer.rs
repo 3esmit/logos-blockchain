@@ -1,4 +1,5 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_wire::{WireCodec, WireEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -7,13 +8,12 @@ use crate::{
     mantle::{
         TxHash,
         ledger::{self, Inputs, Operation, Outputs, Utxos},
-        nom::{NomCodec, NomEncode as _},
         ops::OpId,
     },
     sdp::locked_notes::LockedNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, WireCodec)]
 pub struct TransferOp {
     pub inputs: Inputs,
     pub outputs: Outputs,

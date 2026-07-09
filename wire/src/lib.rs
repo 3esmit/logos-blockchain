@@ -2,7 +2,7 @@
 //!
 //! One encode trait ([`WireEncode`]) and one decode trait ([`WireDecode`]) that
 //! every on-the-wire type implements, replacing the previously separate
-//! `NomEncode`/`NomDecode` (Mantle) and `WireEncode`/`WireDecode` (Blend)
+//! `WireEncode`/`WireDecode` (Mantle) and `WireEncode`/`WireDecode` (Blend)
 //! families. Primitives, fixed-size arrays and `BoundedVec` get default impls
 //! here; domain types implement the traits in their own crate (orphan rule) via
 //! `#[derive(WireCodec)]` for the trivial field-order case, or by hand.

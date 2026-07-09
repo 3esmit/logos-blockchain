@@ -1235,6 +1235,7 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 mod tests {
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
+    use lb_wire::WireEncode as _;
     use num_bigint::BigUint;
 
     use super::*;
@@ -1242,7 +1243,6 @@ mod tests {
         header::HeaderId,
         mantle::{
             CryptarchiaParameter, GenesisTime, GenesisTx as _, NoteId,
-            nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         sdp::{Locator, ProviderId, ServiceType},

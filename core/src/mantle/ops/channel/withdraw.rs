@@ -1,3 +1,4 @@
+use lb_wire::{WireCodec, WireEncode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -6,14 +7,13 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         ledger::{Operation, Outputs, Utxos},
-        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
 // ChannelWithdraw = ChannelId Outputs WithdrawNonce — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, WireCodec)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub outputs: Outputs,

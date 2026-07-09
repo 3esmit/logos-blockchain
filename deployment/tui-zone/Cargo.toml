@@ -21,6 +21,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+lb-wire = { workspace = true }
 bincode                          = { workspace = true }
 chrono                           = { features = ["alloc"], workspace = true }
 clap                             = { features = ["derive", "env", "error-context", "help", "std", "suggestions", "usage"], workspace = true }

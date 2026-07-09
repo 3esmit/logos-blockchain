@@ -9,7 +9,6 @@ use lb_core::mantle::{
     MantleTx, Note, SignedMantleTx, TxHash, Utxo, Value,
     channel::ChannelState,
     ledger::{Inputs, Outputs},
-    nom::NomDecode as _,
     ops::{
         channel::{
             ChannelId, MsgId,
@@ -22,6 +21,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::{
     ED25519_SECRET_KEY_SIZE, Ed25519Key, Ed25519PublicKey, ZkPublicKey,
 };
+use lb_wire::WireDecode;
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},

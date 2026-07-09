@@ -1,5 +1,6 @@
 use lb_cryptarchia_engine::Slot;
 use lb_utils::bounded::NonEmptyBoundedVec;
+use lb_wire::{WireCodec, WireEncode};
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
@@ -10,7 +11,6 @@ use crate::{
         TxHash,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
-        nom::{NomCodec, NomEncode as _},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -18,7 +18,7 @@ use crate::{
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Keys,

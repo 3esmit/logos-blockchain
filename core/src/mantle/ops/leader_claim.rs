@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
+use lb_wire::{WireCodec, WireEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -12,7 +13,6 @@ use crate::{
     mantle::{
         Note, TxHash, Utxo, Value,
         ledger::{Operation, Utxos},
-        nom::{NomCodec, NomEncode as _},
         ops::OpId,
     },
     proofs::leader_claim_proof::{
@@ -28,19 +28,19 @@ static VOUCHER_NF: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"VOUCHER_NF").expect("BigUint should load from constant string")
 });
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, WireCodec)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
+use lb_wire::WireCodec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -8,7 +9,6 @@ use crate::{
     mantle::{
         Value,
         ledger::{self, Operation as _},
-        nom::NomCodec,
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, WireCodec)]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -32,7 +32,7 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, WireCodec)]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {

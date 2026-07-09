@@ -12,6 +12,7 @@ use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
+use lb_wire::{DecodeError, WireCodec, WireDecode, WireEncode};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
@@ -19,11 +20,7 @@ use strum::EnumIter;
 use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
-    mantle::{
-        NoteId,
-        nom::{DecodeError, NomCodec, NomDecode, NomEncode},
-        ops::channel::Ed25519PublicKey,
-    },
+    mantle::{NoteId, ops::channel::Ed25519PublicKey},
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -217,7 +214,7 @@ impl Display for Locator {
     }
 }
 
-impl NomEncode for Locator {
+impl WireEncode for Locator {
     fn encoded_length(&self) -> usize {
         self.as_bounded_bytes().encoded_length()
     }
@@ -236,7 +233,7 @@ impl Locator {
     }
 }
 
-impl NomDecode for Locator {
+impl WireDecode for Locator {
     type Context = ();
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
@@ -280,7 +277,7 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
-impl NomEncode for ServiceType {
+impl WireEncode for ServiceType {
     fn encoded_length(&self) -> usize {
         <Self as AsRef<u8>>::as_ref(self).encoded_length()
     }
@@ -290,7 +287,7 @@ impl NomEncode for ServiceType {
     }
 }
 
-impl NomDecode for ServiceType {
+impl WireDecode for ServiceType {
     type Context = ();
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
@@ -301,7 +298,7 @@ impl NomDecode for ServiceType {
     }
 }
 
-// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
+// TODO: Remove once the `WireCodec` macro supports logic for custom tags.
 
 #[cfg(test)]
 mod service_type_tests {
@@ -322,7 +319,7 @@ mod service_type_tests {
 
 pub type Nonce = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 #[derive(Debug)]
@@ -356,7 +353,7 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, WireCodec)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -460,7 +457,7 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -493,7 +490,7 @@ impl DeclarationMessage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
@@ -501,7 +498,7 @@ pub struct WithdrawMessage {
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
@@ -515,7 +512,7 @@ pub enum ActivityMetadata {
 
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
 
-impl NomEncode for ActivityMetadata {
+impl WireEncode for ActivityMetadata {
     fn encoded_length(&self) -> usize {
         match self {
             Self::Blend(proof) => {
@@ -534,7 +531,7 @@ impl NomEncode for ActivityMetadata {
     }
 }
 
-impl NomDecode for ActivityMetadata {
+impl WireDecode for ActivityMetadata {
     type Context = ();
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
@@ -549,7 +546,7 @@ impl NomDecode for ActivityMetadata {
     }
 }
 
-// TODO: Remove once the `NomCodec` macro supports logic for custom tags and
+// TODO: Remove once the `WireCodec` macro supports logic for custom tags and
 // enums.
 
 #[cfg(test)]

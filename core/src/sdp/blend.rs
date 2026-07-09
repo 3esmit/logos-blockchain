@@ -1,9 +1,8 @@
 use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Serialize};
-
-use crate::mantle::nom::{DecodeError, NomDecode, NomEncode};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ActivityProof {
@@ -15,7 +14,7 @@ pub struct ActivityProof {
 
 const BLEND_ACTIVE_METADATA_VERSION_BYTE: u8 = 1;
 
-impl NomEncode for ActivityProof {
+impl WireEncode for ActivityProof {
     fn encoded_length(&self) -> usize {
         BLEND_ACTIVE_METADATA_VERSION_BYTE.encoded_length()
             + self.epoch.encoded_length()
@@ -33,7 +32,7 @@ impl NomEncode for ActivityProof {
     }
 }
 
-impl NomDecode for ActivityProof {
+impl WireDecode for ActivityProof {
     type Context = ();
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
@@ -68,13 +67,11 @@ mod tests {
         selection::{ProofOfSelection, VerifiedProofOfSelection},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
+    use lb_wire::{DecodeError, WireDecode as _, WireEncode as _};
 
-    use crate::{
-        mantle::nom::{DecodeError, NomDecode as _, NomEncode as _},
-        sdp::{
-            ActivityMetadata,
-            blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE},
-        },
+    use crate::sdp::{
+        ActivityMetadata,
+        blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE},
     };
 
     #[test]

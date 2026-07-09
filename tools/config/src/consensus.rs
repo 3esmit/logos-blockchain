@@ -5,7 +5,6 @@ use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
         CryptarchiaParameter, GenesisTime, MantleTx, Note, NoteId, OpProof, Utxo,
-        nom::NomEncode as _,
         ops::{
             Op, OpId as _,
             channel::{
@@ -23,6 +22,7 @@ use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{SignedMantleTx, Transaction as _};
+use lb_wire::WireEncode;
 use num_bigint::BigUint;
 use time::OffsetDateTime;
 

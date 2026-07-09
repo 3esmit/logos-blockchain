@@ -2,6 +2,7 @@ use core::fmt::{self, Display, Formatter};
 
 use lb_groth16::Fr;
 use lb_utils::bounded::{BoundedString, BoundedVec};
+use lb_wire::{DecodeError, WireCodec, WireDecode, WireEncode};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -11,7 +12,6 @@ use crate::{
     mantle::{
         MantleTx, OpProof, Transaction, TransactionHasher,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
-        nom::{DecodeError, NomCodec, NomDecode, NomEncode},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -348,7 +348,7 @@ impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for C
     }
 }
 
-impl NomEncode for ChainId {
+impl WireEncode for ChainId {
     fn encoded_length(&self) -> usize {
         self.as_bounded_bytes().encoded_length()
     }
@@ -365,7 +365,7 @@ impl ChainId {
     }
 }
 
-impl NomDecode for ChainId {
+impl WireDecode for ChainId {
     type Context = ();
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
@@ -378,7 +378,7 @@ impl NomDecode for ChainId {
 
 /// Time at which the chain should start. u32 suffices: we only need the
 /// positive half of the i64 Unix timestamp.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, NomCodec)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, WireCodec)]
 pub struct GenesisTime(u32);
 
 impl GenesisTime {
@@ -405,7 +405,7 @@ impl TryFrom<OffsetDateTime> for GenesisTime {
 }
 
 /// Cryptarchia parameters encoded as an inscription in the genesis block.
-#[derive(Debug, Clone, PartialEq, Eq, NomCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, WireCodec)]
 pub struct CryptarchiaParameter {
     pub chain_id: ChainId,
     pub genesis_time: GenesisTime,

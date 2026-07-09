@@ -1,10 +1,10 @@
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 
 use crate::{
     mantle::{
         MantleTx, Op, SignedMantleTx,
-        nom::{DecodeError, NomDecode as _, NomEncode as _},
         ops::codec::{decode_ops_proofs, encode_ops_proofs},
         transactions::MantleTxGasContext,
     },

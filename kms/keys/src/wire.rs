@@ -3,7 +3,7 @@
 //! These live here (not in a consumer crate) because the unified `WireEncode`/
 //! `WireDecode` traits are foreign to every consumer: the orphan rule requires
 //! the impl to sit where the *type* is local. Wire format is unchanged from the
-//! former Mantle (`NomCodec`) codecs — the golden fixtures below pin it.
+//! former Mantle (`WireCodec`) codecs — the golden fixtures below pin it.
 
 use lb_groth16::Fr;
 use lb_wire::{DecodeError, WireDecode, WireEncode, wire_fixtures};

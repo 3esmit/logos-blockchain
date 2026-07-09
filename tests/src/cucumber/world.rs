@@ -964,6 +964,9 @@ pub struct CucumberWorld {
     pub faucet_task_handles: Option<Vec<JoinHandle<()>>>,
     /// Manual: Zone-specific state for SDK/sequencer scenarios.
     pub zone: ZoneState,
+    /// Manual: Per-block gas prices recorded by the fee-market steps,
+    /// verified against the fee-market spec reference.
+    pub recorded_gas_prices: Vec<crate::common::fee_spec::GasPriceRecord>,
 }
 
 impl Drop for CucumberWorld {
@@ -1142,6 +1145,7 @@ impl Debug for CucumberWorld {
                 "node_snapshot_on_startup",
                 &node_snapshot_on_startup_display(self.node_snapshot_on_startup.as_ref()),
             )
+            .field("recorded_gas_prices_len", &self.recorded_gas_prices.len())
             .finish()
     }
 }

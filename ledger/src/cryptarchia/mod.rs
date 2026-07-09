@@ -1155,6 +1155,107 @@ pub mod tests {
             .and_then(|m| m.get(declaration_id))
     }
 
+    // The four tests below check that gas prices can actually move with
+    // demand: up under sustained load, and back up after a quiet period.
+    // They look at behavior only, not the update formulas, so they should
+    // keep working if the spec changes.
+    //
+    // Currently all four fail. With integer division, floor(p * 9/8) only
+    // exceeds p from p = 8 upward, and the genesis prices are 1 - so prices
+    // can fall but never rise, and after a quiet period they end at 0 where
+    // every later update multiplies 0. Probably needs bigger genesis prices
+    // and/or a price floor; to be discussed with the spec authors.
+
+    /// If the network is constantly full, execution gas must get more
+    /// expensive.
+    #[test]
+    fn execution_price_rises_under_sustained_maximum_load() {
+        let mut state = genesis_state(&[utxo()]);
+        let genesis_price = state.execution_base_fee().into_inner();
+
+        for _ in 0..10_000 {
+            state = state.update_execution_market(crate::EXECUTION_GAS_LIMIT);
+        }
+
+        assert!(
+            state.execution_base_fee().into_inner() > genesis_price,
+            "the execution base fee never rose above {genesis_price} under sustained \
+             blocks at the gas limit; the market cannot price demand from its genesis \
+             state"
+        );
+    }
+
+    /// After a quiet stretch, returning demand must be able to push the
+    /// execution price back up.
+    #[test]
+    fn execution_price_recovers_when_demand_returns_after_quiet_blocks() {
+        let mut state = genesis_state(&[utxo()]);
+
+        for _ in 0..100 {
+            state = state.update_execution_market(0.into());
+        }
+
+        let quiet_price = state.execution_base_fee().into_inner();
+
+        for _ in 0..10_000 {
+            state = state.update_execution_market(crate::EXECUTION_GAS_LIMIT);
+        }
+
+        assert!(
+            state.execution_base_fee().into_inner() > quiet_price,
+            "the execution base fee is stuck at {quiet_price} after quiet blocks and does \
+             not respond to returning demand; the market is dead from this state on"
+        );
+    }
+
+    /// If storage is constantly in heavy use, storage gas must get more
+    /// expensive.
+    #[test]
+    fn storage_price_rises_under_sustained_heavy_usage() {
+        let genesis_price = GENESIS_STORAGE_GAS_PRICE.into_inner();
+        let mut price = GENESIS_STORAGE_GAS_PRICE;
+        let mut ema: Gas = 0.into();
+        let heavy_usage: Gas = 1_000_000.into();
+
+        for _ in 0..1_000 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+
+        assert!(
+            price.into_inner() > genesis_price,
+            "the storage gas price never rose above {genesis_price} under sustained \
+             heavy usage; the market cannot price demand from its genesis state"
+        );
+    }
+
+    /// After quiet epochs, returning usage must be able to push the storage
+    /// price back up.
+    #[test]
+    fn storage_price_recovers_when_usage_returns_after_quiet_epochs() {
+        let mut price = GENESIS_STORAGE_GAS_PRICE;
+        let mut ema: Gas = 0.into();
+        let heavy_usage: Gas = 1_000_000.into();
+
+        for _ in 0..4 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+        for _ in 0..4 {
+            (price, ema) = update_storage_market(price, 0.into(), ema);
+        }
+
+        let quiet_price = price.into_inner();
+
+        for _ in 0..1_000 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+
+        assert!(
+            price.into_inner() > quiet_price,
+            "the storage gas price is stuck at {quiet_price} after quiet epochs and does \
+             not respond to returning usage; the market is dead from this state on"
+        );
+    }
+
     #[test]
     fn storage_price_held_when_effective_target_is_zero() {
         // Failure case for the missing guard: with zero usage and a zero EMA the

@@ -227,7 +227,7 @@ pub fn wire_fixtures(input: TokenStream) -> TokenStream {
             ::lb_wire::assert_wire_fixtures_encode_only::<#ty>();
         },
         FixtureMode::Context(context) => quote! {
-            ::lb_wire::assert_wire_fixtures_with::<#ty>(|| #context);
+            ::lb_wire::assert_wire_fixtures_with::<#ty, _>(|| #context);
         },
     };
 

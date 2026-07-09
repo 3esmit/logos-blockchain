@@ -93,8 +93,8 @@ impl EncapsulatedMessage {
     /// caller `bytes` is exactly a well-formed `num_layers`-layer message and
     /// checks the remainder.
     pub fn decode(bytes: &[u8], num_layers: NonZeroU64) -> Result<(&[u8], Self), Error> {
-        let (remaining, public_header) = PublicHeader::decode(bytes, ())?;
-        let (remaining, encapsulated_part) = EncapsulatedPart::decode(remaining, num_layers)?;
+        let (remaining, public_header) = PublicHeader::decode(bytes, &())?;
+        let (remaining, encapsulated_part) = EncapsulatedPart::decode(remaining, &num_layers)?;
         Ok((
             remaining,
             Self::from_components(public_header, encapsulated_part),
@@ -295,7 +295,10 @@ impl EncapsulatedPart {
 
 impl WireEncode for EncapsulatedPart {
     fn encoded_length(&self) -> usize {
-        self.private_header.encoded_length() + self.payload.encoded_length()
+        self.private_header
+            .encoded_length()
+            .checked_add(self.payload.encoded_length())
+            .unwrap()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -307,9 +310,12 @@ impl WireEncode for EncapsulatedPart {
 impl WireDecode for EncapsulatedPart {
     type Context = NonZeroU64;
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), DecodeError> {
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, private_header) = EncapsulatedPrivateHeader::decode(input, context)?;
-        let (input, payload) = EncapsulatedPayload::decode(input, ())?;
+        let (input, payload) = EncapsulatedPayload::decode(input, &())?;
         Ok((
             input,
             Self {
@@ -319,6 +325,17 @@ impl WireDecode for EncapsulatedPart {
         ))
     }
 }
+
+wire_fixtures!(
+    EncapsulatedPart,
+    context = NonZeroU64::new(1).unwrap(),
+    EncapsulatedPart {
+        private_header: EncapsulatedPrivateHeader(
+            vec![EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
+        ),
+        payload: EncapsulatedPayload(vec![0u8; PAYLOAD_ENCODED_SIZE].into_boxed_slice().try_into().unwrap()),
+    } => roundtrip
+);
 
 /// Verify the public header reconstructed when decapsulating all but the very
 /// last private header.
@@ -588,16 +605,27 @@ impl WireEncode for EncapsulatedPrivateHeader {
 impl WireDecode for EncapsulatedPrivateHeader {
     type Context = NonZeroU64;
 
-    fn decode(mut input: &[u8], context: Self::Context) -> Result<(&[u8], Self), DecodeError> {
+    fn decode<'input>(
+        mut input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
         let mut layers = Vec::with_capacity(context.get() as usize);
         for _ in 0..context.get() {
-            let (remaining, layer) = EncapsulatedBlendingHeader::decode(input, ())?;
+            let (remaining, layer) = EncapsulatedBlendingHeader::decode(input, &())?;
             layers.push(layer);
             input = remaining;
         }
         Ok((input, Self(layers.into_boxed_slice())))
     }
 }
+
+wire_fixtures!(
+    EncapsulatedPrivateHeader,
+    context = NonZeroU64::new(1).unwrap(),
+    EncapsulatedPrivateHeader(
+        vec![EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
+    ) => roundtrip
+);
 
 /// A blending header encapsulated zero or more times.
 ///
@@ -627,7 +655,7 @@ impl EncapsulatedBlendingHeader {
     /// If there is no encapsulation left, and if the bytes are valid,
     /// the deserialization will succeed.
     fn try_deserialize(&self) -> Result<BlendingHeader, Error> {
-        let (_remaining, header) = BlendingHeader::decode(&self.0, ())
+        let (_remaining, header) = BlendingHeader::decode(&self.0, &())
             .map_err(|_| Error::PrivateHeaderDeserializationFailed)?;
         Ok(header)
     }
@@ -664,7 +692,10 @@ impl WireEncode for EncapsulatedBlendingHeader {
 impl WireDecode for EncapsulatedBlendingHeader {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
         let (bytes, remaining) = take::<Self>(input, BLENDING_HEADER_ENCODED_SIZE)?;
         Ok((
             remaining,
@@ -672,6 +703,11 @@ impl WireDecode for EncapsulatedBlendingHeader {
         ))
     }
 }
+
+wire_fixtures!(
+    EncapsulatedBlendingHeader,
+    EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE]) => roundtrip
+);
 
 /// A payload encapsulated zero or more times.
 ///
@@ -701,7 +737,7 @@ impl EncapsulatedPayload {
     /// the deserialization will succeed.
     fn try_deserialize(&self) -> Result<Payload, Error> {
         let (_remaining, payload) =
-            Payload::decode(&self.0[..], ()).map_err(|_| Error::PayloadDeserializationFailed)?;
+            Payload::decode(&self.0[..], &()).map_err(|_| Error::PayloadDeserializationFailed)?;
         Ok(payload)
     }
 
@@ -735,42 +771,21 @@ impl WireEncode for EncapsulatedPayload {
 impl WireDecode for EncapsulatedPayload {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
         let (bytes, remaining) = take::<Self>(input, PAYLOAD_ENCODED_SIZE)?;
         let boxed = bytes
             .to_vec()
             .into_boxed_slice()
             .try_into()
-            .expect("take guarantees the length");
+            .expect("Take guarantees the length");
         Ok((remaining, Self(boxed)))
     }
 }
 
 wire_fixtures!(
-    EncapsulatedBlendingHeader,
-    EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE]) => roundtrip
-);
-
-wire_fixtures!(
     EncapsulatedPayload,
-    EncapsulatedPayload(Box::new([0u8; PAYLOAD_ENCODED_SIZE])) => roundtrip
-);
-
-wire_fixtures!(
-    EncapsulatedPrivateHeader,
-    context = NonZeroU64::new(1).unwrap(),
-    EncapsulatedPrivateHeader(
-        vec![EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
-    ) => roundtrip
-);
-
-wire_fixtures!(
-    EncapsulatedPart,
-    context = NonZeroU64::new(1).unwrap(),
-    EncapsulatedPart {
-        private_header: EncapsulatedPrivateHeader(
-            vec![EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
-        ),
-        payload: EncapsulatedPayload(Box::new([0u8; PAYLOAD_ENCODED_SIZE])),
-    } => roundtrip
+    EncapsulatedPayload(vec![0u8; PAYLOAD_ENCODED_SIZE].into_boxed_slice().try_into().unwrap()) => roundtrip
 );

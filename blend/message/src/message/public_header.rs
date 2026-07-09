@@ -126,16 +126,19 @@ impl WireEncode for PublicHeader {
 impl WireDecode for PublicHeader {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (input, version) = u8::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, version) = u8::decode(input, &())?;
         if version != LATEST_BLEND_MESSAGE_VERSION {
             return Err(DecodeError::invalid_value::<Self>(
                 "unsupported message version",
             ));
         }
-        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
-        let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
-        let (input, signature) = Ed25519Signature::decode(input, ())?;
+        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, &())?;
+        let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
+        let (input, signature) = Ed25519Signature::decode(input, &())?;
         Ok((
             input,
             Self {
@@ -147,6 +150,15 @@ impl WireDecode for PublicHeader {
         ))
     }
 }
+
+wire_fixtures!(
+    PublicHeader,
+    PublicHeader::new(
+        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        &VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
+        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+    ) => roundtrip
+);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicHeaderWithVerifiedSignature {
@@ -238,6 +250,16 @@ impl WireEncode for PublicHeaderWithVerifiedSignature {
         self.signature.encode_into(out);
     }
 }
+
+wire_fixtures!(
+    PublicHeaderWithVerifiedSignature,
+    encode_only,
+    PublicHeaderWithVerifiedSignature::new(
+        VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
+        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+    ) => roundtrip
+);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct VerifiedPublicHeader {
@@ -349,25 +371,6 @@ impl WireEncode for VerifiedPublicHeader {
         self.signature.encode_into(out);
     }
 }
-
-wire_fixtures!(
-    PublicHeader,
-    PublicHeader::new(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        &VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
-        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
-    ) => roundtrip
-);
-
-wire_fixtures!(
-    PublicHeaderWithVerifiedSignature,
-    encode_only,
-    PublicHeaderWithVerifiedSignature::new(
-        VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
-    ) => roundtrip
-);
 
 wire_fixtures!(
     VerifiedPublicHeader,

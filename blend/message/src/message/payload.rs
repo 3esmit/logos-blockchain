@@ -38,13 +38,18 @@ impl WireEncode for PayloadType {
 impl WireDecode for PayloadType {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (remaining, discriminant) = u8::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (remaining, discriminant) = u8::decode(input, &())?;
         let payload_type = Self::try_from(discriminant)
             .map_err(|()| DecodeError::unknown_discriminant::<Self>(u64::from(discriminant)))?;
         Ok((remaining, payload_type))
     }
 }
+
+wire_fixtures!(PayloadType, PayloadType::Cover => "00", PayloadType::Data => "01");
 
 /// The decapsulated payload body, padded to a fixed size.
 ///
@@ -94,7 +99,7 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
 
 impl WireEncode for PaddedPayloadBody {
     fn encoded_length(&self) -> usize {
-        size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE
+        size_of::<u16>().checked_add(MAX_PAYLOAD_BODY_SIZE).unwrap()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -106,17 +111,25 @@ impl WireEncode for PaddedPayloadBody {
 impl WireDecode for PaddedPayloadBody {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (input, actual_len) = u16::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, actual_len) = u16::decode(input, &())?;
         let (body_bytes, remaining) = take::<Self>(input, MAX_PAYLOAD_BODY_SIZE)?;
         let padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]> = body_bytes
             .to_vec()
             .into_boxed_slice()
             .try_into()
-            .expect("take guarantees the length");
+            .expect("Take guarantees the length");
         Ok((remaining, Self { actual_len, padded }))
     }
 }
+
+wire_fixtures!(
+    PaddedPayloadBody,
+    PaddedPayloadBody::try_from([1u8, 2, 3].as_slice()).unwrap() => roundtrip
+);
 
 /// The exact number of bytes a [`Payload`] encodes to: a fixed enum
 /// discriminant, the `u16` body length, and the body padded to
@@ -171,19 +184,15 @@ impl WireEncode for Payload {
 impl WireDecode for Payload {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (input, payload_type) = PayloadType::decode(input, ())?;
-        let (input, body) = PaddedPayloadBody::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, payload_type) = PayloadType::decode(input, &())?;
+        let (input, body) = PaddedPayloadBody::decode(input, &())?;
         Ok((input, Self { payload_type, body }))
     }
 }
-
-wire_fixtures!(PayloadType, PayloadType::Cover => "00", PayloadType::Data => "01");
-
-wire_fixtures!(
-    PaddedPayloadBody,
-    PaddedPayloadBody::try_from([1u8, 2, 3].as_slice()).unwrap() => roundtrip
-);
 
 wire_fixtures!(
     Payload,

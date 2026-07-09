@@ -93,12 +93,15 @@ impl WireEncode for BlendingHeader {
 impl WireDecode for BlendingHeader {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), DecodeError> {
-        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
-        let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
-        let (input, signature) = Ed25519Signature::decode(input, ())?;
-        let (input, proof_of_selection) = ProofOfSelection::decode(input, ())?;
-        let (input, is_last) = bool::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, &())?;
+        let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
+        let (input, signature) = Ed25519Signature::decode(input, &())?;
+        let (input, proof_of_selection) = ProofOfSelection::decode(input, &())?;
+        let (input, is_last) = bool::decode(input, &())?;
 
         Ok((
             input,

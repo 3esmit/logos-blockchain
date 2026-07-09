@@ -4094,6 +4094,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-utils",
+ "logos-blockchain-wire",
  "multiaddr",
  "rand 0.8.6",
  "serde",

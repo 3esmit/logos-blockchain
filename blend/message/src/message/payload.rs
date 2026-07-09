@@ -126,9 +126,12 @@ impl WireDecode for PaddedPayloadBody {
     }
 }
 
+// Well-known bytes: a `u16` length of 3, the body `[1, 2, 3]`, then zero padding
+// to `MAX_PAYLOAD_BODY_SIZE`. Externalised as hex because it is ~34 KiB.
 wire_fixtures!(
     PaddedPayloadBody,
-    PaddedPayloadBody::try_from([1u8, 2, 3].as_slice()).unwrap() => roundtrip
+    PaddedPayloadBody::try_from([1u8, 2, 3].as_slice()).unwrap()
+        => include_str!("../fixtures/padded_payload_body.hex")
 );
 
 /// The exact number of bytes a [`Payload`] encodes to: a fixed enum
@@ -194,10 +197,12 @@ impl WireDecode for Payload {
     }
 }
 
+// Well-known bytes: the `Data` discriminant (`0x01`), a `u16` length of 3, the
+// body `[4, 5, 6]`, then zero padding. Externalised as hex because it is ~34 KiB.
 wire_fixtures!(
     Payload,
     Payload::new(
         PayloadType::Data,
         PaddedPayloadBody::try_from([4u8, 5, 6].as_slice()).unwrap(),
-    ) => roundtrip
+    ) => include_str!("../fixtures/payload.hex")
 );

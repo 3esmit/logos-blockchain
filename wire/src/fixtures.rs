@@ -31,6 +31,18 @@ pub struct WireFixture<T> {
 /// exist without a fixture" part of the contract.
 pub type WireFixtures<T> = LowerBoundedVec<WireFixture<T>, 1>;
 
+/// Decode a well-known fixture's hex string to bytes, ignoring ASCII whitespace
+/// (so an `include_str!`-ed `.hex` file may contain newlines). Panics on invalid
+/// hex — fixtures are authored test vectors, so bad hex is a bug, not a runtime
+/// condition. Emitted by `wire_fixtures!` for its non-literal (`include_str!`)
+/// byte form.
+#[doc(hidden)]
+#[must_use]
+pub fn decode_fixture_hex(hex_str: &str) -> Vec<u8> {
+    let compact: String = hex_str.split_whitespace().collect();
+    hex::decode(compact).expect("well-known fixture is valid hex")
+}
+
 /// Drives every fixture of a `Context = ()` codec through the wire-format
 /// invariants. Called by the round-trip test the macros generate.
 ///
@@ -69,6 +81,51 @@ where
             fixture.value.encoded_length(),
             encoded.len(),
             "{type_name}: encoded_length() disagrees with encode().len()",
+        );
+    }
+}
+
+/// Like [`assert_wire_fixtures`], but for decode-only codecs (types that
+/// implement [`WireDecode`] but not [`WireEncode`], e.g. messages that are only
+/// ever received from a peer). Decodes the well-known bytes and checks the value
+/// equals the fixture's reference value, with nothing left over.
+#[doc(hidden)]
+pub fn assert_wire_fixtures_decode_only<T>()
+where
+    T: WireDecode<Context = ()> + PartialEq + core::fmt::Debug,
+{
+    assert_wire_fixtures_decode_only_with::<T, _>(|| ());
+}
+
+/// Like [`assert_wire_fixtures_decode_only`], but for decode-only codecs whose
+/// `Context` is not `()`.
+#[doc(hidden)]
+pub fn assert_wire_fixtures_decode_only_with<T, ContextBuilder>(make_context: ContextBuilder)
+where
+    T: WireDecode + PartialEq + core::fmt::Debug,
+    ContextBuilder: Fn() -> T::Context,
+{
+    let type_name = core::any::type_name::<T>();
+
+    for fixture in T::fixtures() {
+        let expected = fixture.bytes.as_ref();
+        let context = make_context();
+        let (rest, decoded) = T::decode(expected, &context).unwrap_or_else(|err| {
+            panic!(
+                "{type_name}: well-known bytes failed to decode: {err:?}\n  bytes (hex): {}",
+                hex::encode(expected),
+            )
+        });
+        assert!(
+            rest.is_empty(),
+            "{type_name}: well-known bytes left trailing data (hex): {}",
+            hex::encode(rest),
+        );
+        assert!(
+            decoded == fixture.value,
+            "{type_name}: decode(bytes) != reference value\n  bytes (hex): {bytes}\n  decoded:  {decoded:?}\n  expected: {expected_value:?}",
+            bytes = hex::encode(expected),
+            expected_value = &fixture.value,
         );
     }
 }

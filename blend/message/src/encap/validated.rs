@@ -1,13 +1,14 @@
-use core::num::NonZeroU64;
-
 use derivative::Derivative;
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{
-    quota::{self, VerifiedProofOfQuota},
+    quota::{self, PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
     selection::inputs::VerifyInputs,
 };
-use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
-use lb_wire::WireEncode as _;
+use lb_key_management_system_keys::keys::{
+    ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
+    UnsecuredEd25519Key, X25519PrivateKey,
+};
+use lb_wire::{WireEncode, wire_fixtures};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -16,8 +17,7 @@ use crate::{
     encap::{
         ProofsVerifier,
         decapsulated::{DecapsulatedMessage, DecapsulationOutput, PartDecapsulationOutput},
-        encapsulated::{EncapsulatedMessage, EncapsulatedPart},
-        expected_serialized_len,
+        encapsulated::{EncapsulatedMessage, EncapsulatedPart, wire_fixture_encapsulated_part},
     },
     input::EncapsulationInput,
     message::public_header::{PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
@@ -85,30 +85,38 @@ impl EncapsulatedMessageWithVerifiedSignature {
         self.public_header_with_verified_signature.id()
     }
 
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let expected_encoded_len = expected_serialized_len(self.encapsulation_layers());
-        let mut out = Vec::with_capacity(expected_encoded_len);
-        self.public_header_with_verified_signature
-            .encode_into(&mut out);
-        self.encapsulated_part.encode_into(&mut out);
-        debug_assert!(
-            out.len() == expected_encoded_len,
-            "Message should encode to the expected length but it did not."
-        );
-        out
-    }
-
-    #[must_use]
-    fn encapsulation_layers(&self) -> NonZeroU64 {
-        self.encapsulated_part.encapsulation_layers()
-    }
-
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn public_header_mut(&mut self) -> &mut PublicHeaderWithVerifiedSignature {
         &mut self.public_header_with_verified_signature
     }
 }
+
+impl WireEncode for EncapsulatedMessageWithVerifiedSignature {
+    fn encoded_length(&self) -> usize {
+        self.public_header_with_verified_signature
+            .encoded_length()
+            .checked_add(self.encapsulated_part.encoded_length())
+            .unwrap()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.public_header_with_verified_signature.encode_into(out);
+        self.encapsulated_part.encode_into(out);
+    }
+}
+
+wire_fixtures!(
+    EncapsulatedMessageWithVerifiedSignature,
+    encode_only,
+    EncapsulatedMessageWithVerifiedSignature::from_components(
+        PublicHeaderWithVerifiedSignature::new(
+            VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
+            Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+            Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+        ),
+        wire_fixture_encapsulated_part(),
+    ) => include_str!("../fixtures/encapsulated_message.hex")
+);
 
 impl From<EncapsulatedMessageWithVerifiedSignature> for EncapsulatedMessage {
     fn from(value: EncapsulatedMessageWithVerifiedSignature) -> Self {
@@ -300,25 +308,34 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     pub const fn public_header_mut(&mut self) -> &mut VerifiedPublicHeader {
         &mut self.validated_public_header
     }
+}
 
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let expected_encoded_len = expected_serialized_len(self.encapsulation_layers());
-        let mut out = Vec::with_capacity(expected_encoded_len);
-        self.validated_public_header.encode_into(&mut out);
-        self.encapsulated_part.encode_into(&mut out);
-        debug_assert!(
-            out.len() == expected_encoded_len,
-            "Message should encode to the expected length but it did not."
-        );
-        out
+impl WireEncode for EncapsulatedMessageWithVerifiedPublicHeader {
+    fn encoded_length(&self) -> usize {
+        self.validated_public_header
+            .encoded_length()
+            .checked_add(self.encapsulated_part.encoded_length())
+            .unwrap()
     }
 
-    #[must_use]
-    fn encapsulation_layers(&self) -> NonZeroU64 {
-        self.encapsulated_part.encapsulation_layers()
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.validated_public_header.encode_into(out);
+        self.encapsulated_part.encode_into(out);
     }
 }
+
+wire_fixtures!(
+    EncapsulatedMessageWithVerifiedPublicHeader,
+    encode_only,
+    EncapsulatedMessageWithVerifiedPublicHeader::from_components(
+        VerifiedPublicHeader::new(
+            VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]),
+            Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+            Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+        ),
+        wire_fixture_encapsulated_part(),
+    ) => include_str!("../fixtures/encapsulated_message.hex")
+);
 
 impl From<EncapsulatedMessageWithVerifiedPublicHeader>
     for EncapsulatedMessageWithVerifiedSignature

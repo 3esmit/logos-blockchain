@@ -4,11 +4,12 @@ use derivative::Derivative;
 use itertools::Itertools as _;
 use lb_blend_crypto::{ZkHash, cipher::Cipher};
 use lb_blend_proofs::{
-    quota::{self, VerifiedProofOfQuota},
+    quota::{self, PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_key_management_system_keys::keys::{
-    Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
+    ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature, SharedKey,
+    UnsecuredEd25519Key,
 };
 use lb_wire::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
 use serde::{Deserialize, Serialize};
@@ -62,43 +63,6 @@ impl EncapsulatedMessage {
     #[must_use]
     pub fn into_components(self) -> (PublicHeader, EncapsulatedPart) {
         (self.public_header, self.encapsulated_part)
-    }
-
-    #[cfg(test)]
-    // Encoding (and sending) of unverified messages should not be done outside of
-    // tests, so this function is only available in tests.
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let expected_encoded_len =
-            crate::encap::expected_serialized_len(self.encapsulation_layers());
-        let mut out = Vec::with_capacity(expected_encoded_len);
-        self.public_header.encode_into(&mut out);
-        self.encapsulated_part.encode_into(&mut out);
-        debug_assert!(
-            out.len() == expected_encoded_len,
-            "Message should encode to the expected length but it did not."
-        );
-        out
-    }
-
-    #[cfg(test)]
-    fn encapsulation_layers(&self) -> NonZeroU64 {
-        self.encapsulated_part.encapsulation_layers()
-    }
-
-    /// Decode a message from the front of `bytes`, returning it and the
-    /// unconsumed remainder.
-    ///
-    /// This does not check `bytes`'s length nor that it is fully consumed — the
-    /// caller `bytes` is exactly a well-formed `num_layers`-layer message and
-    /// checks the remainder.
-    pub fn decode(bytes: &[u8], num_layers: NonZeroU64) -> Result<(&[u8], Self), Error> {
-        let (remaining, public_header) = PublicHeader::decode(bytes, &())?;
-        let (remaining, encapsulated_part) = EncapsulatedPart::decode(remaining, &num_layers)?;
-        Ok((
-            remaining,
-            Self::from_components(public_header, encapsulated_part),
-        ))
     }
 
     /// Verify the message public header signature.
@@ -155,6 +119,77 @@ impl EncapsulatedMessage {
         &mut self.public_header
     }
 }
+
+// Encoding (and sending) of unverified messages should not be done outside of
+// tests, so this function is only available in tests.
+#[cfg(test)]
+impl WireEncode for EncapsulatedMessage {
+    fn encoded_length(&self) -> usize {
+        self.public_header
+            .encoded_length()
+            .checked_add(self.encapsulated_part.encoded_length())
+            .unwrap()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.public_header.encode_into(out);
+        self.encapsulated_part.encode_into(out);
+    }
+}
+
+impl WireDecode for EncapsulatedMessage {
+    type Context = NonZeroU64;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, public_header) = PublicHeader::decode(input, &())?;
+        let (input, encapsulated_part) = EncapsulatedPart::decode(input, context)?;
+        Ok((
+            input,
+            Self {
+                public_header,
+                encapsulated_part,
+            },
+        ))
+    }
+}
+
+/// The well-known [`EncapsulatedPart`] used by the message-level fixtures: one
+/// blending-header layer of `0x07`s followed by a payload of `0x09`s. Its bytes
+/// are `fixtures/encapsulated_part.hex`; the message fixtures prepend the
+/// public header to get `fixtures/encapsulated_message.hex`.
+pub(super) fn wire_fixture_encapsulated_part() -> EncapsulatedPart {
+    EncapsulatedPart {
+        private_header: EncapsulatedPrivateHeader(
+            vec![EncapsulatedBlendingHeader(
+                [0x07; BLENDING_HEADER_ENCODED_SIZE],
+            )]
+            .into_boxed_slice(),
+        ),
+        payload: EncapsulatedPayload(
+            vec![0x09u8; PAYLOAD_ENCODED_SIZE]
+                .into_boxed_slice()
+                .try_into()
+                .expect("fill is exactly PAYLOAD_ENCODED_SIZE bytes"),
+        ),
+    }
+}
+
+wire_fixtures!(
+    EncapsulatedMessage,
+    decode_only,
+    context = NonZeroU64::new(1).unwrap(),
+    EncapsulatedMessage::from_components(
+        PublicHeader::new(
+            Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+            &VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
+            Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
+        ),
+        wire_fixture_encapsulated_part(),
+    ) => include_str!("../fixtures/encapsulated_message.hex")
+);
 
 /// Part of the message that should be encapsulated.
 // TODO: Consider having `InitializedPart` that just finished the initialization step and doesn't
@@ -287,10 +322,6 @@ impl EncapsulatedPart {
     pub(super) fn sign(&self, key: &UnsecuredEd25519Key) -> Ed25519Signature {
         key.sign_payload(&signing_body(&self.private_header, &self.payload))
     }
-
-    pub(super) fn encapsulation_layers(&self) -> NonZeroU64 {
-        self.private_header.encapsulation_layers()
-    }
 }
 
 impl WireEncode for EncapsulatedPart {
@@ -329,12 +360,7 @@ impl WireDecode for EncapsulatedPart {
 wire_fixtures!(
     EncapsulatedPart,
     context = NonZeroU64::new(1).unwrap(),
-    EncapsulatedPart {
-        private_header: EncapsulatedPrivateHeader(
-            vec![EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
-        ),
-        payload: EncapsulatedPayload(vec![0u8; PAYLOAD_ENCODED_SIZE].into_boxed_slice().try_into().unwrap()),
-    } => roundtrip
+    wire_fixture_encapsulated_part() => include_str!("../fixtures/encapsulated_part.hex")
 );
 
 /// Verify the public header reconstructed when decapsulating all but the very
@@ -583,11 +609,6 @@ impl EncapsulatedPrivateHeader {
             .iter()
             .flat_map(EncapsulatedBlendingHeader::iter_bytes)
     }
-
-    pub(super) fn encapsulation_layers(&self) -> NonZeroU64 {
-        NonZeroU64::new(self.0.len() as u64)
-            .expect("An encapsulated part always has at least one blending header.")
-    }
 }
 
 impl WireEncode for EncapsulatedPrivateHeader {
@@ -623,8 +644,8 @@ wire_fixtures!(
     EncapsulatedPrivateHeader,
     context = NonZeroU64::new(1).unwrap(),
     EncapsulatedPrivateHeader(
-        vec![EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
-    ) => roundtrip
+        vec![EncapsulatedBlendingHeader([0x07; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
+    ) => "07070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
 );
 
 /// A blending header encapsulated zero or more times.
@@ -706,7 +727,7 @@ impl WireDecode for EncapsulatedBlendingHeader {
 
 wire_fixtures!(
     EncapsulatedBlendingHeader,
-    EncapsulatedBlendingHeader([0u8; BLENDING_HEADER_ENCODED_SIZE]) => roundtrip
+    EncapsulatedBlendingHeader([0x07; BLENDING_HEADER_ENCODED_SIZE]) => "07070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
 );
 
 /// A payload encapsulated zero or more times.
@@ -787,5 +808,7 @@ impl WireDecode for EncapsulatedPayload {
 
 wire_fixtures!(
     EncapsulatedPayload,
-    EncapsulatedPayload(vec![0u8; PAYLOAD_ENCODED_SIZE].into_boxed_slice().try_into().unwrap()) => roundtrip
+    EncapsulatedPayload(
+        vec![0x09u8; PAYLOAD_ENCODED_SIZE].into_boxed_slice().try_into().unwrap(),
+    ) => include_str!("../fixtures/encapsulated_payload.hex")
 );

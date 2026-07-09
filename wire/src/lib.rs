@@ -30,7 +30,8 @@ mod derive_smoke;
 pub use error::DecodeError;
 pub use fixtures::{
     WireExamples, WireFixture, WireFixtures, assert_wire_fixtures,
-    assert_wire_fixtures_encode_only, assert_wire_fixtures_with,
+    assert_wire_fixtures_decode_only, assert_wire_fixtures_decode_only_with,
+    assert_wire_fixtures_encode_only, assert_wire_fixtures_with, decode_fixture_hex,
 };
 pub use lb_wire_macros::{WireCodec, wire_fixtures};
 
@@ -89,10 +90,10 @@ pub trait WireDecode: WireExamples + Sized {
 }
 
 /// Ergonomic decode for the common `Context = ()` case:
-/// `T::decode_without_context(bytes)` instead of `T::decode(bytes, ())`.
+/// `T::decode(bytes)` instead of `T::decode(bytes, ())`.
 pub trait WireDecodeExt: WireDecode<Context = ()> {
-    fn decode_without_context(input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
-        Self::decode(input, &())
+    fn decode(input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
+        <Self as WireDecode>::decode(input, &())
     }
 }
 
@@ -104,7 +105,10 @@ impl<T> WireDecodeExt for T where T: WireDecode<Context = ()> {}
 /// The checked building block for fixed-size decoders — use it instead of
 /// `split_at`/indexing so malformed (short) input is a typed error, not a
 /// panic.
-pub fn take<T: ?Sized>(input: &[u8], n: usize) -> Result<(&[u8], &[u8]), DecodeError> {
+pub fn take<T>(input: &[u8], n: usize) -> Result<(&[u8], &[u8]), DecodeError>
+where
+    T: ?Sized,
+{
     input
         .split_at_checked(n)
         .ok_or_else(|| DecodeError::end_of_input::<T>(n.saturating_sub(input.len())))

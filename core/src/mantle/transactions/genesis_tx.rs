@@ -293,10 +293,6 @@ impl ChainId {
     pub const fn is_empty(&self) -> bool {
         self.0.as_inner().is_empty()
     }
-
-    fn as_bounded_bytes(&self) -> ChainIdBoundedVec {
-        ChainIdBoundedVec::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned())
-    }
 }
 
 impl Display for ChainId {
@@ -354,11 +350,11 @@ impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for C
 
 impl WireEncode for ChainId {
     fn encoded_length(&self) -> usize {
-        self.as_bounded_bytes().encoded_length()
+        self.0.to_vec().encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.as_bounded_bytes().encode_into(out);
+        self.0.to_vec().encode_into(out);
     }
 }
 

@@ -121,11 +121,6 @@ impl Locator {
     pub fn is_empty(&self) -> bool {
         self.0.as_inner().is_empty()
     }
-
-    /// The length-prefixed byte view used by the wire codec.
-    fn as_bounded_bytes(&self) -> BoundedMultiaddrBytes {
-        BoundedMultiaddrBytes::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned())
-    }
 }
 
 impl AsRef<Multiaddr> for Locator {
@@ -215,11 +210,11 @@ impl Display for Locator {
 
 impl WireEncode for Locator {
     fn encoded_length(&self) -> usize {
-        self.as_bounded_bytes().encoded_length()
+        self.0.to_vec().encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.as_bounded_bytes().encode_into(out);
+        self.0.to_vec().encode_into(out);
     }
 }
 
@@ -293,8 +288,6 @@ impl WireDecode for ServiceType {
         Ok((rest, service))
     }
 }
-
-// TODO: Remove once the `WireCodec` macro supports logic for custom tags.
 
 #[cfg(test)]
 mod service_type_tests {

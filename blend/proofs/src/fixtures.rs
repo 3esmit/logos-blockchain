@@ -5,15 +5,13 @@ use crate::{
     selection::{ProofOfSelection, VerifiedProofOfSelection},
 };
 
-// `ProofOfQuota` is only ever decoded (untrusted proofs arrive on the wire);
-// the reference value is what the well-known bytes decode into.
 wire_fixtures!(
     ProofOfQuota,
-    decode_only,
     VerifiedProofOfQuota::from_bytes_unchecked([1u8; _]).into() => "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
 );
 
-// `VerifiedProofOfQuota` is only ever encoded (only verified proofs are sent).
+// `VerifiedProofOfQuota` is only ever encoded (only verified proofs are sent
+// out).
 wire_fixtures!(
     VerifiedProofOfQuota,
     encode_only,
@@ -22,10 +20,11 @@ wire_fixtures!(
 
 wire_fixtures!(
     ProofOfSelection,
-    decode_only,
     VerifiedProofOfSelection::from_bytes_unchecked([1u8; _]).into() => "0101010101010101010101010101010101010101010101010101010101010101"
 );
 
+// `VerifiedProofOfSelection` is only ever encoded (only verified proofs are
+// sent out).
 wire_fixtures!(
     VerifiedProofOfSelection,
     encode_only,

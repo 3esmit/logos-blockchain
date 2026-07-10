@@ -65,12 +65,12 @@ wire_fixtures!(
             VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
             VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
         ).unwrap()]
-    ).unwrap() => "07070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
+    ).unwrap() => "47a7f32151949c60050ec4454b43fcaf351a2f2383ddef2a6ab4176e269e34477821d1abaf629a228ad07b998628f4dd1e137827ca30ec8d99e90aaf9ff355af72e911fbe5eaaf7a867ca80e0a45d5a00c89a7360996aaf496503291d771adeb9caed0ca2bc20af7c31ecea182b4eb797300b68a4e5001ee438e45b402993984782478001f7336041173182189484d18804b75fb1b753c8c7cc0ae56d45c1d5b281ed36752418b833ac7e8d97bb2f78a3ac0ef9704c4f4c61ebd1c2bbfb3806dabbd2ef7b33c7778ce23a4133ac0dcf3d39c43f0562090f590506fd30e38eae7b8eb89690481bbb9a9848921d9d951b56a4ad15eec0093997cf07c04722b32edccf3bec96815f21a40d1e40e7fe5cea75d821f9763339402a92e136541b6837c7e"
 );
 
 wire_fixtures!(
     EncapsulatedBlendingHeader,
-    Self::initialize(&BlendingHeader::pseudo_random(&[1u8; 32])) => "00"
+    Self::initialize(&BlendingHeader::pseudo_random(&[1u8; 32])) => "9c05c033b59c05091fe7e3bd1bbc4abc77f69a71ba282f10e6675bb051fd4a2a5875f96f219d2a8fadfd1ed5af6476c35d6be6a485647abf2709569a69b0aa1c030ca0e01eed758d1158e36e487c1282ec22aa61edbfdd7032067707f477951f27e8f5e76ef941dde3de62a3cea5a9b6ed3e5294a836c6cb6b50eda8a09a27f57fe0e30ffcc8b93c159708ac9a230eda377da92d675c8db8e95c2f9009e1ae63e10278547404d7b335a4a749f2811570e34d6588123e1c2a614faabd0602a3fb4698466e50305eafcddebcd175c63bd560e47c883a993c87a9d9460db9ca83c56602f1eee75124c22637baa8d9fc42a62b3a34317dd4ab53e3d71442dadec7b1e8a4c258d208a3d3662a4f83674f93d6074a81e902c33d4adcbd1c995f85281200"
 );
 
 wire_fixtures!(
@@ -202,52 +202,3 @@ wire_fixtures!(
     encode_only,
     wire_fixture_message() => include_str!("encapsulated_message.hex")
 );
-
-#[cfg(test)]
-#[test]
-fn __generate_leaf_fixtures() {
-    use core::fmt::Write as _;
-
-    use lb_wire::WireEncode as _;
-
-    fn to_hex(bytes: &[u8]) -> String {
-        bytes
-            .iter()
-            .fold(String::with_capacity(bytes.len() * 2), |mut hex, byte| {
-                let _ = write!(&mut hex, "{byte:02x}");
-                hex
-            })
-    }
-
-    let blending_header =
-        EncapsulatedBlendingHeader::initialize(&BlendingHeader::pseudo_random(&[1u8; 32]));
-    std::fs::write(
-        "src/fixtures/__blending_header.hex",
-        to_hex(&blending_header.encode()),
-    )
-    .unwrap();
-
-    let payload = EncapsulatedPayload::initialize(&Payload::new(
-        PayloadType::Data,
-        PaddedPayloadBody::try_from(vec![7u8, 8, 9]).unwrap(),
-    ));
-    std::fs::write(
-        "src/fixtures/encapsulated_payload.hex",
-        to_hex(&payload.encode()),
-    )
-    .unwrap();
-
-    let private_header = EncapsulatedPrivateHeader::try_initialize(&[EncapsulationInput::try_new(
-        UnsecuredEd25519Key::from_bytes(&[1u8; 32]),
-        &UnsecuredEd25519Key::from_bytes(&[2u8; 32]).public_key(),
-        VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
-        VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
-    )
-    .unwrap()])
-    .unwrap();
-    std::fs::write(
-        "src/fixtures/__private_header.hex",
-        to_hex(&private_header.encode()),
-    )
-    .unwrap();
-}

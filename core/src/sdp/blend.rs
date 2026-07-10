@@ -70,7 +70,7 @@ mod tests {
         selection::{ProofOfSelection, VerifiedProofOfSelection},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
-    use lb_wire::{DecodeError, WireDecode as _, WireEncode as _};
+    use lb_wire::{DecodeError, WireDecodeExt as _, WireEncode as _};
 
     use crate::sdp::{
         ActivityMetadata,
@@ -87,7 +87,7 @@ mod tests {
         };
 
         let bytes = proof.encode_to_vec();
-        let (_, decoded) = ActivityProof::decode(&bytes, &()).unwrap();
+        let (_, decoded) = ActivityProof::decode(&bytes).unwrap();
 
         assert_eq!(proof, decoded);
     }
@@ -103,7 +103,7 @@ mod tests {
         let mut bytes = proof.encode_to_vec();
         bytes[0] = 0x99; // Invalid version
 
-        let err = ActivityProof::decode(&bytes, &()).unwrap_err();
+        let err = ActivityProof::decode(&bytes).unwrap_err();
         assert!(matches!(err, DecodeError::InvalidValue { .. }));
     }
 
@@ -111,7 +111,7 @@ mod tests {
     fn activity_proof_too_short() {
         let bytes = vec![BLEND_ACTIVE_METADATA_VERSION_BYTE, 0x01, 0x02]; // Only 3 bytes
 
-        let err = ActivityProof::decode(&bytes, &()).unwrap_err();
+        let err = ActivityProof::decode(&bytes).unwrap_err();
         assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
     }
 
@@ -126,7 +126,7 @@ mod tests {
         let metadata = ActivityMetadata::Blend(Box::new(proof.clone()));
 
         let bytes = metadata.encode_to_vec();
-        let (_, decoded) = ActivityMetadata::decode(&bytes, &()).unwrap();
+        let (_, decoded) = ActivityMetadata::decode(&bytes).unwrap();
 
         assert_eq!(metadata, decoded);
 

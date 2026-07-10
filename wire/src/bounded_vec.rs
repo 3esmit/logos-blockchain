@@ -161,7 +161,7 @@ where
 mod tests {
     use lb_utils::bounded::BoundedVec;
 
-    use crate::{DecodeError, WireDecode as _, WireEncode as _};
+    use crate::{DecodeError, WireDecodeExt as _, WireEncode as _};
 
     /// Bound used across the tests: between 2 and 4 elements.
     const MIN: usize = 2;
@@ -188,54 +188,54 @@ mod tests {
 
     #[test]
     fn decode_reads_a_well_formed_payload() {
-        let (rest, bv) = Bounded::decode(&[3, 1, 2, 3], &()).unwrap();
+        let (rest, bv) = Bounded::decode(&[3, 1, 2, 3]).unwrap();
         assert!(rest.is_empty());
         assert_eq!(bv.as_slice(), &[1, 2, 3]);
     }
 
     #[test]
     fn decode_leaves_trailing_bytes_untouched() {
-        let (rest, bv) = Bounded::decode(&[2, 1, 2, 99, 100], &()).unwrap();
+        let (rest, bv) = Bounded::decode(&[2, 1, 2, 99, 100]).unwrap();
         assert_eq!(rest, &[99, 100]);
         assert_eq!(bv.as_slice(), &[1, 2]);
     }
 
     #[test]
     fn decode_at_the_min_and_max_lengths() {
-        let (_, at_min) = Bounded::decode(&[2, 1, 2], &()).unwrap();
+        let (_, at_min) = Bounded::decode(&[2, 1, 2]).unwrap();
         assert_eq!(at_min.as_slice(), &[1, 2]);
 
-        let (_, at_max) = Bounded::decode(&[4, 1, 2, 3, 4], &()).unwrap();
+        let (_, at_max) = Bounded::decode(&[4, 1, 2, 3, 4]).unwrap();
         assert_eq!(at_max.as_slice(), &[1, 2, 3, 4]);
     }
 
     #[test]
     fn decode_rejects_a_length_below_min() {
-        let err = Bounded::decode(&[1, 7], &()).unwrap_err();
+        let err = Bounded::decode(&[1, 7]).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 1, .. }));
     }
 
     #[test]
     fn decode_rejects_a_zero_length() {
-        let err = Bounded::decode(&[0], &()).unwrap_err();
+        let err = Bounded::decode(&[0]).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 0, .. }));
     }
 
     #[test]
     fn decode_rejects_a_length_above_max() {
-        let err = Bounded::decode(&[5, 1, 2, 3, 4, 5], &()).unwrap_err();
+        let err = Bounded::decode(&[5, 1, 2, 3, 4, 5]).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 5, .. }));
     }
 
     #[test]
     fn decode_rejects_an_oversized_length_even_without_a_payload() {
-        let err = Bounded::decode(&[5], &()).unwrap_err();
+        let err = Bounded::decode(&[5]).unwrap_err();
         assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 5, .. }));
     }
 
     #[test]
     fn decode_fails_on_an_empty_input() {
-        let err = Bounded::decode(&[], &()).unwrap_err();
+        let err = Bounded::decode(&[]).unwrap_err();
         assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
     }
 
@@ -244,13 +244,13 @@ mod tests {
         // A 2-byte prefix is expected (via a `u16::MAX` maximum), but only 1
         // byte is available.
         type WideCodec = BoundedVec<u8, MIN, { u16::MAX as usize }>;
-        let err = WideCodec::decode(&[0], &()).unwrap_err();
+        let err = WideCodec::decode(&[0]).unwrap_err();
         assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
     }
 
     #[test]
     fn decode_fails_when_the_payload_is_truncated() {
-        let err = Bounded::decode(&[3, 1], &()).unwrap_err();
+        let err = Bounded::decode(&[3, 1]).unwrap_err();
         assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
     }
 
@@ -258,7 +258,7 @@ mod tests {
     fn encode_then_decode_roundtrips() {
         let original = bounded(&[10, 20, 30, 40]);
         let bytes = original.encode_to_vec();
-        let (rest, decoded) = Bounded::decode(&bytes, &()).unwrap();
+        let (rest, decoded) = Bounded::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
     }
@@ -272,7 +272,7 @@ mod tests {
         // 1-byte length prefix (3) (MAX == 4) followed by three little-endian `u16`s.
         assert_eq!(bytes, vec![3, 0x02, 0x01, 0x04, 0x03, 0xCD, 0xAB]);
 
-        let (rest, decoded) = U16Codec::decode(&bytes, &()).unwrap();
+        let (rest, decoded) = U16Codec::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
     }
@@ -283,7 +283,7 @@ mod tests {
         let original: TwoByteBounded = [10].into();
         let bytes = original.encode_to_vec();
         assert_eq!(bytes, vec![1, 0, 10]); // 2-byte length prefix (1) then a single `u8` (10)
-        let (rest, decoded) = TwoByteBounded::decode(&bytes, &()).unwrap();
+        let (rest, decoded) = TwoByteBounded::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
     }
@@ -294,7 +294,7 @@ mod tests {
         let original: FourByteBounded = FourByteBounded::new_unchecked(vec![10]);
         let bytes = original.encode_to_vec();
         assert_eq!(bytes, vec![1, 0, 0, 0, 10]); // 4-byte length prefix (1) then a single `u8` (10)
-        let (rest, decoded) = FourByteBounded::decode(&bytes, &()).unwrap();
+        let (rest, decoded) = FourByteBounded::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
     }
@@ -305,7 +305,7 @@ mod tests {
         let original: EightByteBounded = EightByteBounded::new_unchecked(vec![10]);
         let bytes = original.encode_to_vec();
         assert_eq!(bytes, vec![1, 0, 0, 0, 0, 0, 0, 0, 10]); // 8-byte prefix (1) then a single `u8`
-        let (rest, decoded) = EightByteBounded::decode(&bytes, &()).unwrap();
+        let (rest, decoded) = EightByteBounded::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
     }

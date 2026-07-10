@@ -152,7 +152,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 #[cfg(test)]
 mod tests {
     use lb_utils::bounded::BoundedError;
-    use lb_wire::WireDecode as _;
+    use lb_wire::WireDecodeExt as _;
 
     use super::*;
 
@@ -195,7 +195,7 @@ mod tests {
     fn encode_decode_round_trip() {
         let op = sample();
         let encoded = op.encode();
-        let decoded = InscriptionOp::decode(&encoded, &()).unwrap().1;
+        let decoded = InscriptionOp::decode(&encoded).unwrap().1;
         assert_eq!(op, decoded);
     }
 

@@ -1,5 +1,5 @@
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_wire::{DecodeError, WireDecode as _, WireEncode as _};
+use lb_wire::{DecodeError, WireDecodeExt as _, WireEncode as _};
 
 use crate::{
     mantle::{Op, OpProof},
@@ -28,13 +28,13 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> Result<(&'a [u8], OpProof), 
     match op {
         // Ed25519SigProof = Ed25519Signature
         Op::ChannelInscribe(_) => {
-            Ed25519Signature::decode(input, &()).map(|(rest, sig)| (rest, OpProof::Ed25519Sig(sig)))
+            Ed25519Signature::decode(input).map(|(rest, sig)| (rest, OpProof::Ed25519Sig(sig)))
         }
 
         // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
         Op::SDPDeclare(_) => {
-            let (input, zk_sig) = ZkSignature::decode(input, &())?;
-            let (input, ed25519_sig) = Ed25519Signature::decode(input, &())?;
+            let (input, zk_sig) = ZkSignature::decode(input)?;
+            let (input, ed25519_sig) = Ed25519Signature::decode(input)?;
             Ok((
                 input,
                 OpProof::ZkAndEd25519Sigs {
@@ -46,16 +46,16 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> Result<(&'a [u8], OpProof), 
 
         // ZkSigProof = ZkSignature
         Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_) => {
-            ZkSignature::decode(input, &()).map(|(rest, sig)| (rest, OpProof::ZkSig(sig)))
+            ZkSignature::decode(input).map(|(rest, sig)| (rest, OpProof::ZkSig(sig)))
         }
 
         // ProofOfClaimProof = Groth16
         Op::LeaderClaim(_) => {
-            Groth16LeaderClaimProof::decode(input, &()).map(|(rest, poc)| (rest, OpProof::PoC(poc)))
+            Groth16LeaderClaimProof::decode(input).map(|(rest, poc)| (rest, OpProof::PoC(poc)))
         }
 
         // ChannelMultiSigProof — also used by ChannelConfig (threshold sigs)
-        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => ChannelMultiSigProof::decode(input, &())
+        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => ChannelMultiSigProof::decode(input)
             .map(|(rest, proof)| (rest, OpProof::ChannelMultiSigProof(proof))),
     }
 }

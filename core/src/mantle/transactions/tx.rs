@@ -7,7 +7,7 @@ use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_wire::{WireCodec, WireDecode as _, WireEncode as _};
+use lb_wire::{WireCodec, WireDecodeExt as _, WireEncode as _};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -218,7 +218,7 @@ impl<'de> Deserialize<'de> for MantleTx {
             <MantleTxDeSerImpl as Deserialize>::deserialize(deserializer).map(Into::into)
         } else {
             let bytes: Vec<u8> = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes, &())
+            Self::decode(&bytes)
                 .map(|(_, tx)| tx)
                 .map_err(serde::de::Error::custom)
         }

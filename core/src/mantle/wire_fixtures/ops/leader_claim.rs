@@ -19,7 +19,7 @@ wire_fixtures!(
 
 wire_fixtures!(
     LeaderClaimOp,
-    LeaderClaimOp {
+    Self {
         rewards_root: Fr::ZERO.into(),
         voucher_nullifier: Fr::ONE.into(),
         pk: Fr::ZERO.into()

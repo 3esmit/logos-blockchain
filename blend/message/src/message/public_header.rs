@@ -14,10 +14,10 @@ const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
 pub const PUBLIC_HEADER_ENCODED_SIZE: usize =
     size_of::<u8>() + ED25519_PUBLIC_KEY_SIZE + PROOF_OF_QUOTA_SIZE + ED25519_SIGNATURE_SIZE;
 
-/// Well-known hex of the public-header fixture: version `1`, an all-zero signing
-/// key, a proof of quota of all `1`s, a signature of all `2`s. Distinct per-field
-/// fills catch field-order and size drift. Shared by [`PublicHeader`] and its
-/// two verified wrappers (which encode identically).
+/// Well-known hex of the public-header fixture: version `1`, an all-zero
+/// signing key, a proof of quota of all `1`s, a signature of all `2`s. Distinct
+/// per-field fills catch field-order and size drift. Shared by [`PublicHeader`]
+/// and its two verified wrappers (which encode identically).
 const PUBLIC_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202";
 
 // A public header that is revealed to all nodes.
@@ -159,7 +159,7 @@ impl WireDecode for PublicHeader {
 
 wire_fixtures!(
     PublicHeader,
-    PublicHeader::new(
+    Self::new(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         &VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
         Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
@@ -260,7 +260,7 @@ impl WireEncode for PublicHeaderWithVerifiedSignature {
 wire_fixtures!(
     PublicHeaderWithVerifiedSignature,
     encode_only,
-    PublicHeaderWithVerifiedSignature::new(
+    Self::new(
         VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
@@ -381,7 +381,7 @@ impl WireEncode for VerifiedPublicHeader {
 wire_fixtures!(
     VerifiedPublicHeader,
     encode_only,
-    VerifiedPublicHeader::new(
+    Self::new(
         VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]),
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),

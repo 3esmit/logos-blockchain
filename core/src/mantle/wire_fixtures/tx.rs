@@ -7,6 +7,6 @@ use crate::mantle::{
 };
 
 wire_fixtures!(MantleTx,
-    MantleTx(Ops::empty()) => "00",
-    MantleTx([Op::Transfer(TransferOp { inputs: [NoteId(Fr::ZERO)].into(), outputs: Outputs::empty() })].into()) => "010001000000000000000000000000000000000000000000000000000000000000000000"
+    Self(Ops::empty()) => "00",
+    Self([Op::Transfer(TransferOp { inputs: [NoteId(Fr::ZERO)].into(), outputs: Outputs::empty() })].into()) => "010001000000000000000000000000000000000000000000000000000000000000000000"
 );

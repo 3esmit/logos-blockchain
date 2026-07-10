@@ -9,12 +9,12 @@ struct Named {
     b: u16,
 }
 
-wire_fixtures!(Named, Named { a: 0x07, b: 0x0201 } => "070102");
+wire_fixtures!(Named, Self { a: 0x07, b: 0x0201 } => "070102");
 
 #[derive(Debug, PartialEq, Eq, WireCodec)]
 struct Tuple(u8, u32);
 
-wire_fixtures!(Tuple, Tuple(0xAB, 0x0403_0201) => "ab01020304");
+wire_fixtures!(Tuple, Self(0xAB, 0x0403_0201) => "ab01020304");
 
 #[test]
 fn derived_named_struct_round_trips() {

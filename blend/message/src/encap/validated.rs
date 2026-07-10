@@ -108,7 +108,7 @@ impl WireEncode for EncapsulatedMessageWithVerifiedSignature {
 wire_fixtures!(
     EncapsulatedMessageWithVerifiedSignature,
     encode_only,
-    EncapsulatedMessageWithVerifiedSignature::from_components(
+    Self::from_components(
         PublicHeaderWithVerifiedSignature::new(
             VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
             Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
@@ -327,7 +327,7 @@ impl WireEncode for EncapsulatedMessageWithVerifiedPublicHeader {
 wire_fixtures!(
     EncapsulatedMessageWithVerifiedPublicHeader,
     encode_only,
-    EncapsulatedMessageWithVerifiedPublicHeader::from_components(
+    Self::from_components(
         VerifiedPublicHeader::new(
             VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]),
             Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),

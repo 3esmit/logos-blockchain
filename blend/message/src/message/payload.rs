@@ -50,7 +50,7 @@ impl WireDecode for PayloadType {
     }
 }
 
-wire_fixtures!(PayloadType, PayloadType::Cover => "00", PayloadType::Data => "01");
+wire_fixtures!(PayloadType, Self::Cover => "00", Self::Data => "01");
 
 /// The decapsulated payload body, padded to a fixed size.
 ///
@@ -137,7 +137,7 @@ impl WireDecode for PaddedPayloadBody {
 // KiB.
 wire_fixtures!(
     PaddedPayloadBody,
-    PaddedPayloadBody::try_from([1u8, 2, 3].as_slice()).unwrap()
+    Self::try_from([1u8, 2, 3].as_slice()).unwrap()
         => include_str!("../fixtures/padded_payload_body.hex")
 );
 
@@ -209,7 +209,7 @@ impl WireDecode for Payload {
 // KiB.
 wire_fixtures!(
     Payload,
-    Payload::new(
+    Self::new(
         PayloadType::Data,
         PaddedPayloadBody::try_from([4u8, 5, 6].as_slice()).unwrap(),
     ) => include_str!("../fixtures/payload.hex")

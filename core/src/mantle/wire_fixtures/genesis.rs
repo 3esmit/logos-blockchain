@@ -11,8 +11,8 @@ wire_fixtures!(
 
 wire_fixtures!(
     GenesisTime,
-    GenesisTime::new(1000) => "e8030000",
-    GenesisTime::new(u32::MAX) => "ffffffff"
+    Self::new(1000) => "e8030000",
+    Self::new(u32::MAX) => "ffffffff"
 );
 
 wire_fixtures!(

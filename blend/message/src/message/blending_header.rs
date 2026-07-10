@@ -117,11 +117,12 @@ impl WireDecode for BlendingHeader {
 }
 
 // Well-known bytes: a zero signing key, a proof of quota of all `1`s, a
-// signature of all `2`s, a proof of selection of all `3`s, and `is_last = false`
-// (a single `0` byte). Distinct per-field fills catch field-order and size drift.
+// signature of all `2`s, a proof of selection of all `3`s, and `is_last =
+// false` (a single `0` byte). Distinct per-field fills catch field-order and
+// size drift.
 wire_fixtures!(
     BlendingHeader,
-    BlendingHeader {
+    Self {
         signing_pubkey: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE])
             .into_inner(),

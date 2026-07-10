@@ -19,8 +19,8 @@ use crate::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 
-wire_fixtures!(ChannelId, ChannelId::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
-wire_fixtures!(MsgId, MsgId::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
+wire_fixtures!(ChannelId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
+wire_fixtures!(MsgId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
 wire_fixtures!(
     ChannelConfigOp,
     Self {

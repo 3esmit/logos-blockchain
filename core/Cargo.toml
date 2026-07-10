@@ -32,7 +32,6 @@ lb-poseidon2                  = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }
 lb-wire                       = { workspace = true }
-lb-zksign                     = { workspace = true }
 multiaddr                     = { workspace = true }
 num-bigint                    = { workspace = true }
 rpds                          = { workspace = true }

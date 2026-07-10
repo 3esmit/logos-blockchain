@@ -1,10 +1,10 @@
 pub mod channel;
+mod fixtures;
 pub mod gas;
 pub mod ledger;
 pub mod mock;
 pub mod ops;
 pub mod transactions;
-mod wire_fixtures;
 
 use std::hash::Hash;
 

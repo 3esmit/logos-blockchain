@@ -712,13 +712,9 @@ mod tests {
         assert_eq!(genesis_tx, deserialized);
     }
 
-    #[test]
-    fn test_cryptarchia_parameter_roundtrip() {
-        let param = cryptarchia_param();
-        let encoded = param.encode();
-        let (_, decoded) = CryptarchiaParameter::decode(&encoded, &()).unwrap();
-        assert_eq!(param, decoded);
-    }
+    // Wire round-trip coverage for `CryptarchiaParameter` lives in its
+    // well-known fixture (`wire_fixtures!` in `mantle::fixtures`); the test
+    // below covers only the decode-error paths.
 
     #[test]
     fn test_genesis_time_boundaries() {

@@ -1,4 +1,4 @@
-use lb_wire::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
+use lb_wire::{DecodeError, WireDecode, WireEncode, take};
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -50,8 +50,6 @@ impl WireDecode for PayloadType {
     }
 }
 
-wire_fixtures!(PayloadType, Self::Cover => "00", Self::Data => "01");
-
 /// The decapsulated payload body, padded to a fixed size.
 ///
 /// `actual_len` is the length of the real (unpadded) content and is the single
@@ -100,6 +98,32 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
     }
 }
 
+impl PaddedPayloadBody {
+    /// Deterministic constructor used only to build the well-known wire
+    /// fixtures: it pads with zeros instead of random bytes so the encoding is
+    /// reproducible. Production code must go through [`TryFrom`], which pads
+    /// with random bytes to keep padded bodies indistinguishable on the wire.
+    #[doc(hidden)]
+    pub(crate) fn zero_padded(value: &[u8]) -> Result<Self, Error> {
+        if value.len() > MAX_PAYLOAD_BODY_SIZE {
+            return Err(Error::PayloadTooLarge);
+        }
+
+        let actual_len: u16 = value
+            .len()
+            .try_into()
+            .map_err(|_| Error::InvalidPayloadLength)?;
+
+        let mut padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]> = vec![0; MAX_PAYLOAD_BODY_SIZE]
+            .into_boxed_slice()
+            .try_into()
+            .expect("body must be created with the correct size");
+        padded[..value.len()].copy_from_slice(value);
+
+        Ok(Self { actual_len, padded })
+    }
+}
+
 impl WireEncode for PaddedPayloadBody {
     fn encoded_length(&self) -> usize {
         self.actual_len
@@ -131,15 +155,6 @@ impl WireDecode for PaddedPayloadBody {
         Ok((remaining, Self { actual_len, padded }))
     }
 }
-
-// Well-known bytes: a `u16` length of 3, the body `[1, 2, 3]`, then zero
-// padding to `MAX_PAYLOAD_BODY_SIZE`. Externalised as hex because it is ~34
-// KiB.
-wire_fixtures!(
-    PaddedPayloadBody,
-    Self::try_from([1u8, 2, 3].as_slice()).unwrap()
-        => include_str!("../fixtures/padded_payload_body.hex")
-);
 
 /// The exact number of bytes a [`Payload`] encodes to: a fixed enum
 /// discriminant, the `u16` body length, and the body padded to
@@ -203,14 +218,3 @@ impl WireDecode for Payload {
         Ok((input, Self { payload_type, body }))
     }
 }
-
-// Well-known bytes: the `Data` discriminant (`0x01`), a `u16` length of 3, the
-// body `[4, 5, 6]`, then zero padding. Externalised as hex because it is ~34
-// KiB.
-wire_fixtures!(
-    Payload,
-    Self::new(
-        PayloadType::Data,
-        PaddedPayloadBody::try_from([4u8, 5, 6].as_slice()).unwrap(),
-    ) => include_str!("../fixtures/payload.hex")
-);

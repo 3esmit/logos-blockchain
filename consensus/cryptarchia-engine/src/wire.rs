@@ -1,4 +1,4 @@
-use lb_wire::{DecodeError, WireDecode, WireEncode, wire_fixtures};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 
 use crate::Epoch;
 
@@ -23,5 +23,3 @@ impl WireDecode for Epoch {
         Ok((rest, Self::new(inner)))
     }
 }
-
-wire_fixtures!(Epoch, Self::new(1) => "01000000");

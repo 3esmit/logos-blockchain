@@ -1,8 +1,8 @@
-use lb_wire::{DecodeError, WireDecode, WireEncode, wire_fixtures};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 
 use crate::{
-    quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota},
-    selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection, VerifiedProofOfSelection},
+    quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota},
+    selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection},
 };
 
 impl WireEncode for ProofOfQuota {
@@ -29,11 +29,6 @@ impl WireDecode for ProofOfQuota {
     }
 }
 
-wire_fixtures!(
-    ProofOfQuota,
-    VerifiedProofOfQuota::from_bytes_unchecked([1u8; _]).into() => "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
-);
-
 impl WireEncode for ProofOfSelection {
     fn encoded_length(&self) -> usize {
         PROOF_OF_SELECTION_SIZE
@@ -57,8 +52,3 @@ impl WireDecode for ProofOfSelection {
         Ok((rest, proof))
     }
 }
-
-wire_fixtures!(
-    ProofOfSelection,
-    VerifiedProofOfSelection::from_bytes_unchecked([1u8; _]).into() => "0101010101010101010101010101010101010101010101010101010101010101"
-);

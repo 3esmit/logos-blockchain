@@ -4,12 +4,11 @@ use derivative::Derivative;
 use itertools::Itertools as _;
 use lb_blend_crypto::{ZkHash, cipher::Cipher};
 use lb_blend_proofs::{
-    quota::{self, PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
+    quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_key_management_system_keys::keys::{
-    ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature, SharedKey,
-    UnsecuredEd25519Key,
+    Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
 use lb_wire::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
 use serde::{Deserialize, Serialize};
@@ -155,41 +154,6 @@ impl WireDecode for EncapsulatedMessage {
         ))
     }
 }
-
-/// The well-known [`EncapsulatedPart`] used by the message-level fixtures: one
-/// blending-header layer of `0x07`s followed by a payload of `0x09`s. Its bytes
-/// are `fixtures/encapsulated_part.hex`; the message fixtures prepend the
-/// public header to get `fixtures/encapsulated_message.hex`.
-pub(super) fn wire_fixture_encapsulated_part() -> EncapsulatedPart {
-    EncapsulatedPart {
-        private_header: EncapsulatedPrivateHeader(
-            vec![EncapsulatedBlendingHeader(
-                [0x07; BLENDING_HEADER_ENCODED_SIZE],
-            )]
-            .into_boxed_slice(),
-        ),
-        payload: EncapsulatedPayload(
-            vec![0x09u8; PAYLOAD_ENCODED_SIZE]
-                .into_boxed_slice()
-                .try_into()
-                .expect("fill is exactly PAYLOAD_ENCODED_SIZE bytes"),
-        ),
-    }
-}
-
-wire_fixtures!(
-    EncapsulatedMessage,
-    decode_only,
-    context = NonZeroU64::new(1).unwrap(),
-    Self::from_components(
-        PublicHeader::new(
-            Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-            &VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
-            Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
-        ),
-        wire_fixture_encapsulated_part(),
-    ) => include_str!("../fixtures/encapsulated_message.hex")
-);
 
 /// Part of the message that should be encapsulated.
 // TODO: Consider having `InitializedPart` that just finished the initialization step and doesn't
@@ -356,12 +320,6 @@ impl WireDecode for EncapsulatedPart {
         ))
     }
 }
-
-wire_fixtures!(
-    EncapsulatedPart,
-    context = NonZeroU64::new(1).unwrap(),
-    wire_fixture_encapsulated_part() => include_str!("../fixtures/encapsulated_part.hex")
-);
 
 /// Verify the public header reconstructed when decapsulating all but the very
 /// last private header.

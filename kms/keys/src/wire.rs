@@ -1,5 +1,5 @@
-use lb_groth16::Fr;
-use lb_wire::{DecodeError, WireDecode, WireEncode, wire_fixtures};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use lb_zksign::ZkSignProof;
 
 use crate::keys::{
@@ -31,11 +31,6 @@ impl WireDecode for Ed25519PublicKey {
     }
 }
 
-wire_fixtures!(
-    Ed25519PublicKey,
-    Self::from_bytes(&[1u8; _]).unwrap() => "0101010101010101010101010101010101010101010101010101010101010101"
-);
-
 impl WireEncode for Ed25519Signature {
     fn encoded_length(&self) -> usize {
         ED25519_SIGNATURE_SIZE
@@ -57,8 +52,6 @@ impl WireDecode for Ed25519Signature {
         Ok((rest, Self::from_bytes(&inner)))
     }
 }
-
-wire_fixtures!(Ed25519Signature, Self::from_bytes(&[1u8; _]) => "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101");
 
 impl WireEncode for ZkPublicKey {
     fn encoded_length(&self) -> usize {
@@ -82,14 +75,12 @@ impl WireDecode for ZkPublicKey {
     }
 }
 
-wire_fixtures!(
-    ZkPublicKey,
-    Fr::from(1u64).into() => "0100000000000000000000000000000000000000000000000000000000000000"
-);
-
 impl WireEncode for ZkSignature {
     fn encoded_length(&self) -> usize {
-        self.as_proof().to_bytes().len()
+        // The compressed Groth16 proof is a fixed-size blob; return the constant
+        // rather than serializing the proof just to measure it (the trait
+        // contract requires `encoded_length` to neither allocate nor encode).
+        COMPRESSED_PROOF_SIZE
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -108,8 +99,3 @@ impl WireDecode for ZkSignature {
         Ok((rest, Self::new(ZkSignProof::from_bytes(&inner))))
     }
 }
-
-wire_fixtures!(
-    ZkSignature,
-    Self::new(ZkSignProof::from_bytes(&[1u8; _])) => "0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
-);

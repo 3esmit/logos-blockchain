@@ -7,7 +7,7 @@ use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
     UnsecuredEd25519Key,
 };
-use lb_wire::{DecodeError, WireDecode, WireEncode, wire_fixtures};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::domains;
@@ -115,22 +115,3 @@ impl WireDecode for BlendingHeader {
         ))
     }
 }
-
-// Well-known bytes: a zero signing key, a proof of quota of all `1`s, a
-// signature of all `2`s, a proof of selection of all `3`s, and `is_last =
-// false` (a single `0` byte). Distinct per-field fills catch field-order and
-// size drift.
-wire_fixtures!(
-    BlendingHeader,
-    Self {
-        signing_pubkey: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE])
-            .into_inner(),
-        signature: Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
-        proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(
-            [3; PROOF_OF_SELECTION_SIZE],
-        )
-        .into_inner(),
-        is_last: false,
-    } => "00000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202030303030303030303030303030303030303030303030303030303030303030300"
-);

@@ -2,7 +2,7 @@ use lb_blend_proofs::quota::{self, PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedPr
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
 };
-use lb_wire::{DecodeError, WireDecode, WireEncode, wire_fixtures};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{Error, MessageIdentifier, encap::ProofsVerifier};
@@ -13,12 +13,6 @@ const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
 /// fixed-size fields). Compile-time constant.
 pub const PUBLIC_HEADER_ENCODED_SIZE: usize =
     size_of::<u8>() + ED25519_PUBLIC_KEY_SIZE + PROOF_OF_QUOTA_SIZE + ED25519_SIGNATURE_SIZE;
-
-/// Well-known hex of the public-header fixture: version `1`, an all-zero
-/// signing key, a proof of quota of all `1`s, a signature of all `2`s. Distinct
-/// per-field fills catch field-order and size drift. Shared by [`PublicHeader`]
-/// and its two verified wrappers (which encode identically).
-const PUBLIC_HEADER_HEX: &str = "0100000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202";
 
 // A public header that is revealed to all nodes.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -157,15 +151,6 @@ impl WireDecode for PublicHeader {
     }
 }
 
-wire_fixtures!(
-    PublicHeader,
-    Self::new(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        &VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
-        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
-    ) => PUBLIC_HEADER_HEX
-);
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicHeaderWithVerifiedSignature {
     version: u8,
@@ -256,16 +241,6 @@ impl WireEncode for PublicHeaderWithVerifiedSignature {
         self.signature.encode_into(out);
     }
 }
-
-wire_fixtures!(
-    PublicHeaderWithVerifiedSignature,
-    encode_only,
-    Self::new(
-        VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]).into_inner(),
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
-    ) => PUBLIC_HEADER_HEX
-);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct VerifiedPublicHeader {
@@ -377,16 +352,6 @@ impl WireEncode for VerifiedPublicHeader {
         self.signature.encode_into(out);
     }
 }
-
-wire_fixtures!(
-    VerifiedPublicHeader,
-    encode_only,
-    Self::new(
-        VerifiedProofOfQuota::from_bytes_unchecked([1; PROOF_OF_QUOTA_SIZE]),
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        Ed25519Signature::from_bytes(&[2; ED25519_SIGNATURE_SIZE]),
-    ) => PUBLIC_HEADER_HEX
-);
 
 #[cfg(test)]
 mod tests {

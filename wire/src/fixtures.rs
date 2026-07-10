@@ -32,10 +32,10 @@ pub struct WireFixture<T> {
 pub type WireFixtures<T> = LowerBoundedVec<WireFixture<T>, 1>;
 
 /// Decode a well-known fixture's hex string to bytes, ignoring ASCII whitespace
-/// (so an `include_str!`-ed `.hex` file may contain newlines). Panics on invalid
-/// hex — fixtures are authored test vectors, so bad hex is a bug, not a runtime
-/// condition. Emitted by `wire_fixtures!` for its non-literal (`include_str!`)
-/// byte form.
+/// (so an `include_str!`-ed `.hex` file may contain newlines). Panics on
+/// invalid hex — fixtures are authored test vectors, so bad hex is a bug, not a
+/// runtime condition. Emitted by `wire_fixtures!` for its non-literal
+/// (`include_str!`) byte form.
 #[doc(hidden)]
 #[must_use]
 pub fn decode_fixture_hex(hex_str: &str) -> Vec<u8> {
@@ -87,8 +87,8 @@ where
 
 /// Like [`assert_wire_fixtures`], but for decode-only codecs (types that
 /// implement [`WireDecode`] but not [`WireEncode`], e.g. messages that are only
-/// ever received from a peer). Decodes the well-known bytes and checks the value
-/// equals the fixture's reference value, with nothing left over.
+/// ever received from a peer). Decodes the well-known bytes and checks the
+/// value equals the fixture's reference value, with nothing left over.
 #[doc(hidden)]
 pub fn assert_wire_fixtures_decode_only<T>()
 where

@@ -2,6 +2,7 @@ use lb_blend_crypto::{ZkHash, ZkHasher};
 pub use lb_poq::CorePathAndSelectors;
 use lb_poseidon2::Digest;
 
+mod fixtures;
 pub mod quota;
 pub mod selection;
 mod wire;

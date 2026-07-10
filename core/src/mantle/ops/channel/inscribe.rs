@@ -152,7 +152,6 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 #[cfg(test)]
 mod tests {
     use lb_utils::bounded::BoundedError;
-    use lb_wire::WireDecodeExt as _;
 
     use super::*;
 
@@ -191,13 +190,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn encode_decode_round_trip() {
-        let op = sample();
-        let encoded = op.encode();
-        let decoded = InscriptionOp::decode(&encoded).unwrap().1;
-        assert_eq!(op, decoded);
-    }
+    // Wire encode/decode round-trip coverage lives in the `InscriptionOp`
+    // well-known fixture (`wire_fixtures!` in `mantle::fixtures`).
 
     #[test]
     fn json_round_trip() {

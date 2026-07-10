@@ -72,25 +72,11 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
     use lb_wire::{DecodeError, WireDecodeExt as _, WireEncode as _};
 
-    use crate::sdp::{
-        ActivityMetadata,
-        blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE},
-    };
+    use crate::sdp::blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE};
 
-    #[test]
-    fn activity_proof_roundtrip() {
-        let proof = ActivityProof {
-            epoch: 10.into(),
-            signing_key: new_signing_key(0),
-            proof_of_quota: new_proof_of_quota_unchecked(0),
-            proof_of_selection: new_proof_of_selection_unchecked(1),
-        };
-
-        let bytes = proof.encode_to_vec();
-        let (_, decoded) = ActivityProof::decode(&bytes).unwrap();
-
-        assert_eq!(proof, decoded);
-    }
+    // Round-trip coverage for `ActivityProof` and `ActivityMetadata` lives in
+    // their well-known wire fixtures (`wire_fixtures!` in `mantle::fixtures`);
+    // the tests here cover only the decode-error paths a single fixture cannot.
 
     #[test]
     fn activity_proof_invalid_version() {
@@ -113,25 +99,6 @@ mod tests {
 
         let err = ActivityProof::decode(&bytes).unwrap_err();
         assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
-    }
-
-    #[test]
-    fn activity_metadata_roundtrip() {
-        let proof = ActivityProof {
-            epoch: 10.into(),
-            signing_key: new_signing_key(0),
-            proof_of_quota: new_proof_of_quota_unchecked(0),
-            proof_of_selection: new_proof_of_selection_unchecked(1),
-        };
-        let metadata = ActivityMetadata::Blend(Box::new(proof.clone()));
-
-        let bytes = metadata.encode_to_vec();
-        let (_, decoded) = ActivityMetadata::decode(&bytes).unwrap();
-
-        assert_eq!(metadata, decoded);
-
-        let ActivityMetadata::Blend(decoded_proof) = decoded;
-        assert_eq!(proof, *decoded_proof);
     }
 
     fn new_signing_key(byte: u8) -> Ed25519PublicKey {

@@ -1,6 +1,7 @@
 pub mod crypto;
 pub mod encap;
 mod error;
+mod fixtures;
 pub mod input;
 mod message;
 pub mod reward;

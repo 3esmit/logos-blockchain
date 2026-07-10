@@ -1,5 +1,4 @@
 use lb_wire::{DecodeError, WireDecode, WireEncode, take};
-use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 

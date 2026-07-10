@@ -10,7 +10,7 @@ use lb_blend_proofs::{
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
-use lb_wire::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
+use lb_wire::{DecodeError, WireDecode, WireEncode, take};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -182,7 +182,7 @@ impl EncapsulatedPart {
     /// encapsulations.
     ///
     /// It returns an error if the slice of inputs is empty.
-    pub(super) fn try_initialize(
+    pub(crate) fn try_initialize(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
@@ -194,7 +194,7 @@ impl EncapsulatedPart {
     }
 
     /// Add a layer of encapsulation.
-    pub(super) fn encapsulate(
+    pub(crate) fn encapsulate(
         self,
         shared_key: &SharedKey,
         signing_key: &UnsecuredEd25519Key,
@@ -283,7 +283,7 @@ impl EncapsulatedPart {
     }
 
     /// Signs the encapsulated part using the provided key.
-    pub(super) fn sign(&self, key: &UnsecuredEd25519Key) -> Ed25519Signature {
+    pub(crate) fn sign(&self, key: &UnsecuredEd25519Key) -> Ed25519Signature {
         key.sign_payload(&signing_body(&self.private_header, &self.payload))
     }
 }
@@ -375,7 +375,7 @@ fn signing_body(
 // TODO: Consider having `InitializedPrivateHeader`
 // that just finished the initialization step and doesn't have `decapsulate` method.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub(super) struct EncapsulatedPrivateHeader(Box<[EncapsulatedBlendingHeader]>);
+pub(crate) struct EncapsulatedPrivateHeader(Box<[EncapsulatedBlendingHeader]>);
 
 impl EncapsulatedPrivateHeader {
     #[cfg(test)]
@@ -386,7 +386,7 @@ impl EncapsulatedPrivateHeader {
     /// Initializes the private header as preparation for actual encapsulations.
     ///
     /// It returns an error if the slice of inputs is empty.
-    fn try_initialize(inputs: &[EncapsulationInput]) -> Result<Self, Error> {
+    pub(crate) fn try_initialize(inputs: &[EncapsulationInput]) -> Result<Self, Error> {
         if inputs.is_empty() {
             return Err(Error::EmptyEncapsulationInputs);
         }
@@ -598,14 +598,6 @@ impl WireDecode for EncapsulatedPrivateHeader {
     }
 }
 
-wire_fixtures!(
-    EncapsulatedPrivateHeader,
-    context = NonZeroU64::new(1).unwrap(),
-    Self(
-        vec![EncapsulatedBlendingHeader([0x07; BLENDING_HEADER_ENCODED_SIZE])].into_boxed_slice(),
-    ) => "07070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
-);
-
 /// A blending header encapsulated zero or more times.
 ///
 /// Always exactly [`BLENDING_HEADER_ENCODED_SIZE`] bytes (the cipher is
@@ -613,14 +605,14 @@ wire_fixtures!(
 /// [`EncapsulatedPrivateHeader`] is one contiguous allocation.
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-struct EncapsulatedBlendingHeader(
+pub(crate) struct EncapsulatedBlendingHeader(
     #[serde_as(as = "serde_with::Bytes")] [u8; BLENDING_HEADER_ENCODED_SIZE],
 );
 
 impl EncapsulatedBlendingHeader {
     /// Build a [`EncapsulatedBlendingHeader`] by serializing a
     /// [`BlendingHeader`] without any encapsulation.
-    fn initialize(header: &BlendingHeader) -> Self {
+    pub(crate) fn initialize(header: &BlendingHeader) -> Self {
         let mut bytes = Vec::with_capacity(BLENDING_HEADER_ENCODED_SIZE);
         header.encode_into(&mut bytes);
         Self(
@@ -678,15 +670,10 @@ impl WireDecode for EncapsulatedBlendingHeader {
         let (bytes, remaining) = take::<Self>(input, BLENDING_HEADER_ENCODED_SIZE)?;
         Ok((
             remaining,
-            Self(bytes.try_into().expect("take guarantees the length")),
+            Self(bytes.try_into().expect("Take guarantees the length")),
         ))
     }
 }
-
-wire_fixtures!(
-    EncapsulatedBlendingHeader,
-    Self([0x07; BLENDING_HEADER_ENCODED_SIZE]) => "07070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
-);
 
 /// A payload encapsulated zero or more times.
 ///
@@ -695,12 +682,14 @@ wire_fixtures!(
 /// [`EncapsulatedPart`]/[`EncapsulatedMessage`].
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-struct EncapsulatedPayload(#[serde_as(as = "serde_with::Bytes")] Box<[u8; PAYLOAD_ENCODED_SIZE]>);
+pub(crate) struct EncapsulatedPayload(
+    #[serde_as(as = "serde_with::Bytes")] Box<[u8; PAYLOAD_ENCODED_SIZE]>,
+);
 
 impl EncapsulatedPayload {
     /// Build a [`EncapsulatedPayload`] by serializing a [`Payload`]
     /// without any encapsulation.
-    fn initialize(payload: &Payload) -> Self {
+    pub(crate) fn initialize(payload: &Payload) -> Self {
         let mut bytes = Vec::with_capacity(PAYLOAD_ENCODED_SIZE);
         payload.encode_into(&mut bytes);
         Self(
@@ -763,10 +752,3 @@ impl WireDecode for EncapsulatedPayload {
         Ok((remaining, Self(boxed)))
     }
 }
-
-wire_fixtures!(
-    EncapsulatedPayload,
-    Self(
-        vec![0x09u8; PAYLOAD_ENCODED_SIZE].into_boxed_slice().try_into().unwrap(),
-    ) => include_str!("../fixtures/encapsulated_payload.hex")
-);

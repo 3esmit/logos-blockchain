@@ -1,8 +1,8 @@
 use derivative::Derivative;
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{
-    quota::{self, PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
-    selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection, inputs::VerifyInputs},
+    quota::{self, VerifiedProofOfQuota},
+    selection::inputs::VerifyInputs,
 };
 use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
 use lb_wire::WireEncode;
@@ -100,60 +100,6 @@ impl WireEncode for EncapsulatedMessageWithVerifiedSignature {
         self.public_header_with_verified_signature.encode_into(out);
         self.encapsulated_part.encode_into(out);
     }
-}
-
-/// Builds a deterministic, genuinely-encapsulated single-layer message from
-/// fixed well-known inputs. Used to pin the wire fixtures for every
-/// encapsulated message type (they all encode to the same bytes).
-///
-/// It mirrors [`EncapsulatedMessageWithVerifiedPublicHeader::try_new`] exactly,
-/// except the outer sender identity that seeds the fold — a signing key and a
-/// proof of quota that `try_new` samples at random — is fixed here, so the
-/// encapsulation, and therefore the encoded bytes, is reproducible.
-pub(crate) fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
-    let recipient_signing_key = UnsecuredEd25519Key::from_bytes(&[1u8; 32]);
-    let inputs = [EncapsulationInput::try_new(
-        UnsecuredEd25519Key::from_bytes(&[2u8; 32]),
-        &recipient_signing_key.public_key(),
-        VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
-        VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
-    )
-    .expect("well-known encapsulation input is valid")];
-
-    let payload_body = PaddedPayloadBody::zero_padded(b"well-known blend message payload")
-        .expect("payload body fits");
-
-    let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
-        (
-            EncapsulatedPart::try_initialize(&inputs, PayloadType::Data, payload_body)
-                .expect("inputs are non-empty"),
-            // Fixed stand-ins for `try_new`'s randomly-sampled outer-sender identity.
-            UnsecuredEd25519Key::from_bytes(&[3u8; 32]),
-            VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
-        ),
-        |(part, signing_key, proof_of_quota), (i, input)| {
-            (
-                part.encapsulate(
-                    input.ephemeral_encryption_key(),
-                    &signing_key,
-                    &proof_of_quota,
-                    *input.proof_of_selection(),
-                    i == 0,
-                ),
-                input.ephemeral_signing_key().clone(),
-                *input.proof_of_quota(),
-            )
-        },
-    );
-
-    EncapsulatedMessageWithVerifiedPublicHeader::from_components(
-        VerifiedPublicHeader::new(
-            proof_of_quota,
-            signing_key.public_key(),
-            part.sign(&signing_key),
-        ),
-        part,
-    )
 }
 
 impl From<EncapsulatedMessageWithVerifiedSignature> for EncapsulatedMessage {

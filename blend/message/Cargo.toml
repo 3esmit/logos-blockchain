@@ -26,7 +26,6 @@ lb-key-management-system-keys = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-utils                      = { features = ["rng"], workspace = true }
 lb-wire                       = { workspace = true }
-rand                          = { workspace = true }
 serde                         = { workspace = true }
 serde_with                    = { features = ["alloc"], workspace = true }
 thiserror                     = { workspace = true }

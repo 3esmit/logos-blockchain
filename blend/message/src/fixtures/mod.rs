@@ -1,34 +1,25 @@
-//! Centralized well-known wire fixtures for this crate's codecs.
-//!
-//! Each [`wire_fixtures!`](lb_wire::wire_fixtures) emits the type's
-//! `WireExamples` impl (the fixture the codec traits require) plus a
-//! `#[cfg(test)]` round-trip test. Gathering them here keeps the type
-//! definitions free of fixture noise and gives a single auditable list of every
-//! golden vector.
-//!
-//! The three encapsulated-part leaves (`EncapsulatedBlendingHeader`,
-//! `EncapsulatedPrivateHeader`, `EncapsulatedPayload`) are private byte
-//! containers, so their fixtures stay next to the types in
-//! [`crate::encap::encapsulated`] rather than being exposed here.
-
 use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
 };
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
+    UnsecuredEd25519Key,
 };
 use lb_wire::wire_fixtures;
 
 use crate::{
     PaddedPayloadBody, PayloadType,
     encap::{
-        encapsulated::{EncapsulatedMessage, EncapsulatedPart},
+        encapsulated::{
+            EncapsulatedBlendingHeader, EncapsulatedMessage, EncapsulatedPart, EncapsulatedPayload,
+            EncapsulatedPrivateHeader,
+        },
         validated::{
             EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
-            wire_fixture_message,
         },
     },
+    input::EncapsulationInput,
     message::{
         blending_header::BlendingHeader,
         payload::Payload,
@@ -40,18 +31,12 @@ use crate::{
 
 wire_fixtures!(PayloadType, Self::Cover => "00", Self::Data => "01");
 
-// Well-known bytes: a `u16` length of 3, the body `[1, 2, 3]`, then zero
-// padding to `MAX_PAYLOAD_BODY_SIZE`. Externalised as hex because it is ~34
-// KiB.
 wire_fixtures!(
     PaddedPayloadBody,
     Self::zero_padded(&[1u8, 2, 3]).unwrap()
         => include_str!("padded_payload_body.hex")
 );
 
-// Well-known bytes: the `Data` discriminant (`0x01`), a `u16` length of 3, the
-// body `[4, 5, 6]`, then zero padding. Externalised as hex because it is ~34
-// KiB.
 wire_fixtures!(
     Payload,
     Self::new(
@@ -60,7 +45,33 @@ wire_fixtures!(
     ) => include_str!("payload.hex")
 );
 
+wire_fixtures!(
+    EncapsulatedPayload,
+    Self::initialize(&Payload::new(
+        PayloadType::Data,
+        PaddedPayloadBody::zero_padded(&[7u8, 8, 9]).unwrap(),
+    )) => include_str!("encapsulated_payload.hex")
+);
+
 // -- Headers ---------------------------------------------------------------
+
+wire_fixtures!(
+    EncapsulatedPrivateHeader,
+    context = core::num::NonZeroU64::new(1).unwrap(),
+    Self::try_initialize(
+        &[EncapsulationInput::try_new(
+            UnsecuredEd25519Key::from_bytes(&[1u8; 32]),
+            &UnsecuredEd25519Key::from_bytes(&[2u8; 32]).public_key(),
+            VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
+            VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
+        ).unwrap()]
+    ).unwrap() => "07070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
+);
+
+wire_fixtures!(
+    EncapsulatedBlendingHeader,
+    Self::initialize(&BlendingHeader::pseudo_random(&[1u8; 32])) => "00"
+);
 
 wire_fixtures!(
     BlendingHeader,
@@ -116,6 +127,52 @@ wire_fixtures!(
 //
 // All three message types encode to the same bytes: a genuine, deterministic
 // single-layer encapsulation built by [`wire_fixture_message`].
+
+fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
+    let recipient_signing_key = UnsecuredEd25519Key::from_bytes(&[1u8; 32]);
+    let inputs = [EncapsulationInput::try_new(
+        UnsecuredEd25519Key::from_bytes(&[2u8; 32]),
+        &recipient_signing_key.public_key(),
+        VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
+        VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
+    )
+    .expect("well-known encapsulation input is valid")];
+
+    let payload_body = PaddedPayloadBody::zero_padded(b"well-known blend message payload")
+        .expect("payload body fits");
+
+    let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
+        (
+            EncapsulatedPart::try_initialize(&inputs, PayloadType::Data, payload_body)
+                .expect("inputs are non-empty"),
+            // Fixed stand-ins for `try_new`'s randomly-sampled outer-sender identity.
+            UnsecuredEd25519Key::from_bytes(&[3u8; 32]),
+            VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
+        ),
+        |(part, signing_key, proof_of_quota), (i, input)| {
+            (
+                part.encapsulate(
+                    input.ephemeral_encryption_key(),
+                    &signing_key,
+                    &proof_of_quota,
+                    *input.proof_of_selection(),
+                    i == 0,
+                ),
+                input.ephemeral_signing_key().clone(),
+                *input.proof_of_quota(),
+            )
+        },
+    );
+
+    EncapsulatedMessageWithVerifiedPublicHeader::from_components(
+        VerifiedPublicHeader::new(
+            proof_of_quota,
+            signing_key.public_key(),
+            part.sign(&signing_key),
+        ),
+        part,
+    )
+}
 
 wire_fixtures!(
     EncapsulatedMessage,

@@ -90,9 +90,7 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
             .into_boxed_slice()
             .try_into()
             .expect("body must be created with the correct size");
-        let (to_be_set, to_be_random) = padded.split_at_mut(value.len());
-        to_be_set.copy_from_slice(value);
-        rand::thread_rng().fill(to_be_random);
+        padded[..value.len()].copy_from_slice(value);
 
         Ok(Self { actual_len, padded })
     }

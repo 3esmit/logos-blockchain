@@ -95,6 +95,13 @@ pub struct InactivityPeriodTooSmall {
 pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 
 type BoundedMultiaddrBytes = BoundedVec<u8, 0, MAX_LOCATOR_BYTE_SIZE>;
+/// A [`Multiaddr`] whose byte length is bounded to `[0,
+/// MAX_LOCATOR_BYTE_SIZE]`.
+///
+/// The shared `lb_utils::bounded` wrapper enforces the byte-length invariant
+/// using `Multiaddr::len()`. `Locator::try_from` performs the additional
+/// locator-specific validation below, such as rejecting unspecified, loopback,
+/// multicast, documentation, and link-local addresses.
 type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LOCATOR_BYTE_SIZE>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -537,9 +544,6 @@ impl WireDecode for ActivityMetadata {
         }
     }
 }
-
-// TODO: Remove once the `WireCodec` macro supports logic for custom tags and
-// enums.
 
 #[cfg(test)]
 mod tests {

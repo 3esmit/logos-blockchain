@@ -17,7 +17,7 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> Result<(&[u8], SignedMantleTx), 
     let (input, ops_proofs) = decode_ops_proofs(input, mantle_tx.ops())?;
 
     let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
-        .map_err(|_| DecodeError::invalid_value::<SignedMantleTx>("proofs do not match ops"))?;
+        .map_err(|_| DecodeError::invalid_value::<SignedMantleTx>("Proofs do not match ops"))?;
 
     Ok((input, signed_tx))
 }

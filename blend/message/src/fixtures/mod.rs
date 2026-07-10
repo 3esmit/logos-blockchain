@@ -33,7 +33,7 @@ wire_fixtures!(PayloadType, Self::Cover => "00", Self::Data => "01");
 
 wire_fixtures!(
     PaddedPayloadBody,
-    Self::zero_padded(&[1u8, 2, 3]).unwrap()
+    Self::try_from(&[1u8, 2, 3][..]).unwrap()
         => include_str!("padded_payload_body.hex")
 );
 
@@ -41,7 +41,7 @@ wire_fixtures!(
     Payload,
     Self::new(
         PayloadType::Data,
-        PaddedPayloadBody::zero_padded(&[4u8, 5, 6]).unwrap(),
+        PaddedPayloadBody::try_from(&[4u8, 5, 6][..]).unwrap(),
     ) => include_str!("payload.hex")
 );
 
@@ -49,7 +49,7 @@ wire_fixtures!(
     EncapsulatedPayload,
     Self::initialize(&Payload::new(
         PayloadType::Data,
-        PaddedPayloadBody::zero_padded(&[7u8, 8, 9]).unwrap(),
+        PaddedPayloadBody::try_from(&[7u8, 8, 9][..]).unwrap(),
     )) => include_str!("encapsulated_payload.hex")
 );
 
@@ -138,7 +138,7 @@ fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
     )
     .expect("well-known encapsulation input is valid")];
 
-    let payload_body = PaddedPayloadBody::zero_padded(b"well-known blend message payload")
+    let payload_body = PaddedPayloadBody::try_from(b"well-known blend message payload".as_ref())
         .expect("payload body fits");
 
     let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
@@ -202,3 +202,52 @@ wire_fixtures!(
     encode_only,
     wire_fixture_message() => include_str!("encapsulated_message.hex")
 );
+
+#[cfg(test)]
+#[test]
+fn __generate_leaf_fixtures() {
+    use core::fmt::Write as _;
+
+    use lb_wire::WireEncode as _;
+
+    fn to_hex(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .fold(String::with_capacity(bytes.len() * 2), |mut hex, byte| {
+                let _ = write!(&mut hex, "{byte:02x}");
+                hex
+            })
+    }
+
+    let blending_header =
+        EncapsulatedBlendingHeader::initialize(&BlendingHeader::pseudo_random(&[1u8; 32]));
+    std::fs::write(
+        "src/fixtures/__blending_header.hex",
+        to_hex(&blending_header.encode()),
+    )
+    .unwrap();
+
+    let payload = EncapsulatedPayload::initialize(&Payload::new(
+        PayloadType::Data,
+        PaddedPayloadBody::try_from(vec![7u8, 8, 9]).unwrap(),
+    ));
+    std::fs::write(
+        "src/fixtures/encapsulated_payload.hex",
+        to_hex(&payload.encode()),
+    )
+    .unwrap();
+
+    let private_header = EncapsulatedPrivateHeader::try_initialize(&[EncapsulationInput::try_new(
+        UnsecuredEd25519Key::from_bytes(&[1u8; 32]),
+        &UnsecuredEd25519Key::from_bytes(&[2u8; 32]).public_key(),
+        VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
+        VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
+    )
+    .unwrap()])
+    .unwrap();
+    std::fs::write(
+        "src/fixtures/__private_header.hex",
+        to_hex(&private_header.encode()),
+    )
+    .unwrap();
+}

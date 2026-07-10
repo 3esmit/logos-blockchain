@@ -95,32 +95,6 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
     }
 }
 
-impl PaddedPayloadBody {
-    /// Deterministic constructor used only to build the well-known wire
-    /// fixtures: it pads with zeros instead of random bytes so the encoding is
-    /// reproducible. Production code must go through [`TryFrom`], which pads
-    /// with random bytes to keep padded bodies indistinguishable on the wire.
-    #[doc(hidden)]
-    pub(crate) fn zero_padded(value: &[u8]) -> Result<Self, Error> {
-        if value.len() > MAX_PAYLOAD_BODY_SIZE {
-            return Err(Error::PayloadTooLarge);
-        }
-
-        let actual_len: u16 = value
-            .len()
-            .try_into()
-            .map_err(|_| Error::InvalidPayloadLength)?;
-
-        let mut padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]> = vec![0; MAX_PAYLOAD_BODY_SIZE]
-            .into_boxed_slice()
-            .try_into()
-            .expect("body must be created with the correct size");
-        padded[..value.len()].copy_from_slice(value);
-
-        Ok(Self { actual_len, padded })
-    }
-}
-
 impl WireEncode for PaddedPayloadBody {
     fn encoded_length(&self) -> usize {
         self.actual_len

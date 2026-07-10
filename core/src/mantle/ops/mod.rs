@@ -131,7 +131,7 @@ impl WireEncode for Op {
             Self::LeaderClaim(op) => op.encoded_length(),
             Self::Transfer(op) => op.encoded_length(),
         };
-        self.code().encoded_length() + payload
+        self.code().encoded_length().checked_add(payload).unwrap()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {

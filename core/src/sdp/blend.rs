@@ -74,10 +74,6 @@ mod tests {
 
     use crate::sdp::blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE};
 
-    // Round-trip coverage for `ActivityProof` and `ActivityMetadata` lives in
-    // their well-known wire fixtures (`wire_fixtures!` in `mantle::fixtures`);
-    // the tests here cover only the decode-error paths a single fixture cannot.
-
     #[test]
     fn activity_proof_invalid_version() {
         let proof = ActivityProof {

@@ -712,10 +712,6 @@ mod tests {
         assert_eq!(genesis_tx, deserialized);
     }
 
-    // Wire round-trip coverage for `CryptarchiaParameter` lives in its
-    // well-known fixture (`wire_fixtures!` in `mantle::fixtures`); the test
-    // below covers only the decode-error paths.
-
     #[test]
     fn test_genesis_time_boundaries() {
         // The u32::MAX unix timestamp is the largest value `GenesisTime` accepts.

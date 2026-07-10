@@ -190,9 +190,6 @@ mod tests {
         );
     }
 
-    // Wire encode/decode round-trip coverage lives in the `InscriptionOp`
-    // well-known fixture (`wire_fixtures!` in `mantle::fixtures`).
-
     #[test]
     fn json_round_trip() {
         let op = sample();

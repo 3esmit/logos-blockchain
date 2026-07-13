@@ -4154,7 +4154,6 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
- "logos-blockchain-sdp-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
  "multiaddr",
@@ -4164,30 +4163,6 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "logos-blockchain-cfgsync"
-version = "0.2.1-rc.1"
-dependencies = [
- "axum",
- "blake2",
- "clap",
- "logos-blockchain-config",
- "logos-blockchain-core",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-libp2p",
- "logos-blockchain-node",
- "num-bigint",
- "rand 0.8.6",
- "reqwest",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_yaml",
- "time",
- "tokio",
- "tracing",
 ]
 
 [[package]]

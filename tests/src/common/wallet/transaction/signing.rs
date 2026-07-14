@@ -29,7 +29,7 @@ pub(super) fn sign_prepared_wallet_transaction(
     let mut op_proofs = leading_op_proofs;
     op_proofs.extend(transfer_proofs);
 
-    let signed_tx = SignedMantleTx::new(mantle_tx, op_proofs)?;
+    let signed_tx = SignedMantleTx::new(mantle_tx, op_proofs).preverify()?;
     let spent_fee = signed_tx
         .total_gas_cost::<MainnetGasConstants>(gas_prices)?
         .into_inner();

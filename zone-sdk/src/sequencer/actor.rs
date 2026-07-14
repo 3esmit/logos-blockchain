@@ -613,7 +613,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            transactions::Ops,
+            transactions::{Ops, states::Unverified},
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
@@ -638,10 +638,10 @@ mod tests {
     /// Build a `SignedMantleTx` carrying the given ops, with placeholder
     /// proofs. Suitable for tests that only care about op extraction, not
     /// verification.
-    fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
+    fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
         let n = ops.len();
         let mantle_tx = MantleTx(Ops::try_from(ops).unwrap());
-        SignedMantleTx::new_trusted(
+        SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
         )
@@ -706,15 +706,14 @@ mod tests {
                 ),
                 OpProof::Ed25519Sig(inscription_sig),
             ],
-        )
-        .unwrap();
+        );
 
         // Submit via the handle (mutates state + queues post to in_flight).
         let (result, checkpoint) = sequencer
             .handle()
             .submit_signed_tx(signed_tx.clone(), msg_id)
             .unwrap();
-        assert_eq!(result.inscription_id(), signed_tx.mantle_tx.hash());
+        assert_eq!(result.inscription_id(), signed_tx.mantle_tx().hash());
         assert_eq!(checkpoint.last_msg_id, msg_id);
 
         // The post lives in `in_flight` until the drive loop polls it.
@@ -732,12 +731,12 @@ mod tests {
 
     #[derive(Clone)]
     struct MockNode {
-        posted_transactions_sender: mpsc::Sender<SignedMantleTx>,
+        posted_transactions_sender: mpsc::Sender<SignedMantleTx<Unverified>>,
         channel_state: Option<ChannelState>,
     }
 
     impl MockNode {
-        fn new() -> (Self, mpsc::Receiver<SignedMantleTx>) {
+        fn new() -> (Self, mpsc::Receiver<SignedMantleTx<Unverified>>) {
             let (tx, rx) = mpsc::channel(10);
             (
                 Self {
@@ -772,7 +771,11 @@ mod tests {
     }
 
     impl ReconnectMockNode {
-        fn new() -> (Self, mpsc::Receiver<SignedMantleTx>, watch::Sender<bool>) {
+        fn new() -> (
+            Self,
+            mpsc::Receiver<SignedMantleTx<Unverified>>,
+            watch::Sender<bool>,
+        ) {
             let (inner, posted_rx) = MockNode::new();
             let (up_tx, up_rx) = watch::channel(true);
             (Self { inner, up_rx }, posted_rx, up_tx)
@@ -889,7 +892,7 @@ mod tests {
 
         async fn post_transaction(
             &self,
-            tx: SignedMantleTx,
+            tx: SignedMantleTx<Unverified>,
         ) -> Result<(), lb_common_http_client::Error> {
             self.inner.post_transaction(tx).await
         }
@@ -964,7 +967,7 @@ mod tests {
 
         assert!(
             posted
-                .mantle_tx
+                .mantle_tx()
                 .ops()
                 .iter()
                 .any(|op| matches!(op, Op::ChannelInscribe(_))),
@@ -1000,10 +1003,7 @@ mod tests {
             .unwrap(),
         );
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx {
-            mantle_tx,
-            ops_proofs: Vec::new(),
-        };
+        let signed_tx = SignedMantleTx::new(mantle_tx, Vec::new());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1035,10 +1035,7 @@ mod tests {
         };
         let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx {
-            mantle_tx,
-            ops_proofs: Vec::new(),
-        };
+        let signed_tx = SignedMantleTx::new(mantle_tx, Vec::new());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1063,10 +1060,7 @@ mod tests {
         };
         let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx {
-            mantle_tx,
-            ops_proofs: Vec::new(),
-        };
+        let signed_tx = SignedMantleTx::new(mantle_tx, Vec::new());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, our_channel);
@@ -1190,7 +1184,7 @@ mod tests {
 
         async fn post_transaction(
             &self,
-            tx: SignedMantleTx,
+            tx: SignedMantleTx<Unverified>,
         ) -> Result<(), lb_common_http_client::Error> {
             self.posted_transactions_sender.send(tx).await.unwrap();
             Ok(())
@@ -1322,7 +1316,7 @@ mod tests {
 
         async fn post_transaction(
             &self,
-            _tx: SignedMantleTx,
+            _tx: SignedMantleTx<Unverified>,
         ) -> Result<(), lb_common_http_client::Error> {
             Ok(())
         }
@@ -1369,7 +1363,7 @@ mod tests {
         };
         let expected_msg_id = inscribe.id();
         let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe)]);
-        let genesis_tx_hash = genesis_tx.mantle_tx.hash();
+        let genesis_tx_hash = genesis_tx.mantle_tx().hash();
 
         let genesis_block = ApiBlock {
             header: ApiHeader {

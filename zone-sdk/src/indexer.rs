@@ -132,6 +132,7 @@ mod tests {
             NoteId, SignedMantleTx,
             ledger::Inputs,
             ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
+            transactions::states::Unverified,
         },
     };
     use lb_groth16::Fr;
@@ -429,7 +430,7 @@ mod tests {
 
         async fn post_transaction(
             &self,
-            _tx: SignedMantleTx,
+            _tx: SignedMantleTx<Unverified>,
         ) -> Result<(), lb_common_http_client::Error> {
             unimplemented!()
         }

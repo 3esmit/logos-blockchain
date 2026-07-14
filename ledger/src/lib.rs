@@ -1340,9 +1340,11 @@ mod tests {
             .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &second_tx);
         assert!(matches!(
             result,
-            Err(LedgerError::Mantle(mantle::Error::Channel(
-                mantle::channel::Error::InvalidParent { .. }
-            )))
+            Err(LedgerError::VerificationError(
+                VerificationError::ChannelVerificationError(
+                    mantle::channel::Error::InvalidParent { .. }
+                )
+            ))
         ));
 
         // Writing into an empty channel with a parent != MsgId::root() should also fail
@@ -1362,9 +1364,11 @@ mod tests {
             state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &empty_tx);
         assert!(matches!(
             empty_result,
-            Err(LedgerError::Mantle(mantle::Error::Channel(
-                mantle::channel::Error::InvalidParent { .. }
-            )))
+            Err(LedgerError::VerificationError(
+                VerificationError::ChannelVerificationError(
+                    mantle::channel::Error::InvalidParent { .. }
+                )
+            ))
         ));
     }
 
@@ -1410,9 +1414,11 @@ mod tests {
             state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &second_tx);
         assert!(matches!(
             result,
-            Err(LedgerError::Mantle(mantle::Error::Channel(
-                mantle::channel::Error::UnauthorizedSigner { .. }
-            )))
+            Err(LedgerError::VerificationError(
+                VerificationError::ChannelVerificationError(
+                    mantle::channel::Error::UnauthorizedSigner { .. }
+                )
+            ))
         ));
     }
 

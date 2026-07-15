@@ -421,9 +421,9 @@ mod block_root_test_vectors {
             (
                 "ChannelTransfer",
                 tx(Op::ChannelTransfer(ChannelTransferOp {
-                    channel_id: ChannelId::from([22u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(23u64))]),
-                    outputs: Outputs::new([Note::new(24, zk_pk(25))]),
+                    channel_id: ChannelId::from([20u8; 32]),
+                    inputs: Inputs::new([NoteId(Fr::from(21u64))]),
+                    outputs: Outputs::new([Note::new(22, zk_pk(23))]),
                 })),
             ),
             // SDPDeclare (0x20)
@@ -435,26 +435,26 @@ mod block_root_test_vectors {
                         .parse::<Locator>()
                         .unwrap()
                         .into(),
-                    provider_id: ProviderId(ed25519_pk(26)),
-                    zk_id: zk_pk(27),
-                    locked_note_id: NoteId(Fr::from(28u64)),
+                    provider_id: ProviderId(ed25519_pk(24)),
+                    zk_id: zk_pk(25),
+                    locked_note_id: NoteId(Fr::from(26u64)),
                 })),
             ),
             // SDPWithdraw (0x21)
             (
                 "SDPWithdraw",
                 tx(Op::SDPWithdraw(WithdrawMessage {
-                    declaration_id: DeclarationId([29u8; 32]),
-                    locked_note_id: NoteId(Fr::from(30u64)),
-                    nonce: 31,
+                    declaration_id: DeclarationId([27u8; 32]),
+                    locked_note_id: NoteId(Fr::from(28u64)),
+                    nonce: 29,
                 })),
             ),
             // SDPActive (0x22)
             (
                 "SDPActive",
                 tx(Op::SDPActive(ActiveMessage {
-                    declaration_id: DeclarationId([32u8; 32]),
-                    nonce: 33,
+                    declaration_id: DeclarationId([30u8; 32]),
+                    nonce: 31,
                     metadata: ActivityMetadata::Blend(Box::new(activity)),
                 })),
             ),
@@ -462,9 +462,9 @@ mod block_root_test_vectors {
             (
                 "LeaderClaim",
                 tx(Op::LeaderClaim(LeaderClaimOp {
-                    rewards_root: Fr::from(34u64).into(),
-                    voucher_nullifier: Fr::from(35u64).into(),
-                    pk: zk_pk(36),
+                    rewards_root: Fr::from(32u64).into(),
+                    voucher_nullifier: Fr::from(33u64).into(),
+                    pk: zk_pk(34),
                 })),
             ),
         ]

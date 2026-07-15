@@ -4946,6 +4946,7 @@ name = "logos-blockchain-services-utils"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "futures",
  "log",
  "logos-blockchain-log-targets",
@@ -4968,6 +4969,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-log-targets",
+ "logos-blockchain-services-utils",
  "logos-blockchain-tracing",
  "overwatch",
  "rocksdb",
@@ -6140,7 +6142,7 @@ dependencies = [
 [[package]]
 name = "overwatch"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=448c192#448c192895b8311c742b1726a1bb12ee314ad95c"
+source = "git+https://github.com/logos-co/Overwatch?rev=e55f62e#e55f62eee61b23e968c157a99b39d00516333cc5"
 dependencies = [
  "async-trait",
  "futures",
@@ -6155,7 +6157,7 @@ dependencies = [
 [[package]]
 name = "overwatch-derive"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=448c192#448c192895b8311c742b1726a1bb12ee314ad95c"
+source = "git+https://github.com/logos-co/Overwatch?rev=e55f62e#e55f62eee61b23e968c157a99b39d00516333cc5"
 dependencies = [
  "convert_case 0.8.0",
  "proc-macro-error2",

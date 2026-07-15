@@ -122,7 +122,7 @@ pub enum SdpMessage {
 
 pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     declaration_id: Option<DeclarationId>,
@@ -133,7 +133,7 @@ where
 impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId> ServiceData
     for SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
 {
     type Settings = SdpSettings;
     type State = SdpState;
@@ -149,7 +149,7 @@ where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
-    StateStorage: SdpStateStorage + Send + Sync,
+    StateStorage: SdpStateStorage<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
@@ -276,7 +276,7 @@ where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
-    StateStorage: SdpStateStorage + Send + Sync,
+    StateStorage: SdpStateStorage<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>

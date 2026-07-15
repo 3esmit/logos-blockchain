@@ -1102,15 +1102,16 @@ mod tests {
         let result =
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx.clone());
         let (new_state, balance, events) = result.unwrap();
-        let deposit_note_id = Outputs::new(Note {
-            value: utxo.note().value,
-            pk: ZkPublicKey::zero(),
-        })
-        .utxos(&deposit)
-        .next()
-        .expect("deposit creates a channel note")
-        .id();
-        assert!(new_state.latest_utxos().contains(&deposit_note_id));
+
+        // The deposit marks the note as belonging to the channel, keeping its id
+        assert_eq!(
+            new_state
+                .latest_utxos()
+                .get(&utxo.id())
+                .expect("the deposited note is in the ledger")
+                .channel_id(),
+            Some(channel_id)
+        );
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);

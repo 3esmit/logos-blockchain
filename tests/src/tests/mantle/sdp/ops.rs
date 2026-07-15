@@ -86,10 +86,10 @@ async fn sdp_ops_e2e() {
     let existing = wait_for_sdp_declarations(&node0, Duration::from_secs(30))
         .await
         .expect("fetching SDP declarations should succeed");
-    let locked: HashSet<_> = existing.iter().map(|decl| decl.service_note_id).collect();
-    let service_note_id = spare_note_id;
+    let locked: HashSet<_> = existing.iter().map(|decl| decl.locked_note_id).collect();
+    let locked_note_id = spare_note_id;
     assert!(
-        !locked.contains(&service_note_id),
+        !locked.contains(&locked_note_id),
         "manual-cluster wallet note must be unused before submitting declare"
     );
 
@@ -107,7 +107,7 @@ async fn sdp_ops_e2e() {
         locators: locator.into(),
         provider_id,
         zk_id,
-        service_note_id,
+        locked_note_id,
     };
     let declaration_id = declaration.id();
 
@@ -163,7 +163,7 @@ async fn sdp_ops_e2e() {
     // Submit an withdraw tx immediately.
     let withdraw_message = WithdrawMessage {
         declaration_id,
-        service_note_id,
+        locked_note_id,
         nonce: declaration_created.nonce + 1,
     };
 
@@ -255,7 +255,7 @@ async fn sdp_declaration_restoration_e2e() {
     );
 
     let initial_declaration = declarations.first().unwrap().clone();
-    let target_service_note = initial_declaration.service_note_id;
+    let target_locked_note = initial_declaration.locked_note_id;
 
     cluster_harness
         .cluster()
@@ -279,7 +279,7 @@ async fn sdp_declaration_restoration_e2e() {
 
     let restored_declaration = post_restart_declarations
         .iter()
-        .find(|d| d.service_note_id == target_service_note)
+        .find(|d| d.locked_note_id == target_locked_note)
         .expect("original declaration should still exist after restart");
 
     assert_eq!(
@@ -347,7 +347,7 @@ async fn start_sdp_manual_cluster(
         WalletAccount::deterministic(0, 2_000_000, false).expect("funding wallet should build");
 
     let spare_wallet =
-        WalletAccount::deterministic(1, 100, false).expect("spare service-note wallet should build");
+        WalletAccount::deterministic(1, 100, false).expect("spare locked-note wallet should build");
 
     let cluster_harness = build_local_manual_cluster(
         test_name,

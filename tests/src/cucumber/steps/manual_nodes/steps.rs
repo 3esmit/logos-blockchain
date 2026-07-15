@@ -1122,7 +1122,7 @@ async fn step_run_blend_sdp_declaration_cli(
     let note_lookup_timeout = Duration::from_secs(30);
     let note_lookup_started = Instant::now();
     let mut last_lookup_error: Option<String>;
-    let service_note_id = loop {
+    let locked_note_id = loop {
         let Ok(wallet_balance) = CommonHttpClient::new(None)
             .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
             .await
@@ -1130,12 +1130,12 @@ async fn step_run_blend_sdp_declaration_cli(
             continue;
         };
         if let Some(note_id) = wallet_balance.notes.keys().next().copied() {
-            let service_note_id_json =
+            let locked_note_id_json =
                 serde_json::to_string(&note_id).map_err(|error| StepError::LogicalError {
-                    message: format!("Failed to serialize service note ID: {error}"),
+                    message: format!("Failed to serialize locked note ID: {error}"),
                 })?;
-            let service_note_id_hex = service_note_id_json.trim_matches('"').to_owned();
-            break service_note_id_hex;
+            let locked_note_id_hex = locked_note_id_json.trim_matches('"').to_owned();
+            break locked_note_id_hex;
         }
         last_lookup_error = Some("wallet has no notes yet".to_owned());
 
@@ -1167,8 +1167,8 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg(user_config_path)
         .arg("--blend-addr")
         .arg(format!("{locator}"))
-        .arg("--service-note-id")
-        .arg(service_note_id)
+        .arg("--locked-note-id")
+        .arg(locked_note_id)
         .arg("--node-address")
         .arg(declarer_api_base_url.to_string())
         .output()
@@ -1217,7 +1217,7 @@ async fn step_run_blend_sdp_declaration_api(
     let note_lookup_timeout = Duration::from_secs(30);
     let note_lookup_started = Instant::now();
     let mut last_lookup_error: Option<String>;
-    let service_note_id = loop {
+    let locked_note_id = loop {
         let Ok(wallet_balance) = CommonHttpClient::new(None)
             .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
             .await
@@ -1243,7 +1243,7 @@ async fn step_run_blend_sdp_declaration_api(
     };
 
     let declaration_id = declarer_node_client
-        .join_blend_network(locator, service_note_id)
+        .join_blend_network(locator, locked_note_id)
         .await
         .inspect_err(|error| {
             warn!(target: TARGET, "Step `{}` error: {error}", step.value);
@@ -1299,7 +1299,7 @@ async fn step_verify_blend_sdp_declaration_included(
     let note_lookup_timeout = Duration::from_secs(30);
     let note_lookup_started = Instant::now();
     let mut last_lookup_error: Option<String>;
-    let service_note_id = loop {
+    let locked_note_id = loop {
         let Ok(wallet_balance) = CommonHttpClient::new(None)
             .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
             .await
@@ -1356,7 +1356,7 @@ async fn step_verify_blend_sdp_declaration_included(
         };
 
         if declarations.iter().any(|declaration| {
-            declaration.service_note_id == service_note_id && declaration.zk_id == blend_zk_pk
+            declaration.locked_note_id == locked_note_id && declaration.zk_id == blend_zk_pk
         }) {
             info!(
                 target: TARGET,

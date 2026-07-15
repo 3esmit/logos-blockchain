@@ -389,12 +389,12 @@ mod mantle_test_vectors {
                     .into(),
                 provider_id: ProviderId(ed25519_pk(26)),
                 zk_id: zk_pk(27),
-                service_note_id: NoteId(Fr::from(28u64)),
+                locked_note_id: NoteId(Fr::from(28u64)),
             }),
             // SDPWithdraw (0x21)
             Op::SDPWithdraw(WithdrawMessage {
                 declaration_id: DeclarationId([29u8; 32]),
-                service_note_id: NoteId(Fr::from(30u64)),
+                locked_note_id: NoteId(Fr::from(30u64)),
                 nonce: 31,
             }),
             // SDPActive (0x22)

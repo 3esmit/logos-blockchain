@@ -10,7 +10,7 @@ use crate::{
         TxHash,
         ledger::{Declarations, Operation},
     },
-    sdp::{self, service_notes::ServiceNotes},
+    sdp::{self, locked_notes::LockedNotes},
 };
 
 const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
@@ -18,14 +18,14 @@ const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
 pub struct SDPWithdrawValidationContext<'a> {
     pub declarations: &'a Declarations,
     pub epoch: Epoch,
-    pub service_notes: &'a ServiceNotes,
+    pub locked_notes: &'a LockedNotes,
     pub tx_hash: &'a TxHash,
     pub sdp_withdraw_sig: &'a ZkSignature,
 }
 
 pub struct SDPWithdrawExecutionContext {
     pub declarations: Declarations,
-    pub service_notes: ServiceNotes,
+    pub locked_notes: LockedNotes,
     pub epoch: Epoch,
 }
 
@@ -50,31 +50,31 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
             });
         }
 
-        // Check that the service note is locked for this service
+        // Check that the locked note is locked for this service
         if !ctx
-            .service_notes
-            .is_locked_for_service(&self.service_note_id, &declaration.service_type)
+            .locked_notes
+            .is_locked_for_service(&self.locked_note_id, &declaration.service_type)
         {
             return Err(SdpError::NoteNotLockedForService {
-                note_id: self.service_note_id,
+                note_id: self.locked_note_id,
                 service_type: declaration.service_type,
             });
         }
 
-        // Check that the service note exist (it corresponds to the declaration locked
+        // Check that the locked note exist (it corresponds to the declaration locked
         // note)
-        if declaration.service_note_id != self.service_note_id {
-            return Err(SdpError::InvalidServiceNote {
-                note_id: self.service_note_id,
-                expected: declaration.service_note_id,
+        if declaration.locked_note_id != self.locked_note_id {
+            return Err(SdpError::InvalidLockedNote {
+                note_id: self.locked_note_id,
+                expected: declaration.locked_note_id,
             });
         }
 
-        // Ensure service note pk and zk_id attached to this declaration authorized this
+        // Ensure locked note pk and zk_id attached to this declaration authorized this
         // Operation.
         let note = ctx
-            .service_notes
-            .get(&self.service_note_id)
+            .locked_notes
+            .get(&self.locked_note_id)
             .expect("The Operation has been checked above");
         if !ZkPublicKey::verify_multi(
             &[note.pk, declaration.zk_id],

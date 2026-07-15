@@ -12,7 +12,7 @@ use crate::{
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-    sdp::service_notes::ServiceNotes,
+    sdp::locked_notes::LockedNotes,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -62,7 +62,7 @@ impl NomDecode for ChannelTransferOp {
 
 pub struct ChannelTransferValidationContext<'a> {
     pub channels: &'a Channels,
-    pub service_notes: &'a ServiceNotes,
+    pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
     pub transfer_sigs: &'a ChannelMultiSigProof,
@@ -101,7 +101,7 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
 
         // Check that the inputs exist and belong to the channel
         self.inputs
-            .validate(ctx.service_notes, ctx.utxos, Some(self.channel_id))?;
+            .validate(ctx.locked_notes, ctx.utxos, Some(self.channel_id))?;
 
         // Check the operation is balanced
         let input_amount = self.inputs.amount(ctx.utxos)?;

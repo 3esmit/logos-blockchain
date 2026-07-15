@@ -231,14 +231,14 @@ impl NodeHttpClient {
     pub async fn join_blend_network(
         &self,
         locator: Locator,
-        service_note_id: NoteId,
+        locked_note_id: NoteId,
     ) -> Result<DeclarationId, Error> {
         self.http_client
             .join_blend_network(
                 &self.base_url,
                 JoinBlendRequestBody {
                     locator,
-                    service_note_id,
+                    locked_note_id,
                 },
             )
             .await

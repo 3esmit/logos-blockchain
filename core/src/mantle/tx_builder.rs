@@ -220,7 +220,7 @@ impl MantleTxBuilder {
     /// Returns all note IDs already consumed or locked by this transaction,
     /// plus the funding inputs that will be appended as a transfer during
     /// build.
-    pub fn consumed_or_service_notes(&self) -> impl Iterator<Item = NoteId> {
+    pub fn consumed_or_locked_notes(&self) -> impl Iterator<Item = NoteId> {
         self.mantle_tx
             .ops()
             .iter()
@@ -231,8 +231,8 @@ impl MantleTxBuilder {
                     _ => &[],
                 };
                 let locked = match op {
-                    Op::SDPDeclare(declare) => Some(declare.service_note_id),
-                    Op::SDPWithdraw(withdraw) => Some(withdraw.service_note_id),
+                    Op::SDPDeclare(declare) => Some(declare.locked_note_id),
+                    Op::SDPWithdraw(withdraw) => Some(withdraw.locked_note_id),
                     _ => None,
                 };
                 inputs.iter().copied().chain(locked)
@@ -483,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn consumed_or_service_notes() {
+    fn consumed_or_locked_notes() {
         let context = MantleTxContext {
             gas_context: MantleTxGasContext::default(),
             leader_reward_amount: 30,
@@ -506,30 +506,30 @@ mod tests {
                 locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 provider_id: ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key()),
                 zk_id: ZkPublicKey::zero(),
-                service_note_id: declare_locked,
+                locked_note_id: declare_locked,
             }))
             .unwrap()
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 declaration_id: DeclarationId([0; 32]),
-                service_note_id: withdraw_locked,
+                locked_note_id: withdraw_locked,
                 nonce: 1,
             }))
             .unwrap()
             .add_ledger_input(transfer_input)
             .unwrap();
 
-        let consumed_or_locked: Vec<_> = builder.consumed_or_service_notes().collect();
+        let consumed_or_locked: Vec<_> = builder.consumed_or_locked_notes().collect();
         assert!(
             consumed_or_locked.contains(&deposit_input),
             "should contain deposit input"
         );
         assert!(
             consumed_or_locked.contains(&declare_locked),
-            "should contain declare service note"
+            "should contain declare locked note"
         );
         assert!(
             consumed_or_locked.contains(&withdraw_locked),
-            "should contain withdraw service note"
+            "should contain withdraw locked note"
         );
         assert!(
             consumed_or_locked.contains(&transfer_input.id()),

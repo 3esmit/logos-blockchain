@@ -24,7 +24,7 @@ use lb_core::{
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-    sdp::service_notes::ServiceNotes,
+    sdp::locked_notes::LockedNotes,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -104,8 +104,8 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub const fn service_notes(&self) -> &ServiceNotes {
-        self.sdp.service_notes()
+    pub const fn locked_notes(&self) -> &LockedNotes {
+        self.sdp.locked_notes()
     }
 
     #[must_use]

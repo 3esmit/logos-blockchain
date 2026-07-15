@@ -12,7 +12,7 @@ use crate::{
         nom::{NomBoundedVec, NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
-    sdp::service_notes::ServiceNotes,
+    sdp::locked_notes::LockedNotes,
 };
 
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
@@ -66,7 +66,7 @@ impl NomDecode for DepositOp {
 
 pub struct DepositValidationContext<'a> {
     pub channels: &'a Channels,
-    pub service_notes: &'a ServiceNotes,
+    pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
     pub deposit_sig: &'a ZkSignature,
@@ -74,7 +74,7 @@ pub struct DepositValidationContext<'a> {
 
 pub struct DepositExecutionContext {
     pub channels: Channels,
-    pub service_notes: ServiceNotes,
+    pub locked_notes: LockedNotes,
     pub utxos: Utxos,
     pub tx_hash: TxHash,
 }
@@ -95,7 +95,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         }
 
         // Check that inputs are valid and doesn't provide from a channel
-        self.inputs.validate(ctx.service_notes, ctx.utxos, None)?;
+        self.inputs.validate(ctx.locked_notes, ctx.utxos, None)?;
 
         // Check the signature
         let pks = self.inputs.get_pk(ctx.utxos)?;

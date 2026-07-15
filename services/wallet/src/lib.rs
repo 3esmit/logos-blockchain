@@ -97,8 +97,8 @@ pub enum WalletServiceError {
     #[error("Declaration {0:?} is missing in ledger")]
     MissingDeclaration(lb_core::sdp::DeclarationId),
 
-    #[error("Service note {0:?} is missing in ledger")]
-    MissingServiceNote(NoteId),
+    #[error("Locked note {0:?} is missing in ledger")]
+    MissingLockedNote(NoteId),
 
     #[error("Input note {0:?} is missing in ledger")]
     MissingInputNote(NoteId),
@@ -730,15 +730,15 @@ where
         debug!(
             target: LOG_TARGET,
             "SDPDeclare: Looking for note_id={}, utxo_tree has {} UTXOs",
-            hex::encode(declare_op.service_note_id.as_bytes()),
+            hex::encode(declare_op.locked_note_id.as_bytes()),
             utxo_tree.size()
         );
         let note = utxo_tree
             .utxos()
-            .get(&declare_op.service_note_id)
+            .get(&declare_op.locked_note_id)
             .map(|(utxo, _)| utxo.note())
-            .ok_or(WalletServiceError::MissingServiceNote(
-                declare_op.service_note_id,
+            .ok_or(WalletServiceError::MissingLockedNote(
+                declare_op.locked_note_id,
             ))?;
 
         let zk_sig = Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], kms).await?;
@@ -764,15 +764,15 @@ where
                 withdraw_op.declaration_id,
             ))?;
 
-        let service_note = ledger
+        let locked_note = ledger
             .mantle_ledger()
-            .service_notes()
-            .get(&declaration.service_note_id)
-            .ok_or(WalletServiceError::MissingServiceNote(
-                declaration.service_note_id,
+            .locked_notes()
+            .get(&declaration.locked_note_id)
+            .ok_or(WalletServiceError::MissingLockedNote(
+                declaration.locked_note_id,
             ))?;
 
-        let zk_sig = Self::sign_zksig(tx_hash, [service_note.pk, declaration.zk_id], kms).await?;
+        let zk_sig = Self::sign_zksig(tx_hash, [locked_note.pk, declaration.zk_id], kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
     }

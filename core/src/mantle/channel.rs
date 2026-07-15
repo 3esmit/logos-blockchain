@@ -247,7 +247,7 @@ mod tests {
             tx::{GasPrices, MantleTxGasContext},
         },
         proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-        sdp::service_notes::ServiceNotes,
+        sdp::locked_notes::LockedNotes,
     };
 
     fn test_public_key(seed: u8) -> PublicKey {
@@ -380,7 +380,7 @@ mod tests {
 
         let result = withdraw_op.validate(&WithdrawValidationContext {
             channels: &channels,
-            service_notes: &ServiceNotes::new(),
+            locked_notes: &LockedNotes::new(),
             utxos: &utxo_tree,
             tx_hash: &TxHash::default(),
             withdraw_sigs: &ChannelMultiSigProof::new(vec![]).unwrap(),

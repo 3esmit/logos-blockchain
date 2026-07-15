@@ -362,7 +362,7 @@ mod tests {
     ) -> SDPDeclareOp {
         SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            service_note_id: utxo_to_use.id(),
+            locked_note_id: utxo_to_use.id(),
             zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             provider_id: ProviderId(verifying_key),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),

@@ -30,7 +30,7 @@ where
 pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
     handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
     locator: lb_core::sdp::Locator,
-    service_note_id: lb_core::mantle::NoteId,
+    locked_note_id: lb_core::mantle::NoteId,
 ) -> Result<lb_core::sdp::DeclarationId, overwatch::DynError>
 where
     BlendService:
@@ -44,7 +44,7 @@ where
     relay
         .send(ProxyServiceMessage::JoinAsCore {
             locator,
-            service_note_id,
+            locked_note_id,
             reply: sender,
         })
         .await

@@ -13,7 +13,7 @@ impl NomEncode for SDPWithdrawOp {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = self.declaration_id.encode();
         bytes.extend(self.nonce.encode());
-        bytes.extend(self.service_note_id.encode());
+        bytes.extend(self.locked_note_id.encode());
         bytes
     }
 }
@@ -24,13 +24,13 @@ impl NomDecode for SDPWithdrawOp {
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
         let (bytes, nonce) = u64::decode(bytes)?;
-        let (bytes, service_note_id) = NoteId::decode(bytes)?;
+        let (bytes, locked_note_id) = NoteId::decode(bytes)?;
 
         Ok((
             bytes,
             Self {
                 declaration_id,
-                service_note_id,
+                locked_note_id,
                 nonce,
             },
         ))

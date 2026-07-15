@@ -8,7 +8,7 @@ use crate::{
         Note, TxHash,
         ledger::{Declarations, Operation, Utxos},
     },
-    sdp::{Declaration, MinStake, service_notes::ServiceNotes},
+    sdp::{Declaration, MinStake, locked_notes::LockedNotes},
 };
 
 trait SDPDeclareValidationExt {
@@ -16,7 +16,7 @@ trait SDPDeclareValidationExt {
         &self,
         note: Note,
         declarations: &Declarations,
-        service_notes: &ServiceNotes,
+        locked_notes: &LockedNotes,
         min_stake: &MinStake,
     ) -> Result<(), SdpError>;
 
@@ -31,7 +31,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         &self,
         note: Note,
         declarations: &Declarations,
-        service_notes: &ServiceNotes,
+        locked_notes: &LockedNotes,
         min_stake: &MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
@@ -39,18 +39,18 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
 
-        // Ensure value of service note is sufficient for joining the service.
+        // Ensure value of locked note is sufficient for joining the service.
         if note.value < min_stake.threshold {
             return Err(SdpError::NoteInsufficientValue {
-                note_id: self.service_note_id,
+                note_id: self.locked_note_id,
                 value: note.value,
             });
         }
 
         // Ensure the note has not already been locked for this service.
-        if service_notes.is_locked_for_service(&self.service_note_id, &self.service_type) {
+        if locked_notes.is_locked_for_service(&self.locked_note_id, &self.service_type) {
             return Err(SdpError::NoteAlreadyUsedForService {
-                note_id: self.service_note_id,
+                note_id: self.locked_note_id,
                 service_type: self.service_type,
             });
         }
@@ -68,17 +68,17 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         let utxo = ctx
             .utxo_tree
             .utxos()
-            .get(&self.service_note_id)
+            .get(&self.locked_note_id)
             .expect("The operation should have been checked")
             .0;
 
-        ctx.service_notes = ctx
-            .service_notes
+        ctx.locked_notes = ctx
+            .locked_notes
             .lock(
                 &ctx.min_stake,
                 self.service_type,
                 utxo.note(),
-                &self.service_note_id,
+                &self.locked_note_id,
             )
             .map_err(|_| SdpError::UnexpectedError)?;
 
@@ -88,7 +88,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
 
 pub struct SDPDeclareValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
-    pub service_notes: &'a ServiceNotes,
+    pub locked_notes: &'a LockedNotes,
     pub tx_hash: &'a TxHash,
     pub declare_zk_sig: &'a ZkSignature,
     pub declare_eddsa_sig: &'a Ed25519Signature,
@@ -98,7 +98,7 @@ pub struct SDPDeclareValidationContext<'a> {
 
 pub struct SDPDeclareGenesisValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
-    pub service_notes: &'a ServiceNotes,
+    pub locked_notes: &'a LockedNotes,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
 }
@@ -107,7 +107,7 @@ pub struct SDPDeclareExecutionContext {
     pub utxo_tree: Utxos,
     pub epoch: Epoch,
     pub declarations: Declarations,
-    pub service_notes: ServiceNotes,
+    pub locked_notes: LockedNotes,
     pub min_stake: MinStake,
 }
 
@@ -120,11 +120,11 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
 
     fn validate(&self, ctx: &SDPDeclareValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the note exist
-        let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.service_note_id) else {
-            return Err(SdpError::InexistingNote(self.service_note_id));
+        let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
+            return Err(SdpError::InexistingNote(self.locked_note_id));
         };
 
-        // Ensure service note exists and ownership over the service note and `zk_id`
+        // Ensure locked note exists and ownership over the locked note and `zk_id`
         let note = utxo.note();
         if !ZkPublicKey::verify_multi(
             &[note.pk, self.zk_id],
@@ -147,7 +147,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
             self,
             note,
             ctx.declarations,
-            ctx.service_notes,
+            ctx.locked_notes,
             ctx.min_stake,
         )
     }
@@ -169,8 +169,8 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
 
     fn validate(&self, ctx: &SDPDeclareGenesisValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the note exist
-        let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.service_note_id) else {
-            return Err(SdpError::InexistingNote(self.service_note_id));
+        let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
+            return Err(SdpError::InexistingNote(self.locked_note_id));
         };
         let note = utxo.note();
 
@@ -178,7 +178,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
             self,
             note,
             ctx.declarations,
-            ctx.service_notes,
+            ctx.locked_notes,
             ctx.min_stake,
         )
     }

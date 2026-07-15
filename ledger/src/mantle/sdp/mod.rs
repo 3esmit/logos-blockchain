@@ -19,7 +19,7 @@ use lb_core::{
     sdp::{
         ActivityMetadata, Declaration, DeclarationId, MinStake, Nonce, ProviderId,
         ServiceParameters, ServiceType,
-        service_notes::{self, ServiceNotes},
+        locked_notes::{self, LockedNotes},
     },
 };
 use lb_cryptarchia_engine::Epoch;
@@ -41,7 +41,7 @@ impl Service {
         self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
-        service_notes: &mut ServiceNotes,
+        locked_notes: &mut LockedNotes,
         config: &ServiceParameters,
         rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>) {
@@ -50,7 +50,7 @@ impl Service {
                 let (new_state, utxos) = state.try_apply_header(
                     last_epoch_state,
                     epoch_state,
-                    service_notes,
+                    locked_notes,
                     config,
                     &rewards_params.blend,
                 );
@@ -149,7 +149,7 @@ pub enum Error {
         incoming: BlockNumber,
     },
     #[error("Something went wrong while locking/unlocking a note: {0:?}")]
-    LockingError(#[from] service_notes::Error),
+    LockingError(#[from] locked_notes::Error),
     #[error("Invalid signature")]
     InvalidSignature,
     #[error("Note not found: {0:?}")]
@@ -177,7 +177,7 @@ impl<R: Rewards> ServiceState<R> {
         mut self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
-        service_notes: &mut ServiceNotes,
+        locked_notes: &mut LockedNotes,
         service_params: &ServiceParameters,
         _rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
@@ -185,7 +185,7 @@ impl<R: Rewards> ServiceState<R> {
 
         if last_epoch_state.epoch() < epoch_state.epoch() {
             // Unlock notes from withdrawn declarations if possible
-            self.unlock_notes_from_withdrawn_declarations(service_notes, epoch_state.epoch());
+            self.unlock_notes_from_withdrawn_declarations(locked_notes, epoch_state.epoch());
 
             // Garbage collect declarations
             self.gc_declarations(epoch_state.epoch(), service_params);
@@ -209,17 +209,17 @@ impl<R: Rewards> ServiceState<R> {
     /// reached.
     fn unlock_notes_from_withdrawn_declarations(
         &self,
-        service_notes: &mut ServiceNotes,
+        locked_notes: &mut LockedNotes,
         epoch: Epoch,
     ) {
         self.declarations.iter().for_each(|(_, declaration)| {
             if let Some(withdrawn) = declaration.withdrawn
                 && epoch >= withdrawn
-                && service_notes
-                    .is_locked_for_service(&declaration.service_note_id, &declaration.service_type)
+                && locked_notes
+                    .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
             {
-                service_notes
-                    .unlock(declaration.service_type, &declaration.service_note_id)
+                locked_notes
+                    .unlock(declaration.service_type, &declaration.locked_note_id)
                     .expect("unlocking note from withdrawn declaraion must be successful if it hasn't been unlocked yet");
             }
         });
@@ -299,7 +299,7 @@ fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServicePa
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SdpLedger {
     services: rpds::HashTrieMapSync<ServiceType, Service>,
-    service_notes: ServiceNotes,
+    locked_notes: LockedNotes,
     // The epoch when this ledger was created
     epoch: Epoch,
 }
@@ -309,7 +309,7 @@ impl SdpLedger {
     pub fn new(epoch: Epoch) -> Self {
         Self {
             services: rpds::HashTrieMapSync::new_sync(),
-            service_notes: ServiceNotes::new(),
+            locked_notes: LockedNotes::new(),
             epoch,
         }
     }
@@ -371,7 +371,7 @@ impl SdpLedger {
         epoch_state: &EpochState,
     ) -> Result<(Self, Vec<Utxo>), Error> {
         let mut all_reward_utxos = Vec::new();
-        let mut service_notes = self.service_notes().clone();
+        let mut locked_notes = self.locked_notes().clone();
 
         let services = self
             .services
@@ -384,7 +384,7 @@ impl SdpLedger {
                 let (new_state, reward_utxos) = service_state.clone().try_apply_header(
                     last_epoch_state,
                     epoch_state,
-                    &mut service_notes,
+                    &mut locked_notes,
                     service_params,
                     &config.service_rewards_params,
                 );
@@ -397,7 +397,7 @@ impl SdpLedger {
             Self {
                 epoch: epoch_state.epoch(),
                 services,
-                service_notes,
+                locked_notes,
             },
             all_reward_utxos,
         ))
@@ -416,7 +416,7 @@ impl SdpLedger {
         // Validate SDP Declare
         op.validate(&SDPDeclareGenesisValidationContext {
             utxo_tree,
-            service_notes: &self.service_notes,
+            locked_notes: &self.locked_notes,
             declarations: service_state.declarations(),
             min_stake: &config.min_stake,
         })?;
@@ -429,12 +429,12 @@ impl SdpLedger {
                     utxo_tree: utxo_tree.clone(),
                     epoch: self.epoch,
                     declarations: service_state.declarations_clone(),
-                    service_notes: self.service_notes.clone(),
+                    locked_notes: self.locked_notes.clone(),
                     min_stake: config.min_stake,
                 },
             )?;
 
-        self.service_notes = result.service_notes;
+        self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
         Ok((self, events))
     }
@@ -455,7 +455,7 @@ impl SdpLedger {
         // Validate SDP Declare
         op.validate(&SDPDeclareValidationContext {
             utxo_tree,
-            service_notes: &self.service_notes,
+            locked_notes: &self.locked_notes,
             tx_hash: &tx_hash,
             declare_zk_sig: zk_sig,
             declare_eddsa_sig: ed25519_sig,
@@ -470,12 +470,12 @@ impl SdpLedger {
                 utxo_tree: utxo_tree.clone(),
                 epoch: self.epoch,
                 declarations: service_state.declarations_clone(),
-                service_notes: self.service_notes.clone(),
+                locked_notes: self.locked_notes.clone(),
                 min_stake: config.min_stake,
             },
         )?;
 
-        self.service_notes = result.service_notes;
+        self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
         Ok((self, events))
     }
@@ -534,7 +534,7 @@ impl SdpLedger {
         op.validate(&SDPWithdrawValidationContext {
             declarations: service_state.declarations(),
             epoch: self.epoch,
-            service_notes: &self.service_notes,
+            locked_notes: &self.locked_notes,
             tx_hash: &tx_hash,
             sdp_withdraw_sig: zksig,
         })?;
@@ -542,11 +542,11 @@ impl SdpLedger {
         // Execute SDP Withdraw
         let (result, events) = op.execute(SDPWithdrawExecutionContext {
             declarations: service_state.declarations_clone(),
-            service_notes: self.service_notes.clone(),
+            locked_notes: self.locked_notes.clone(),
             epoch: self.epoch,
         })?;
 
-        self.service_notes = result.service_notes;
+        self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
 
         Ok((self, events))
@@ -561,8 +561,8 @@ impl SdpLedger {
     }
 
     #[must_use]
-    pub const fn service_notes(&self) -> &ServiceNotes {
-        &self.service_notes
+    pub const fn locked_notes(&self) -> &LockedNotes {
+        &self.locked_notes
     }
 
     /// Declarations of all services, which have been accumulated until the
@@ -809,7 +809,7 @@ mod tests {
         let zk_key = create_zk_key(1);
         let declare_op = &SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            service_note_id: utxo.id(),
+            locked_note_id: utxo.id(),
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
@@ -866,7 +866,7 @@ mod tests {
         let zk_key = create_zk_key(1);
         let declare_op = &SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            service_note_id: utxo.id(),
+            locked_note_id: utxo.id(),
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
@@ -927,7 +927,7 @@ mod tests {
         let zk_key = create_zk_key(1);
         let declare_op = &SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            service_note_id: note_id,
+            locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
@@ -946,7 +946,7 @@ mod tests {
         let withdraw_op = &SDPWithdrawOp {
             declaration_id,
             nonce: 1,
-            service_note_id: note_id,
+            locked_note_id: note_id,
         };
         let ledger =
             apply_withdraw_with_dummies(ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
@@ -1016,7 +1016,7 @@ mod tests {
         let zk_key = create_zk_key(1);
         let declare_op = &SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            service_note_id: note_id,
+            locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
@@ -1122,17 +1122,17 @@ mod tests {
         let (_sk_b, utxo_b) = utxo_with_sk();
 
         // Two declarations sharing the SAME zk_id, differing only in locators
-        // (and service note) -> distinct DeclarationIds, identical zk_id.
+        // (and locked note) -> distinct DeclarationIds, identical zk_id.
         let declare_a = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            service_note_id: utxo_a.id(),
+            locked_note_id: utxo_a.id(),
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declare_b = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            service_note_id: utxo_b.id(),
+            locked_note_id: utxo_b.id(),
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
@@ -1173,7 +1173,7 @@ mod tests {
 
         let declare_op = &SDPDeclareOp {
             service_type: service_a,
-            service_note_id: note_id,
+            locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
@@ -1196,7 +1196,7 @@ mod tests {
         let withdraw_op = &SDPWithdrawOp {
             declaration_id,
             nonce: 1,
-            service_note_id: note_id,
+            locked_note_id: note_id,
         };
         let sdp_ledger =
             apply_withdraw_with_dummies(sdp_ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
@@ -1223,8 +1223,8 @@ mod tests {
         );
         assert!(
             !sdp_ledger
-                .service_notes()
-                .is_locked_for_service(&declare_op.service_note_id, &ServiceType::BlendNetwork),
+                .locked_notes()
+                .is_locked_for_service(&declare_op.locked_note_id, &ServiceType::BlendNetwork),
             "the provider's note must be unlocked once withdrawn_epoch is reached"
         );
 

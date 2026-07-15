@@ -10,7 +10,7 @@ use crate::{
         ledger::{self, Inputs, Operation, Outputs, Utxos},
         ops::OpId,
     },
-    sdp::service_notes::ServiceNotes,
+    sdp::locked_notes::LockedNotes,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -60,7 +60,7 @@ pub enum TransferError {
 }
 
 pub struct TransferValidationContext<'a> {
-    pub service_notes: &'a ServiceNotes,
+    pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
     pub transfer_sig: &'a ZkSignature,
@@ -79,7 +79,7 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
             return Err(TransferError::NoInputTransfer);
         }
         // Validate Inputs (doesn't provide from a channel)
-        self.inputs.validate(ctx.service_notes, ctx.utxos, None)?;
+        self.inputs.validate(ctx.locked_notes, ctx.utxos, None)?;
         // Validate Outputs
         self.outputs.validate()?;
         // Check the transfer Proof

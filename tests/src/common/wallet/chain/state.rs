@@ -50,7 +50,7 @@ pub struct WalletChainState {
     tracked_wallets: Vec<TrackedWalletKeys>,
     wallets_by_pk: HashMap<ZkPublicKey, WalletId>,
     utxos_by_wallet: HashMap<WalletId, HashMap<NoteId, Utxo>>,
-    service_note_ids: HashSet<NoteId>,
+    locked_note_ids: HashSet<NoteId>,
 }
 
 impl WalletChainState {
@@ -83,7 +83,7 @@ impl WalletChainState {
             tracked_wallets,
             wallets_by_pk,
             utxos_by_wallet,
-            service_note_ids: HashSet::new(),
+            locked_note_ids: HashSet::new(),
         })
     }
 
@@ -140,7 +140,7 @@ impl WalletChainState {
 
     #[must_use]
     pub fn into_wallet_utxos(self) -> WalletUtxos {
-        let service_note_ids = self.service_note_ids;
+        let locked_note_ids = self.locked_note_ids;
 
         self.utxos_by_wallet
             .into_iter()
@@ -148,7 +148,7 @@ impl WalletChainState {
                 let available_utxos = utxos_by_note
                     .into_iter()
                     .filter_map(|(note_id, utxo)| {
-                        (!service_note_ids.contains(&note_id)).then_some(utxo)
+                        (!locked_note_ids.contains(&note_id)).then_some(utxo)
                     })
                     .collect();
 
@@ -209,8 +209,8 @@ impl WalletChainState {
                 // A withdraw marks channel notes, as bedrock notes.
                 self.set_notes_channel(withdraw.inputs.iter().copied(), None, changes);
             }
-            Op::SDPDeclare(declaration) => self.lock_note(declaration.service_note_id),
-            Op::SDPWithdraw(withdrawal) => self.unlock_note(withdrawal.service_note_id),
+            Op::SDPDeclare(declaration) => self.lock_note(declaration.locked_note_id),
+            Op::SDPWithdraw(withdrawal) => self.unlock_note(withdrawal.locked_note_id),
             Op::ChannelConfig(_)
             | Op::ChannelInscribe(_)
             | Op::SDPActive(_)
@@ -280,7 +280,7 @@ impl WalletChainState {
         observed_spends: &mut Vec<WalletObservedSpend>,
     ) {
         for note_id in note_ids {
-            self.service_note_ids.remove(&note_id);
+            self.locked_note_ids.remove(&note_id);
 
             for (wallet_name, utxos_by_note) in &mut self.utxos_by_wallet {
                 if utxos_by_note.remove(&note_id).is_some() {
@@ -295,12 +295,12 @@ impl WalletChainState {
 
     fn lock_note(&mut self, note_id: NoteId) {
         if self.contains_note(note_id) {
-            self.service_note_ids.insert(note_id);
+            self.locked_note_ids.insert(note_id);
         }
     }
 
     fn unlock_note(&mut self, note_id: NoteId) {
-        self.service_note_ids.remove(&note_id);
+        self.locked_note_ids.remove(&note_id);
     }
 
     fn contains_note(&self, note_id: NoteId) -> bool {
@@ -313,7 +313,7 @@ impl WalletChainState {
         utxos_by_note
             .iter()
             .filter_map(|(note_id, utxo)| {
-                (!self.service_note_ids.contains(note_id)).then_some(*utxo)
+                (!self.locked_note_ids.contains(note_id)).then_some(*utxo)
             })
             .collect()
     }
@@ -411,7 +411,7 @@ mod tests {
         values
     }
 
-    fn sdp_declaration(service_note_id: NoteId) -> DeclarationMessage {
+    fn sdp_declaration(locked_note_id: NoteId) -> DeclarationMessage {
         let provider_key = Ed25519Key::from_bytes(&[42; 32]).public_key();
         let locator: Locator = "/ip4/127.0.0.1/tcp/9100"
             .parse()
@@ -422,7 +422,7 @@ mod tests {
             locators: locator.into(),
             provider_id: ProviderId::from(provider_key),
             zk_id: pk(9),
-            service_note_id,
+            locked_note_id,
         }
     }
 
@@ -477,7 +477,7 @@ mod tests {
             MantleTx(
                 [Op::SDPWithdraw(WithdrawMessage {
                     declaration_id: declaration.id(),
-                    service_note_id: locked.id(),
+                    locked_note_id: locked.id(),
                     nonce: 0,
                 })]
                 .into(),

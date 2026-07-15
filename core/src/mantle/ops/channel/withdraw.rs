@@ -1,21 +1,20 @@
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        encoding::NomInputs,
         ledger::{Inputs, Operation, Utxos},
-        nom::{NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+// ChannelWithdraw = ChannelId Outputs WithdrawNonce — plain field-order concat.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -24,31 +23,6 @@ pub struct ChannelWithdrawOp {
 impl OpId for ChannelWithdrawOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
-    }
-}
-
-impl NomEncode for ChannelWithdrawOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.channel_id.encode());
-        bytes.extend(NomInputs::from(self.inputs.as_ref()).encode());
-        bytes
-    }
-}
-
-impl NomDecode for ChannelWithdrawOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, inputs) = NomInputs::decode(bytes)?;
-        Ok((
-            bytes,
-            Self {
-                channel_id,
-                inputs: Inputs::new(inputs),
-            },
-        ))
     }
 }
 
@@ -63,6 +37,7 @@ pub struct WithdrawValidationContext<'a> {
 pub struct WithdrawExecutionContext {
     pub channels: Channels,
     pub utxos: Utxos,
+    pub tx_hash: TxHash,
 }
 
 impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
@@ -121,10 +96,10 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Marks the inputs as bedrock notes
         ctx.utxos = self.inputs.to_bedrock(ctx.utxos)?;
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }

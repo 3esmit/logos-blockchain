@@ -2,29 +2,30 @@ use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded_vec::UpperBoundedVec;
-use nom::IResult;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
         ops::channel::config::Keys,
     },
 };
 
-pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
+/// The maximum number of bytes that can be inscribed in a single inscription
+/// operation. This is derived from the maximum block transactions size,
+/// allowing for some overhead.
+pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
-type NomInscription<'a> = NomBoundedVec<'a, u8, { Inscription::MIN }, { Inscription::MAX }, 4>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
@@ -41,37 +42,6 @@ impl InscriptionOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode().as_slice());
         MsgId(hasher.finalize().into())
-    }
-}
-
-// ChannelInscribe = ChannelId Inscription Parent Signer
-impl NomEncode for InscriptionOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.channel_id.encode();
-        bytes.extend(NomInscription::from(&self.inscription).encode());
-        bytes.extend(self.parent.encode());
-        bytes.extend(self.signer.encode());
-        bytes
-    }
-}
-
-impl NomDecode for InscriptionOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, inscription) = NomInscription::decode(bytes)?;
-        let (bytes, parent) = MsgId::decode(bytes)?;
-        let (bytes, signer) = Ed25519PublicKey::decode(bytes)?;
-        Ok((
-            bytes,
-            Self {
-                channel_id,
-                inscription,
-                parent,
-                signer,
-            },
-        ))
     }
 }
 
@@ -140,7 +110,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels
@@ -174,15 +144,16 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 ..channel
             },
         );
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use lb_utils::bounded_vec::BoundedError;
+    use lb_utils::bounded::BoundedError;
 
     use super::*;
+    use crate::mantle::nom::NomDecode as _;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {
@@ -198,7 +169,7 @@ mod tests {
         let oversized = vec![0u8; MAX_BYTES + 1];
         let err = Inscription::try_from(oversized).unwrap_err();
         assert!(
-            matches!(err, BoundedError::TooLong { actual, max } if actual == MAX_BYTES + 1 && max == MAX_BYTES)
+            matches!(err, BoundedError::TooManyItems { count, max } if count == MAX_BYTES + 1 && max == MAX_BYTES)
         );
     }
 
@@ -210,11 +181,12 @@ mod tests {
         assert!(
             format!("{err}").contains(
                 format!(
-                    "Length {} exceeds static maximum of {MAX_BYTES}",
+                    "Item count {} exceeds static maximum of {MAX_BYTES}",
                     MAX_BYTES + 1,
                 )
                 .as_str()
-            )
+            ),
+            "{err:?}",
         );
     }
 

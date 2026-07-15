@@ -11,7 +11,7 @@ pub const BEDROCK_VERSION: u8 = 1;
 use crate::{
     codec::SerializeOp as _,
     crypto::Hasher,
-    mantle::genesis_tx::GenesisTx,
+    mantle::transactions::GenesisTx,
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::{display_hex_bytes_newtype, merkle, serde_bytes_newtype},
 };
@@ -321,7 +321,6 @@ mod block_root_test_vectors {
         mantle::{
             MantleTx, Note, Op, Transaction as _,
             channel::{SlotTimeframe, SlotTimeout},
-            encoding::Ops,
             ledger::{Inputs, NoteId, Outputs},
             ops::{
                 channel::{
@@ -335,6 +334,7 @@ mod block_root_test_vectors {
                 leader_claim::{LeaderClaimOp, VoucherCm},
                 transfer::TransferOp,
             },
+            transactions::Ops,
         },
         sdp::{
             ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,

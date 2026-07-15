@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         Value,
         ledger::{self, Operation as _},
-        nom::{NomDecode, NomEncode},
+        nom::NomCodec,
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -18,7 +17,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -33,22 +32,7 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-impl NomEncode for SlotTimeframe {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for SlotTimeframe {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, inner) = u32::decode(bytes)?;
-        Ok((bytes, Self(inner)))
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {
@@ -60,21 +44,6 @@ impl From<u32> for SlotTimeout {
 impl From<SlotTimeout> for u32 {
     fn from(slot: SlotTimeout) -> Self {
         slot.0
-    }
-}
-
-impl NomEncode for SlotTimeout {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for SlotTimeout {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, inner) = u32::decode(bytes)?;
-        Ok((bytes, Self(inner)))
     }
 }
 
@@ -164,7 +133,7 @@ impl Default for Channels {
 }
 
 impl Channels {
-    pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Events), Error> {
+    pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Vec<TxEvent>), Error> {
         let (ctx, events) = op.execute(InscriptionExecutionContext {
             channels: Self::default(),
             block_slot: Slot::default(),
@@ -238,13 +207,13 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId, TxHash, Utxo,
+            Note, NoteId, Utxo,
             ledger::{Inputs, Utxos},
             ops::channel::{
                 Ed25519PublicKey as PublicKey,
                 withdraw::{ChannelWithdrawOp, WithdrawValidationContext},
             },
-            tx::{GasPrices, MantleTxGasContext},
+            transactions::{GasPrices, MantleTxGasContext},
         },
         proofs::channel_multi_sig_proof::ChannelMultiSigProof,
         sdp::locked_notes::LockedNotes,
@@ -377,13 +346,14 @@ mod tests {
         };
 
         let utxo_tree = utxo_tree(vec![utxo]);
-
+        
         let result = withdraw_op.validate(&WithdrawValidationContext {
             channels: &channels,
             locked_notes: &LockedNotes::new(),
             utxos: &utxo_tree,
-            tx_hash: &TxHash::default(),
-            withdraw_sigs: &ChannelMultiSigProof::new(vec![]).unwrap(),
+            tx_hash: &[0; 32].into(),
+            withdraw_sigs: &ChannelMultiSigProof::try_new([].into())
+                .expect("empty proof should be valid"),
         });
 
         assert!(matches!(result, Err(Error::ChannelNotFound { .. })));

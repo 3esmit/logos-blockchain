@@ -1,21 +1,20 @@
-use nom::IResult;
+use lb_core_macros::NomCodec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        encoding::{NomInputs, NomOutputs},
         ledger::{Inputs, Operation, Outputs, Utxos},
-        nom::{NomDecode, NomEncode},
+        nom::NomEncode as _,
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
 pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -25,38 +24,6 @@ pub struct ChannelTransferOp {
 impl OpId for ChannelTransferOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
-    }
-
-    fn outputs_channel_id(&self) -> Option<ChannelId> {
-        Some(self.channel_id)
-    }
-}
-
-impl NomEncode for ChannelTransferOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.channel_id.encode());
-        bytes.extend(NomInputs::from(self.inputs.as_ref()).encode());
-        bytes.extend(NomOutputs::from(self.outputs.as_ref()).encode());
-        bytes
-    }
-}
-
-impl NomDecode for ChannelTransferOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, inputs) = NomInputs::decode(bytes)?;
-        let (bytes, outputs) = NomOutputs::decode(bytes)?;
-        Ok((
-            bytes,
-            Self {
-                channel_id,
-                inputs: Inputs::new(inputs),
-                outputs: Outputs::new(outputs),
-            },
-        ))
     }
 }
 
@@ -139,13 +106,13 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Remove inputs from the ledger
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
         // Add the ouputs to the ledger
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }

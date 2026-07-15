@@ -6,13 +6,13 @@ use std::sync::{Arc, LazyLock};
 use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
-    events::Events,
+    events::TxEvent,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
-        genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ledger::Operation as _,
         ops::transfer::{TransferOp, TransferValidationContext},
+        transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
     },
     proofs::leader_proof::{self, LeaderPublic},
     sdp::{Declarations, locked_notes::LockedNotes},
@@ -464,7 +464,7 @@ impl LedgerState {
         transfer_op: &TransferOp,
         transfer_sig: &ZkSignature,
         tx_hash: TxHash,
-    ) -> Result<(Self, Balance, Events), LedgerError<Id>> {
+    ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
         //validate the transfer
         transfer_op
             .validate(&TransferValidationContext {
@@ -700,6 +700,13 @@ fn update_storage_market(
     let new_ema: Gas =
         (((total_storage_gas + previous_ema) / STORAGE_MARKET_EMA_DENOMINATOR) as Value).into();
     let new_ema_unsigned = u128::from(new_ema.into_inner());
+    // Hold the price while the effective target is zero (genesis / sustained
+    // zero usage). Without this guard `comparator <= 7*ema` is `0 <= 0` (true),
+    // wrongly taking the clamp-down branch and ratcheting the price down 12.5%
+    // every zero-usage epoch instead of holding it at P_STR(0).
+    if new_ema_unsigned == 0 {
+        return (storage_gas_price, new_ema);
+    }
     let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
     let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
         ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
@@ -743,7 +750,7 @@ pub mod tests {
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},
-            tx::GasPrices,
+            transactions::GasPrices,
         },
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
@@ -902,7 +909,6 @@ pub mod tests {
             ServiceType::BlendNetwork,
             ServiceParameters {
                 inactivity_period: 2.try_into().unwrap(),
-                retention_period: 1.into(),
                 epoch: 0.into(),
             },
         );
@@ -1132,6 +1138,28 @@ pub mod tests {
     }
 
     #[test]
+    fn storage_price_held_when_effective_target_is_zero() {
+        // Failure case for the missing guard: with zero usage and a zero EMA the
+        // effective target is 0, so the price must be HELD at P_STR(0). Without
+        // the `effective_target == 0` guard, `8*0 <= 7*0` takes the clamp-down
+        // branch and ratchets the price down 12.5% (1000 -> 875) every
+        // zero-usage epoch.
+        let price: GasPrice = 1000.into();
+        let (new_price, new_ema) = update_storage_market(price, 0.into(), 0.into());
+        assert_eq!(
+            new_price, price,
+            "price must hold while the effective target (EMA) is zero"
+        );
+        assert_eq!(new_ema, Gas::from(0));
+
+        // Sanity: once there is a real (non-zero) EMA, the price still adjusts —
+        // the guard only fires at a zero target. Zero usage against a non-zero
+        // EMA clamps down as before.
+        let (clamped, _) = update_storage_market(price, 0.into(), 800.into());
+        assert_eq!(clamped, GasPrice::from(875), "non-zero target still clamps");
+    }
+
+    #[test]
     fn test_ledger_state_allow_leadership_utxo_reuse() {
         let utxo = utxo();
         let (mut ledger, genesis) = ledger(&[utxo], config());
@@ -1283,8 +1311,8 @@ pub mod tests {
     }
 
     /// A declaration that lapses past `inactivity_period` but has not yet
-    /// been garbage-collected must be filtered out of the `EpochState`
-    /// snapshot built at a later epoch.
+    /// been withdrawn must be filtered out of the `EpochState` snapshot
+    /// built at a later epoch.
     #[test]
     fn epoch_state_snapshot_excludes_inactive_declaration() {
         let leader_utxo = utxo();
@@ -1306,10 +1334,10 @@ pub mod tests {
             sdp_utxo_key,
         );
 
-        // Advance to epoch 4 (one-by-one).
+        // Advance to epoch 5 (one-by-one).
         // With inactivity_period=2, the declaration goes inactive at epoch 5.
-        // With retention_period=1, GC fires at epoch 6.
-        // So, at epoch 5, the declaration is inactive yet still present in the ledger.
+        // It shouldn't be in the snapshot, but should still exist in the live SDP
+        // ledger because the user has not yet witdrawn it.
         let mut ledger = ledger0.clone();
         let mut head = head0;
         for epoch in 1..=5u64 {
@@ -1325,7 +1353,7 @@ pub mod tests {
                 .sdp
                 .get_declaration(&declare.id())
                 .is_some(),
-            "declaration must still be in the live SDP ledger before GC removes it"
+            "declaration must still be in the live SDP ledger because it is not yet withdrawn"
         );
         assert!(
             declaration_in_snapshot(&ledger, &head, &declare.id()).is_none(),

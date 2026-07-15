@@ -3,11 +3,12 @@ use std::{collections::HashMap, pin::Pin};
 use async_trait::async_trait;
 use futures::{Stream, stream};
 use lb_common_http_client::{
-    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, EventPayload, Events,
-    ProcessedBlockEvent, Slot, TimeInfo,
+    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, Events,
+    ProcessedBlockEvent, Slot, TimeInfo, TxEventPayload,
 };
 use lb_core::{
     crypto::Hash,
+    events::TxEvent,
     header::HeaderId,
     mantle::{
         Op, SignedMantleTx, Transaction as _, TxHash, Value,
@@ -15,7 +16,10 @@ use lb_core::{
         ops::{OpId as _, channel::ChannelId},
     },
 };
-use lb_http_api_common::queries::BlocksStreamQuery;
+use lb_http_api_common::{
+    bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+    queries::BlocksStreamQuery,
+};
 use lb_log_targets::zone_sdk;
 use reqwest::Url;
 use tracing::warn;
@@ -68,6 +72,16 @@ pub trait Node {
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
 
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
+
+    /// Fund a transaction from the node's wallet.
+    ///
+    /// The node adds fee inputs and change from its own wallet, signs only
+    /// the appended fee transfer, and returns the funded — still unsigned —
+    /// transaction together with the transfer proof.
+    async fn fund_tx(
+        &self,
+        request: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error>;
 }
 
 #[derive(Clone)]
@@ -214,6 +228,13 @@ impl Node for NodeHttpClient {
             .post_transaction(self.base_url.clone(), tx)
             .await
     }
+
+    async fn fund_tx(
+        &self,
+        request: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error> {
+        self.client.fund_tx(self.base_url.clone(), request).await
+    }
 }
 
 /// Returns true if `transactions` contains any deposit op on `channel_id`.
@@ -232,12 +253,12 @@ pub(crate) fn build_deposit_amounts(events: &Events) -> HashMap<(TxHash, Hash), 
     events
         .iter()
         .filter_map(|event| match event {
-            Event::Tx {
+            Event::Tx(TxEvent {
                 tx_hash,
                 op_id,
-                payload: EventPayload::Deposit { amount, .. },
-            } => Some(((*tx_hash, *op_id), *amount)),
-            Event::Ledger(_) => None,
+                payload: TxEventPayload::Deposit { amount, .. },
+            }) => Some(((*tx_hash, *op_id), *amount)),
+            Event::Tx { .. } | Event::Header(_) => None,
         })
         .collect()
 }

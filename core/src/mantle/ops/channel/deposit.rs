@@ -1,15 +1,14 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
-use lb_utils::bounded_vec::UpperBoundedVec;
-use nom::IResult;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::{Event, EventPayload, Events},
+    events::{TxEvent, TxEventPayload},
     mantle::{
         TxHash,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Utxos},
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
     sdp::locked_notes::LockedNotes,
@@ -17,9 +16,8 @@ use crate::{
 
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
-type NomMetadata<'a> = NomBoundedVec<'a, u8, { Metadata::MIN }, { Metadata::MAX }, 4>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -33,34 +31,6 @@ impl OpId for DepositOp {
 
     fn outputs_channel_id(&self) -> Option<ChannelId> {
         Some(self.channel_id)
-    }
-}
-
-impl NomEncode for DepositOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.channel_id.encode());
-        bytes.extend(self.inputs.encode());
-        bytes.extend(NomMetadata::from(&self.metadata).encode());
-        bytes
-    }
-}
-
-impl NomDecode for DepositOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, inputs) = Inputs::decode(bytes)?;
-        let (bytes, metadata) = NomMetadata::decode(bytes)?;
-        Ok((
-            bytes,
-            Self {
-                channel_id,
-                inputs,
-                metadata,
-            },
-        ))
     }
 }
 
@@ -109,16 +79,16 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Mark the inputs as channel notes
         ctx.utxos = self.inputs.to_channel(ctx.utxos, self.channel_id)?;
 
         let amount = self.inputs.amount(&ctx.utxos)?;
 
-        let events = std::iter::once(Event::from_tx(
+        let events = std::iter::once(TxEvent::new(
             ctx.tx_hash,
             self.op_id(),
-            EventPayload::Deposit {
+            TxEventPayload::Deposit {
                 channel_id: self.channel_id,
                 amount,
                 metadata: self.metadata.clone(),

@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, pin::Pin, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, pin::Pin, time::Duration};
 
 use common_http_client::{
     ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
@@ -14,7 +14,12 @@ use lb_core::{
 use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
-        wallet::transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+        mantle::GasPricesResponseBody,
+        wallet::{
+            balance::WalletBalanceResponseBody,
+            fund::{WalletFundRequestBody, WalletFundResponseBody},
+            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+        },
     },
     paths::{
         BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
@@ -22,6 +27,7 @@ use lb_http_api_common::{
     },
     queries::BlocksStreamQuery,
 };
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_tx_service::MempoolMetrics;
@@ -71,6 +77,14 @@ impl NodeHttpClient {
         .await
     }
 
+    pub async fn gas_prices(&self, tip: Option<HeaderId>) -> Result<GasPricesResponseBody, Error> {
+        self.with_timeout(
+            "Gas prices request",
+            self.http_client.gas_prices(self.base_url.clone(), tip),
+        )
+        .await
+    }
+
     pub async fn network_info(&self) -> Result<Libp2pInfo, Error> {
         self.network_info_at(self.base_url.clone()).await
     }
@@ -79,6 +93,19 @@ impl NodeHttpClient {
         self.with_timeout(
             "Get block by ID request",
             self.http_client.get_block_by_id(self.base_url.clone(), *id),
+        )
+        .await
+    }
+
+    pub async fn wallet_balance(
+        &self,
+        zk_pk: ZkPublicKey,
+        tip: Option<HeaderId>,
+    ) -> Result<WalletBalanceResponseBody, Error> {
+        self.with_timeout(
+            "Wallet balance request",
+            self.http_client
+                .get_wallet_balance(self.base_url.clone(), zk_pk, tip),
         )
         .await
     }
@@ -156,7 +183,18 @@ impl NodeHttpClient {
         .await
     }
 
-    pub async fn get_sdp_declarations(&self) -> Result<Vec<Declaration>, Error> {
+    pub async fn fund_tx(
+        &self,
+        body: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error> {
+        self.with_timeout(
+            "Fund transaction request",
+            self.http_client.fund_tx(self.base_url.clone(), body),
+        )
+        .await
+    }
+
+    pub async fn get_sdp_declarations(&self) -> Result<HashMap<DeclarationId, Declaration>, Error> {
         self.get_sdp_declarations_at(self.base_url.clone()).await
     }
 
@@ -196,13 +234,16 @@ impl NodeHttpClient {
     }
 
     /// Fetches testing-only SDP declarations from one explicit base URL.
-    async fn get_sdp_declarations_at(&self, base_url: Url) -> Result<Vec<Declaration>, Error> {
+    async fn get_sdp_declarations_at(
+        &self,
+        base_url: Url,
+    ) -> Result<HashMap<DeclarationId, Declaration>, Error> {
         let request_url = Self::join_path(&base_url, MANTLE_SDP_DECLARATIONS)?;
 
         self.with_timeout(
             "SDP declarations request",
             self.http_client
-                .get::<(), Vec<Declaration>>(request_url, None),
+                .get::<(), HashMap<DeclarationId, Declaration>>(request_url, None),
         )
         .await
     }

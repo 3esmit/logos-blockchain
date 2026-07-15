@@ -79,9 +79,11 @@ impl CurrentEpochTracker {
     ///
     /// It returns [`CurrentEpochTrackerOutput::WithTargetEpoch`] by
     /// creating a [`TargetEpochState`] using the collected information,
-    /// if the network size of the new target epoch is not below the
-    /// minimum required. Otherwise, it returns
-    /// [`CurrentEpochTrackerOutput::WithoutTargetEpoch`].
+    /// if the following conditions are met:
+    /// - The network size of the new target epoch is not below the minimum.
+    /// - No multi-epoch jump has occurred.
+    ///
+    /// Otherwise, it returns [`CurrentEpochTrackerOutput::WithoutTargetEpoch`].
     pub fn finalize<ProofsVerifier>(
         &self,
         current_reward_epoch_state: &CurrentEpochState,
@@ -105,6 +107,21 @@ impl CurrentEpochTracker {
             next_epoch_state.epoch,
             last_epoch_state.epoch,
         );
+
+        // On a multi-epoch jump, skip target epoch setup.
+        // See the details in the [`Rewards::update_epoch`] documentation.
+        if next_epoch_state.epoch > last_epoch_state.epoch.strict_add(1.into()) {
+            debug!(
+                target: LOG_TARGET,
+                "Multi-epoch jump from {} to {}. Switching to WithoutTargetEpoch mode",
+                last_epoch_state.epoch,
+                next_epoch_state.epoch,
+            );
+            return CurrentEpochTrackerOutput::WithoutTargetEpoch {
+                current_epoch_state: CurrentEpochState::new(next_epoch_state, settings),
+                current_epoch_tracker: Self::new(),
+            };
+        }
 
         let maybe_declarations = last_epoch_state
             .active_declarations
@@ -136,6 +153,16 @@ impl CurrentEpochTracker {
             current_reward_epoch_state.leader_input,
             zk_root,
             core_quota,
+        );
+
+        debug!(
+            target: LOG_TARGET,
+            new_target_epoch = %last_epoch_state.epoch(),
+            new_current_epoch = %next_epoch_state.epoch(),
+            declaration_count,
+            epoch_income = self.epoch_income,
+            core_quota,
+            "finalized current epoch tracker with new target epoch established",
         );
 
         CurrentEpochTrackerOutput::WithTargetEpoch {

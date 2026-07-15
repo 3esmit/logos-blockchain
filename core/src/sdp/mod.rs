@@ -11,15 +11,23 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec};
+use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
+use nom::{
+    IResult,
+    error::{Error, ErrorKind},
+};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
-    mantle::{NoteId, ops::channel::Ed25519PublicKey},
+    mantle::{
+        NoteId,
+        nom::{NomCodec, NomDecode, NomEncode},
+        ops::channel::Ed25519PublicKey,
+    },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -35,9 +43,6 @@ pub struct MinStake {
 pub struct ServiceParameters {
     /// Maximum epochs during which an activity message must be sent.
     pub inactivity_period: InactivityPeriod,
-    /// Epochs after which a declaration can be safely deleted by Garbage
-    /// Collection
-    pub retention_period: NumberOfEpochs,
     // Epoch number at which this parameter was set
     pub epoch: Epoch,
 }
@@ -94,93 +99,52 @@ pub struct InactivityPeriodTooSmall {
     pub period: NumberOfEpochs,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "Multiaddr")]
-struct BoundedMultiaddr<const MAX_SIZE: usize>(Multiaddr);
-
-impl<const MAX_SIZE: usize> AsRef<Multiaddr> for BoundedMultiaddr<MAX_SIZE> {
-    fn as_ref(&self) -> &Multiaddr {
-        &self.0
-    }
-}
-
-impl<const MAX_SIZE: usize> TryFrom<Multiaddr> for BoundedMultiaddr<MAX_SIZE> {
-    type Error = String;
-
-    fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
-        if value.len() > MAX_SIZE {
-            return Err(format!(
-                "Multiaddr must not exceed {MAX_LOCATOR_BYTE_SIZE} bytes: {value}"
-            ));
-        }
-
-        Ok(Self(value))
-    }
-}
-
-impl<const MAX_SIZE: usize> TryFrom<Vec<u8>> for BoundedMultiaddr<MAX_SIZE> {
-    type Error = String;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let multiaddr =
-            Multiaddr::try_from(value).map_err(|e| format!("Invalid multiaddr: {e}"))?;
-        Self::try_from(multiaddr)
-    }
-}
-
-impl<const MAX_SIZE: usize, const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>>
-    for BoundedMultiaddr<MAX_SIZE>
-{
-    type Error = String;
-
-    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
-        const {
-            assert!(
-                MAX <= MAX_LOCATOR_BYTE_SIZE,
-                "Max size cannot be more than the maximum allowed byte size for a multiaddr."
-            );
-        }
-        Self::try_from(value.into_inner())
-    }
-}
-
 pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 
+/// A [`Multiaddr`] whose byte length is bounded to `[0,
+/// MAX_LOCATOR_BYTE_SIZE]`.
+///
+/// The shared `lb_utils::bounded` wrapper enforces the byte-length invariant
+/// using `Multiaddr::len()`. `Locator::try_from` performs the additional
+/// locator-specific validation below, such as rejecting unspecified, loopback,
+/// multicast, documentation, and link-local addresses.
+type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LOCATOR_BYTE_SIZE>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
-pub struct Locator(BoundedMultiaddr<MAX_LOCATOR_BYTE_SIZE>);
+pub struct Locator(BoundedMultiaddr);
 
 impl Locator {
     #[must_use]
     pub const fn new_unchecked(addr: Multiaddr) -> Self {
-        Self(BoundedMultiaddr(addr))
+        Self(BoundedMultiaddr::new_unchecked(addr))
     }
 
     #[must_use]
     pub fn into_inner(self) -> Multiaddr {
-        self.0.0
+        self.0.into_inner()
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.0.len()
+        self.0.as_inner().len()
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.0.is_empty()
+        self.0.as_inner().is_empty()
     }
 }
 
 impl AsRef<Multiaddr> for Locator {
     fn as_ref(&self) -> &Multiaddr {
-        self.0.as_ref()
+        self.0.as_inner()
     }
 }
 
 impl AsRef<[u8]> for Locator {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_ref().as_ref()
+        self.0.as_inner().as_ref()
     }
 }
 
@@ -188,10 +152,10 @@ impl TryFrom<Multiaddr> for Locator {
     type Error = String;
 
     fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
-        let bounded_multiaddr = BoundedMultiaddr::<MAX_LOCATOR_BYTE_SIZE>::try_from(value.clone())
+        BoundedMultiaddr::check_len_against_bounds(value.len())
             .map_err(|e| format!("Invalid multiaddr: {e}"))?;
 
-        for protocol in bounded_multiaddr.as_ref() {
+        for protocol in &value {
             match protocol {
                 Protocol::Ip4(ip) if ip.is_unspecified() => {
                     return Err(format!(
@@ -212,7 +176,7 @@ impl TryFrom<Multiaddr> for Locator {
             }
         }
 
-        Ok(Self(bounded_multiaddr))
+        Ok(Self(BoundedMultiaddr::new_unchecked(value)))
     }
 }
 
@@ -253,7 +217,27 @@ impl FromStr for Locator {
 
 impl Display for Locator {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.0.fmt(f)
+        self.0.fmt(f)
+    }
+}
+
+impl NomEncode for Locator {
+    fn encode(&self) -> Vec<u8> {
+        let bounded_bytes = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::new_unchecked(
+            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
+        );
+        bounded_bytes.encode()
+    }
+}
+
+impl NomDecode for Locator {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
     }
 }
 
@@ -290,6 +274,25 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
+impl NomEncode for ServiceType {
+    fn encode(&self) -> Vec<u8> {
+        <Self as AsRef<u8>>::as_ref(self).encode()
+    }
+}
+
+impl NomDecode for ServiceType {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = u8::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
+
 #[cfg(test)]
 mod service_type_tests {
     use strum::IntoEnumIterator as _;
@@ -309,7 +312,7 @@ mod service_type_tests {
 
 pub type Nonce = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 #[derive(Debug)]
@@ -343,7 +346,7 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, NomCodec)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -365,8 +368,8 @@ pub struct Declaration {
     /// snapshot logic.
     // TODO: Use Option<Epoch> with a better name.
     pub active: Epoch,
-    /// The epoch at which the declaration must be withdrawn
-    pub withdrawn: Option<Epoch>,
+    /// The epoch at which the declaration is scheduled to be withdrawn.
+    pub withdraw_at: Option<Epoch>,
     pub nonce: Nonce,
 }
 
@@ -389,7 +392,7 @@ impl Declaration {
             zk_id: declaration_msg.zk_id,
             created: epoch,
             active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
-            withdrawn: None,
+            withdraw_at: None,
             nonce: 0,
         }
     }
@@ -447,7 +450,7 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -480,14 +483,15 @@ impl DeclarationMessage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
-    pub locked_note_id: NoteId,
     pub nonce: Nonce,
+    pub locked_note_id: NoteId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+// ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
@@ -498,6 +502,36 @@ pub struct ActiveMessage {
 pub enum ActivityMetadata {
     Blend(Box<blend::ActivityProof>),
 }
+
+const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
+
+impl NomEncode for ActivityMetadata {
+    fn encode(&self) -> Vec<u8> {
+        match self {
+            Self::Blend(blend_activity_proof) => {
+                let mut bytes = vec![ACTIVE_METADATA_BLEND_TYPE];
+                bytes.extend(blend_activity_proof.encode());
+                bytes
+            }
+        }
+    }
+}
+
+impl NomDecode for ActivityMetadata {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, metadata_type) = u8::decode(bytes)?;
+        match metadata_type {
+            ACTIVE_METADATA_BLEND_TYPE => {
+                let (bytes, blend_activity_proof) = blend::ActivityProof::decode(remaining_bytes)?;
+                Ok((bytes, Self::Blend(Box::new(blend_activity_proof))))
+            }
+            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
+        }
+    }
+}
+
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags and
+// enums.
 
 #[cfg(test)]
 mod tests {
@@ -591,7 +625,7 @@ mod tests {
         assert_eq!(declaration.zk_id, msg.zk_id);
         assert_eq!(declaration.created, Epoch::new(10));
         assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
-        assert_eq!(declaration.withdrawn, None);
+        assert_eq!(declaration.withdraw_at, None);
         assert_eq!(declaration.nonce, 0);
     }
 }

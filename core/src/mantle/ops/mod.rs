@@ -5,6 +5,7 @@ pub mod transfer;
 
 pub(crate) mod internal;
 
+pub(crate) mod codec;
 mod serde_;
 
 use std::sync::LazyLock;
@@ -15,8 +16,7 @@ use channel::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use nom::{
-    IResult, Parser as _,
-    combinator::map,
+    IResult,
     error::{Error, ErrorKind},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -31,7 +31,6 @@ use super::{
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        encoding::{decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op},
         nom::{NomDecode, NomEncode},
         ops::{
             internal::{OpDe, OpSer},
@@ -161,22 +160,17 @@ impl NomEncode for Op {
             Self::SDPActive(op) => {
                 bytes.extend(op.encode());
             }
-            // TODO: Use `.encode()` once implemented for all other ops
             Self::LeaderClaim(op) => {
-                bytes.extend(encode_leader_claim(op));
+                bytes.extend(op.encode());
             }
-            Self::Transfer(op) => {
-                bytes.extend(encode_transfer_op(op));
-            }
+            Self::Transfer(op) => bytes.extend(op.encode()),
         }
         bytes
     }
 }
 
 impl NomDecode for Op {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, opcode) = u8::decode(bytes)?;
 
         match opcode {
@@ -200,13 +194,18 @@ impl NomDecode for Op {
             SDP_ACTIVE => {
                 SDPActiveOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPActive(op)))
             }
-            // TODO: Use `.decode()` once implemented for all other ops
-            LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(bytes),
-            TRANSFER => map(decode_transfer, Self::Transfer).parse(bytes),
+            LEADER_CLAIM => {
+                LeaderClaimOp::decode(bytes).map(|(bytes, op)| (bytes, Self::LeaderClaim(op)))
+            }
+            TRANSFER => TransferOp::decode(bytes).map(|(bytes, op)| (bytes, Self::Transfer(op))),
             _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
         }
     }
 }
+
+// We just check that the enum discriminant tag is encoded correctly, so a
+// single fixture is fine here.
+// TODO: Remove once the `NomCodec` macro supports enums.
 
 impl Op {
     #[must_use]
@@ -285,7 +284,7 @@ pub enum OpProof {
 ///
 /// - [`generate_mantle_tx_hash_test_vectors`]: for an empty transaction and for
 ///   a transaction holding one of every operation, the `encoding` (the
-///   canonical transaction encoding, i.e. `encode_mantle_tx`, which is an
+///   canonical transaction encoding, i.e. `MantleTx::encode`, which is an
 ///   op-count byte followed by each `opcode || op_payload`) and the resulting
 ///   `tx_hash = Blake2b-256(b"MANTLE_TXHASH_V1" || encoding)`. The emitted hash
 ///   is asserted to equal `MantleTx::hash`.
@@ -310,9 +309,9 @@ mod mantle_test_vectors {
         mantle::{
             MantleTx, Note, Transaction as _,
             channel::{SlotTimeframe, SlotTimeout},
-            encoding::{Ops, encode_mantle_tx},
             ledger::{Inputs, NoteId, Outputs},
             ops::channel::{MsgId, config::Keys, deposit::Metadata},
+            transactions::Ops,
         },
         sdp::{
             ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,
@@ -423,7 +422,7 @@ mod mantle_test_vectors {
 
     /// `tx_hash = blake2b256("MANTLE_TXHASH_V1" || tx_payload_bytes)`
     /// where `tx_payload_bytes` is the canonical transaction encoding (i.e.
-    /// `encode_mantle_tx`).
+    /// `MantleTx::encode`).
     fn tx_hash_from_payload(payload: &[u8]) -> [u8; 32] {
         let mut preimage = b"MANTLE_TXHASH_V1".to_vec();
         preimage.extend_from_slice(payload);
@@ -441,7 +440,7 @@ mod mantle_test_vectors {
     }
 
     fn print_tx_vector(label: &str, tx: &MantleTx) {
-        let payload = encode_mantle_tx(tx);
+        let payload = tx.encode();
         let tx_hash = tx_hash_from_payload(&payload);
         // The hand-rolled computation must match the production `hash()`.
         assert_eq!(tx.hash().0, tx_hash);

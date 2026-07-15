@@ -101,6 +101,10 @@ where
         self.items.get(key).map(|(item, _)| item.clone())
     }
 
+    pub fn get_mut(&mut self, key: &Key) -> Option<&mut Item> {
+        self.items.get_mut(key).map(|(item, _)| item)
+    }
+
     #[must_use]
     pub fn root(&self) -> Fr {
         self.merkle.root()

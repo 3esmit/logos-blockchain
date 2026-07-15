@@ -16,13 +16,13 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ChannelStakeAssignationOp {
+pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
     pub outputs: Outputs,
 }
 
-impl OpId for ChannelStakeAssignationOp {
+impl OpId for ChannelTransferOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
     }
@@ -32,7 +32,7 @@ impl OpId for ChannelStakeAssignationOp {
     }
 }
 
-impl NomEncode for ChannelStakeAssignationOp {
+impl NomEncode for ChannelTransferOp {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(self.channel_id.encode());
@@ -42,7 +42,7 @@ impl NomEncode for ChannelStakeAssignationOp {
     }
 }
 
-impl NomDecode for ChannelStakeAssignationOp {
+impl NomDecode for ChannelTransferOp {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
@@ -60,27 +60,27 @@ impl NomDecode for ChannelStakeAssignationOp {
     }
 }
 
-pub struct StakeAssignationValidationContext<'a> {
+pub struct ChannelTransferValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
-    pub stake_assignation_sigs: &'a ChannelMultiSigProof,
+    pub transfer_sigs: &'a ChannelMultiSigProof,
 }
 
-pub struct StakeAssignationExecutionContext {
+pub struct ChannelTransferExecutionContext {
     pub channels: Channels,
     pub utxos: Utxos,
 }
 
-impl Operation<StakeAssignationValidationContext<'_>> for ChannelStakeAssignationOp {
+impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
     type ExecutionContext<'a>
-        = StakeAssignationExecutionContext
+        = ChannelTransferExecutionContext
     where
         Self: 'a;
     type Error = Error;
 
-    fn validate(&self, ctx: &StakeAssignationValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &ChannelTransferValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the outputs are valid
         self.outputs.validate()?;
 
@@ -114,12 +114,12 @@ impl Operation<StakeAssignationValidationContext<'_>> for ChannelStakeAssignatio
         // index. This is enforced by the proof structure that enforces it.
 
         // Check there is enough signatures
-        let signatures = ctx.stake_assignation_sigs.signatures();
-        if signatures.len() != channel.stake_manipulation_threshold as usize {
+        let signatures = ctx.transfer_sigs.signatures();
+        if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
-                threshold: channel.stake_manipulation_threshold,
-                actual: ctx.stake_assignation_sigs.signatures().len(),
+                threshold: channel.transfer_threshold,
+                actual: ctx.transfer_sigs.signatures().len(),
             });
         }
 

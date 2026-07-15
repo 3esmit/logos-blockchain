@@ -95,7 +95,7 @@ pub struct MantleTxContext {
 
 #[derive(Debug, Clone, Default)]
 pub struct MantleTxGasContext {
-    stake_manipulation_threshold: HashMap<ChannelId, ChannelKeyIndex>,
+    transfer_threshold: HashMap<ChannelId, ChannelKeyIndex>,
     configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     gas_prices: GasPrices,
 }
@@ -128,20 +128,20 @@ impl Default for GasPrices {
 impl MantleTxGasContext {
     #[must_use]
     pub const fn new(
-        stake_manipulation_threshold: HashMap<ChannelId, ChannelKeyIndex>,
+        transfer_threshold: HashMap<ChannelId, ChannelKeyIndex>,
         configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         gas_prices: GasPrices,
     ) -> Self {
         Self {
-            stake_manipulation_threshold,
+            transfer_threshold,
             configuration_thresholds,
             gas_prices,
         }
     }
 
     #[must_use]
-    pub fn stake_manipulation_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
-        self.stake_manipulation_threshold.get(channel_id).copied()
+    pub fn transfer_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
+        self.transfer_threshold.get(channel_id).copied()
     }
 
     #[must_use]
@@ -154,7 +154,7 @@ impl MantleTxGasContext {
         let withdraw_thresholds = value
             .channels
             .iter()
-            .map(|(channel_id, channel)| (*channel_id, channel.stake_manipulation_threshold))
+            .map(|(channel_id, channel)| (*channel_id, channel.transfer_threshold))
             .collect();
         let configuration_thresholds = value
             .channels
@@ -361,7 +361,7 @@ pub enum VerificationError {
 }
 
 pub trait OperationVerificationHelper {
-    fn get_channel_stake_manipulation_threshold(
+    fn get_channel_transfer_threshold(
         &self,
         channel_id: &ChannelId,
     ) -> Result<ChannelKeyIndex, VerificationError>;
@@ -510,16 +510,16 @@ fn verify_channel_withdraw(
     op_index: usize,
 ) -> Result<(), VerificationError> {
     let channel_id = &operation.channel_id;
-    let stake_manipulation_threshold =
-        helper.get_channel_stake_manipulation_threshold(channel_id)?;
+    let transfer_threshold =
+        helper.get_channel_transfer_threshold(channel_id)?;
 
     let signatures = proof.signatures();
     let signatures_len = signatures.len();
-    if signatures_len < stake_manipulation_threshold as usize {
+    if signatures_len < transfer_threshold as usize {
         return Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
             op_index,
             actual: signatures_len,
-            required: stake_manipulation_threshold,
+            required: transfer_threshold,
         });
     }
 
@@ -694,16 +694,11 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
-    use num_bigint::BigUint;
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
     use crate::{
-        mantle::{
-            Note, NoteId,
-            ledger::{Inputs, Outputs},
-            ops::channel::inscribe::InscriptionOp,
-        },
+        mantle::{NoteId, ledger::Inputs, ops::channel::inscribe::InscriptionOp},
         proofs::channel_multi_sig_proof::IndexedSignature,
     };
 
@@ -738,7 +733,7 @@ mod tests {
     }
 
     impl OperationVerificationHelper for TestOperationVerificationHelper {
-        fn get_channel_stake_manipulation_threshold(
+        fn get_channel_transfer_threshold(
             &self,
             channel_id: &ChannelId,
         ) -> Result<ChannelKeyIndex, VerificationError> {
@@ -765,14 +760,9 @@ mod tests {
     }
 
     fn create_withdraw_tx(channel_id: ChannelId, signing_keys: &[&Ed25519Key]) -> SignedMantleTx {
-        let withdraw_note = Note {
-            value: 5,
-            pk: ZkPublicKey::from(Fr::from(BigUint::from(0u32))),
-        };
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
             inputs: Inputs::new(NoteId(Fr::from(1u64))),
-            outputs: Outputs::new([withdraw_note]),
         })]);
         let tx_hash = mantle_tx.hash();
         let signatures = signing_keys

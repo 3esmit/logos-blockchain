@@ -638,10 +638,10 @@ where
                 self.channel_id
             ))
         })?;
-        if channel_state.stake_manipulation_threshold > 1 {
+        if channel_state.transfer_threshold > 1 {
             return Err(Error::Network(format!(
-                "publish_atomic_withdraw requires withdraw_threshold == 1, got {}",
-                channel_state.stake_manipulation_threshold
+                "publish_atomic_withdraw requires transfer_threshold == 1, got {}",
+                channel_state.transfer_threshold
             )));
         }
         let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
@@ -654,7 +654,6 @@ where
             let op = ChannelWithdrawOp {
                 channel_id: self.channel_id,
                 inputs: arg.inputs,
-                outputs: arg.outputs,
             };
             withdraw_ops.push(op.clone());
             ops.push(Op::ChannelWithdraw(op));

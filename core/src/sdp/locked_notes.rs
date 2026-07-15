@@ -196,7 +196,8 @@ mod tests {
             timestamp: 0,
         };
 
-        let result = locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id);
+        let result =
+            locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id);
 
         assert!(result.is_err());
         assert_eq!(
@@ -218,7 +219,8 @@ mod tests {
             timestamp: 0,
         };
 
-        let result = locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id);
+        let result =
+            locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note(), &note_id);
 
         assert!(result.is_ok());
     }

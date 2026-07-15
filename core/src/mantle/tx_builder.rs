@@ -334,14 +334,9 @@ mod tests {
     #[test]
     fn withdraw_op() {
         // Build an operation
-        let withdraw_note = Note {
-            value: 5,
-            pk: ZkPublicKey::zero(),
-        };
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
             inputs: Inputs::new(NoteId(Fr::ZERO)),
-            outputs: Outputs::new([withdraw_note]),
         };
 
         // Init a tx builder
@@ -435,10 +430,6 @@ mod tests {
             ),
             leader_reward_amount: 30,
         };
-        let withdraw_note = Note {
-            value: 5,
-            pk: ZkPublicKey::zero(),
-        };
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id,
@@ -456,7 +447,6 @@ mod tests {
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
                 inputs: Inputs::new([NoteId(Fr::ZERO)]),
-                outputs: Outputs::new([withdraw_note]),
             }))
             .unwrap()
             .push_op(Op::LeaderClaim(LeaderClaimOp {

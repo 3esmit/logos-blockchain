@@ -156,7 +156,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 tip_sequencer_starting_slot: ctx.block_slot,
                 posting_timeframe: 0.into(),
                 balance: 0,
-                stake_manipulation_threshold: crate::mantle::channel::DEFAULT_WITHDRAW_THRESHOLD,
+                transfer_threshold: crate::mantle::channel::DEFAULT_WITHDRAW_THRESHOLD,
                 posting_timeout: 0.into(),
             });
 

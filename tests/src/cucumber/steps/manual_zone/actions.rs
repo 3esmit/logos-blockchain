@@ -541,7 +541,6 @@ pub(super) async fn submit_zone_withdraw_transaction(
     amount: u64,
 ) -> StepResult {
     let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
-    let public_key = log_step_error(step, wallet.public_key())?;
     let channel_id = world.zone.sequencer_channel_id(sequencer_alias)?;
     let inputs = log_step_error(
         step,
@@ -550,16 +549,9 @@ pub(super) async fn submit_zone_withdraw_transaction(
     let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Burn {amount}"));
 
-    let submission = submit_zone_withdraw(
-        sequencer,
-        channel_id,
-        inputs,
-        public_key,
-        amount,
-        inscription_data.clone(),
-    )
-    .await
-    .map_err(|error| zone_step_error(step, &error))?;
+    let submission = submit_zone_withdraw(sequencer, channel_id, inputs, inscription_data.clone())
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
 
     world
         .zone

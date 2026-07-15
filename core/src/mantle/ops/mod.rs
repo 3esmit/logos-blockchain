@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 
 use channel::{
     ChannelId, config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
-    stake_assignation::ChannelStakeAssignationOp, withdraw::ChannelWithdrawOp,
+    transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use nom::{
@@ -53,7 +53,7 @@ pub trait OpId {
     }
 
     fn op_bytes(&self) -> Vec<u8>;
-    
+
     fn outputs_channel_id(&self) -> Option<ChannelId> {
         None
     }
@@ -64,7 +64,7 @@ const CHANNEL_CONFIG: u8 = 0x10;
 const INSCRIBE: u8 = 0x11;
 const CHANNEL_DEPOSIT: u8 = 0x12;
 const CHANNEL_WITHDRAW: u8 = 0x13;
-const CHANNEL_STAKE_ASSIGNATION: u8 = 0x14;
+const CHANNEL_TRANSFER: u8 = 0x14;
 const SDP_DECLARE: u8 = 0x20;
 const SDP_WITHDRAW: u8 = 0x21;
 const SDP_ACTIVE: u8 = 0x22;
@@ -84,7 +84,7 @@ pub enum Op {
     ChannelInscribe(InscriptionOp),
     ChannelConfig(ChannelConfigOp),
     ChannelDeposit(DepositOp),
-    ChannelStakeAssignation(ChannelStakeAssignationOp),
+    ChannelTransfer(ChannelTransferOp),
     ChannelWithdraw(ChannelWithdrawOp),
     SDPDeclare(SDPDeclareOp),
     SDPWithdraw(SDPWithdrawOp),
@@ -145,7 +145,7 @@ impl NomEncode for Op {
             Self::ChannelDeposit(op) => {
                 bytes.extend(op.encode());
             }
-            Self::ChannelStakeAssignation(op) => {
+            Self::ChannelTransfer(op) => {
                 bytes.extend(op.encode());
             }
 
@@ -215,7 +215,7 @@ impl Op {
             Self::ChannelInscribe(_) => "ChannelInscribe",
             Self::ChannelConfig(_) => "ChannelConfig",
             Self::ChannelDeposit(_) => "ChannelDeposit",
-            Self::ChannelStakeAssignation(_) => "ChannelStakeAssignation",
+            Self::ChannelTransfer(_) => "ChannelTransfer",
             Self::ChannelWithdraw(_) => "ChannelWithdraw",
             Self::SDPDeclare(_) => "SDPDeclare",
             Self::SDPWithdraw(_) => "SDPWithdraw",
@@ -231,7 +231,7 @@ impl Op {
             Self::ChannelInscribe(_) => Constants::CHANNEL_INSCRIBE,
             Self::ChannelConfig(_) => Constants::CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => Constants::CHANNEL_DEPOSIT,
-            Self::ChannelStakeAssignation(_) => Constants::CHANNEL_STAKE_ASSIGNATION,
+            Self::ChannelTransfer(_) => Constants::CHANNEL_TRANSFER,
             Self::ChannelWithdraw(_) => Constants::CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => Constants::SDP_DECLARE,
             Self::SDPWithdraw(_) => Constants::SDP_WITHDRAW,
@@ -246,7 +246,7 @@ impl Op {
             Self::ChannelInscribe(_) => INSCRIBE,
             Self::ChannelConfig(_) => CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
-            Self::ChannelStakeAssignation(_) => CHANNEL_STAKE_ASSIGNATION,
+            Self::ChannelTransfer(_) => CHANNEL_TRANSFER,
             Self::ChannelWithdraw(_) => CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => SDP_DECLARE,
             Self::SDPWithdraw(_) => SDP_WITHDRAW,
@@ -354,7 +354,7 @@ mod mantle_test_vectors {
                 posting_timeframe: SlotTimeframe::from(10u32),
                 posting_timeout: SlotTimeout::from(11u32),
                 configuration_threshold: 12,
-                stake_manipulation_threshold: 13,
+                transfer_threshold: 13,
             }),
             // ChannelInscribe (0x11)
             Op::ChannelInscribe(InscriptionOp {
@@ -373,10 +373,9 @@ mod mantle_test_vectors {
             Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([18u8; 32]),
                 inputs: Inputs::new([NoteId(Fr::from(19u64))]),
-                outputs: Outputs::new([Note::new(20, zk_pk(21))]),
             }),
-            // ChannelStakeAssignation (0x14)
-            Op::ChannelStakeAssignation(ChannelStakeAssignationOp {
+            // ChannelTransfer (0x14)
+            Op::ChannelTransfer(ChannelTransferOp {
                 channel_id: ChannelId::from([22u8; 32]),
                 inputs: Inputs::new([NoteId(Fr::from(23u64))]),
                 outputs: Outputs::new([Note::new(24, zk_pk(25))]),
@@ -467,7 +466,7 @@ mod mantle_test_vectors {
             match op {
                 Op::Transfer(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::ChannelDeposit(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
-                Op::ChannelStakeAssignation(o) => {
+                Op::ChannelTransfer(o) => {
                     assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes()));
                 }
                 Op::ChannelWithdraw(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),

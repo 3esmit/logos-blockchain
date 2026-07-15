@@ -574,7 +574,7 @@ mod tests {
         mantle::{
             MantleTx, Note, NoteId, Op, SignedMantleTx, Transaction as _, Utxo,
             encoding::Ops,
-            ledger::{Inputs, Outputs},
+            ledger::Inputs,
             ops::{
                 OpProof,
                 channel::{
@@ -718,7 +718,7 @@ mod tests {
                         posting_timeframe: 0u32.into(),
                         posting_timeout: 0u32.into(),
                         balance: 0,
-                        stake_manipulation_threshold: 1,
+                        transfer_threshold: 1,
                     }),
                 },
                 rx,
@@ -938,16 +938,8 @@ mod tests {
         // withdraws field populated, so on orphan we emit
         // OrphanedTx::AtomicWithdraw (not Inscription).
         let channel_id = ChannelId::from([1u8; 32]);
-        let outputs = Outputs::new([Note::new(
-            5,
-            ZkKey::from(BigUint::from(0u64)).to_public_key(),
-        )]);
         let inputs = Inputs::new(NoteId(Fr::ZERO));
-        let withdraw_op = ChannelWithdrawOp {
-            channel_id,
-            inputs,
-            outputs,
-        };
+        let withdraw_op = ChannelWithdrawOp { channel_id, inputs };
         let inscribe_op = InscriptionOp {
             channel_id,
             inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
@@ -1336,7 +1328,7 @@ mod tests {
             posting_timeframe: 0u32.into(),
             posting_timeout: 0u32.into(),
             balance: 0,
-            stake_manipulation_threshold: 1,
+            transfer_threshold: 1,
         });
 
         let node = ColdStartMockNode {

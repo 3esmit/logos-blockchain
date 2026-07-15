@@ -298,7 +298,7 @@ fn op_to_zone_message(
         }
         Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
             Some(ZoneMessage::Withdraw(Withdraw {
-                outputs: withdraw.outputs.clone(),
+                inputs: withdraw.inputs.clone(),
             }))
         }
         _ => None,

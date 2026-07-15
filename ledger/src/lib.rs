@@ -979,10 +979,7 @@ mod tests {
 
         // Verify output was created
         if let Op::Transfer(transfer_op) = &tx.mantle_tx.ops()[0] {
-            let output_utxo = transfer_op
-                .outputs
-                .utxo_by_index(0, transfer_op)
-                .unwrap();
+            let output_utxo = transfer_op.outputs.utxo_by_index(0, transfer_op).unwrap();
             assert!(new_state.latest_utxos().contains(&output_utxo.id()));
         } else {
             panic!("first op must be a transfer")
@@ -1031,7 +1028,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
-            stake_manipulation_threshold: 1,
+            transfer_threshold: 1,
         };
 
         let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
@@ -1159,7 +1156,7 @@ mod tests {
             inputs: Inputs::new([utxo.id()]),
             metadata: [5, 6, 7, 8].into(),
         };
-        let deposit_ops = vec![Op::ChannelDeposit(deposit.clone())];
+        let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state
             .try_apply_tx::<HeaderId, MainnetGasConstants>(
                 &test_config,
@@ -1168,31 +1165,22 @@ mod tests {
             .unwrap()
             .0;
 
-        // The deposit is now held as a channel-tagged UTXO note that the
-        // withdraw must spend (the `balance` field is no longer used).
-        let deposit_note_id = Outputs::new(Note {
-            value: utxo.note().value,
-            pk: ZkPublicKey::zero(),
-        })
-        .utxos(&deposit)
-        .next()
-        .expect("deposit creates a channel note")
-        .id();
-        assert!(ledger_state.latest_utxos().contains(&deposit_note_id));
+        // The deposit marks the note as belonging to the channel, keeping its id
+        assert_eq!(
+            ledger_state
+                .latest_utxos()
+                .get(&utxo.id())
+                .expect("the deposited note is in the ledger")
+                .channel_id(),
+            Some(channel_id)
+        );
 
-        // Withdraw some funds from the channel
-        let recipient_sk = ZkKey::from(BigUint::from(99u8));
-        let recipient_pk = recipient_sk.to_public_key();
-        let withdraw_note = Note {
-            value: 500,
-            pk: recipient_pk,
-        };
+        // Withdraw the note from the channel
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposit_note_id]),
-            outputs: Outputs::new([withdraw_note]),
+            inputs: Inputs::new([utxo.id()]),
         };
-        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
+        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1210,26 +1198,17 @@ mod tests {
         assert!(result.is_ok());
 
         let (new_state, tx_balance, events) = result.unwrap();
-        assert_eq!(tx_balance, 0);
-        let change_note_id = Outputs::new([
-            withdraw_note,
-            Note {
-                value: utxo.note().value - withdraw_note.value,
-                pk: ZkPublicKey::zero(),
-            },
-        ])
-        .utxos(&withdraw)
-        .nth(1)
-        .expect("withdraw creates a channel change note")
-        .id();
-        assert!(new_state.latest_utxos().contains(&change_note_id));
-        let withdraw_utxo = withdraw
-            .outputs
-            .utxos(&withdraw)
-            .next()
-            .expect("withdraw should have at least one utxo")
-            .id();
-        assert!(new_state.latest_utxos().contains(&withdraw_utxo));
+        assert_eq!(tx_balance, Balance::from(0));
+
+        // The withdraw moves the note back to the bedrock, keeping its id
+        assert_eq!(
+            new_state
+                .latest_utxos()
+                .get(&utxo.id())
+                .expect("the withdrawn note is in the ledger")
+                .channel_id(),
+            None
+        );
         assert!(events.is_empty());
     }
 
@@ -1255,7 +1234,7 @@ mod tests {
             inputs: Inputs::new([utxo.id()]),
             metadata: Metadata::empty(),
         };
-        let deposit_ops = vec![Op::ChannelDeposit(deposit.clone())];
+        let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state
             .try_apply_tx::<HeaderId, MainnetGasConstants>(
                 &test_config,
@@ -1263,31 +1242,14 @@ mod tests {
             )
             .unwrap()
             .0;
-        // The deposit is held as a channel-tagged UTXO note; a failed
-        // withdraw must leave it untouched.
-        let deposit_note_id = Outputs::new(Note {
-            value: utxo.note().value,
-            pk: ZkPublicKey::zero(),
-        })
-        .utxos(&deposit)
-        .next()
-        .expect("deposit creates a channel note")
-        .id();
 
-        // Try to withdraw some funds from the channel, but with an invalid proof
-        let recipient_sk = ZkKey::from(BigUint::from(99u8));
-        let recipient_pk = recipient_sk.to_public_key();
-        let withdraw_note = Note {
-            value: 500,
-            pk: recipient_pk,
-        };
+        // Try to withdraw the note from the channel, but with an invalid proof
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([deposit_note_id]),
-            outputs: Outputs::new([withdraw_note]),
+            inputs: Inputs::new([utxo.id()]),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
-        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
+        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let invalid_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1314,16 +1276,15 @@ mod tests {
             )
         );
 
-        // The failed withdraw must not touch the channel funds nor create a
-        // recipient note.
-        assert!(ledger_state.latest_utxos().contains(&deposit_note_id));
-        let withdraw_utxo = withdraw
-            .outputs
-            .utxos(&withdraw)
-            .next()
-            .expect("withdraw should have at least one utxo")
-            .id();
-        assert!(!ledger_state.latest_utxos().contains(&withdraw_utxo));
+        // The failed withdraw must leave the note in the channel
+        assert_eq!(
+            ledger_state
+                .latest_utxos()
+                .get(&utxo.id())
+                .expect("the deposited note is in the ledger")
+                .channel_id(),
+            Some(channel_id)
+        );
     }
 
     #[test]
@@ -1479,7 +1440,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
-            stake_manipulation_threshold: 1,
+            transfer_threshold: 1,
         };
 
         let inscribe_op3 = InscriptionOp {

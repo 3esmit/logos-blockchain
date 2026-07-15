@@ -968,7 +968,7 @@ pub async fn wait_for_withdraw(
         timeout_duration,
         || ZoneTestError::WithdrawTimeout,
         |message| match message {
-            ZoneMessage::Withdraw(withdraw) if withdraw.outputs == expected.outputs => Some(()),
+            ZoneMessage::Withdraw(withdraw) if withdraw.inputs == expected.inputs => Some(()),
             _ => None,
         },
     )
@@ -1012,7 +1012,7 @@ pub async fn wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pendi
         events,
         duration,
         ZoneTestError::WithdrawTimeout,
-        |op| matches!(op, FinalizedOp::Withdraw(w) if w.op.outputs == expected.outputs),
+        |op| matches!(op, FinalizedOp::Withdraw(w) if w.op.inputs == expected.inputs),
     )
     .await
 }
@@ -1302,15 +1302,9 @@ pub async fn submit_zone_withdraw(
     client: &SequencerClient,
     channel_id: ChannelId,
     inputs: Inputs,
-    funding_public_key: ZkPublicKey,
-    amount: Value,
     inscription_data: Inscription,
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
-    let withdraw = ChannelWithdrawOp {
-        channel_id,
-        inputs,
-        outputs: Outputs::new([Note::new(amount, funding_public_key)]),
-    };
+    let withdraw = ChannelWithdrawOp { channel_id, inputs };
 
     let (tx, msg_id, inscription_sig) = client
         .prepare_tx(
@@ -1330,15 +1324,10 @@ pub async fn submit_zone_withdraw(
                 message: error.to_string(),
             })?;
 
-    let withdraw_proof =
-        match ChannelMultiSigProof::new(vec![IndexedSignature::new(0, withdraw_sig)]) {
-            Ok(proof) => proof,
-            Err(error) => {
-                return Err(ZoneTestError::SubmitWithdraw {
-                    message: error.to_string(),
-                });
-            }
-        };
+    let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(0, withdraw_sig)])
+        .map_err(|error| ZoneTestError::SubmitWithdraw {
+            message: error.to_string(),
+        })?;
 
     let signed_tx = SignedMantleTx::new(
         tx,

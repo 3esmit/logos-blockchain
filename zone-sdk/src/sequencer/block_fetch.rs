@@ -585,10 +585,10 @@ fn touches_channel_tip(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, Note, NoteId,
+        MantleTx, NoteId,
         channel::{SlotTimeframe, SlotTimeout},
         encoding::Ops,
-        ledger::{Inputs, Outputs},
+        ledger::Inputs,
         ops::{
             OpId as _, OpProof,
             channel::{
@@ -600,8 +600,7 @@ mod tests {
         },
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
-    use num_bigint::BigUint;
+    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
     use super::*;
 
@@ -766,20 +765,14 @@ mod tests {
         // finalized view, not a "what we tracked locally" view.
         let channel_id = ChannelId::from([0; 32]);
         let other_channel = ChannelId::from([9; 32]);
-        let outputs = Outputs::new([Note::new(
-            42,
-            ZkKey::from(BigUint::from(0u64)).to_public_key(),
-        )]);
         let inputs = Inputs::new(NoteId(Fr::ZERO));
         let withdraw_for_us = ChannelWithdrawOp {
             channel_id,
             inputs: inputs.clone(),
-            outputs: outputs.clone(),
         };
         let withdraw_other = ChannelWithdrawOp {
             channel_id: other_channel,
             inputs,
-            outputs,
         };
 
         let tx = unverified_tx_with_ops(vec![
@@ -810,7 +803,7 @@ mod tests {
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
-            stake_manipulation_threshold: 1,
+            transfer_threshold: 1,
         }
     }
 

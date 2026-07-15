@@ -1,7 +1,7 @@
 pub mod config;
 pub mod deposit;
 pub mod inscribe;
-pub mod stake_assignation;
+pub mod transfer;
 pub mod withdraw;
 
 use std::fmt::{Display, Formatter};

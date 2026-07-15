@@ -8,7 +8,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Outputs, Utxos},
+        ledger::{Inputs, Operation, Utxos},
         nom::{NomBoundedVec, NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
@@ -110,22 +110,10 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
-        for input in &self.inputs {
-            // get the note
-            let note = ctx
-                .utxos
-                .get(input)
-                .expect("note existence was checked in validate")
-                .note();
-
-            // create the deposit channel note
-            ctx.utxos = Outputs::new(note).execute(ctx.utxos, self);
-        }
+        // Mark the inputs as channel notes
+        ctx.utxos = self.inputs.to_channel(ctx.utxos, self.channel_id)?;
 
         let amount = self.inputs.amount(&ctx.utxos)?;
-
-        // Remove inputs from the ledger
-        ctx.utxos = self.inputs.execute(ctx.utxos)?;
 
         let events = std::iter::once(Event::from_tx(
             ctx.tx_hash,

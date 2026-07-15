@@ -149,10 +149,10 @@ pub struct ChannelState {
 
     // Bridging
     pub balance: Value,
-    pub stake_manipulation_threshold: ChannelKeyIndex, /* indicating how many keys are required
-                                                        * to
-                                                        * withdraw, or assignate channel notes
-                                                        * from the channel */
+    pub transfer_threshold: ChannelKeyIndex, /* indicating how many keys are required
+                                              * to
+                                              * withdraw, or transfer channel notes
+                                              * from the channel */
 }
 
 pub(crate) const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
@@ -231,7 +231,7 @@ impl ChannelState {
 mod tests {
     use ark_ff::AdditiveGroup as _;
     use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::blake_rng::RngCore as _;
     use rand::thread_rng;
 
@@ -239,7 +239,7 @@ mod tests {
     use crate::{
         mantle::{
             Note, NoteId, TxHash, Utxo,
-            ledger::{Inputs, Outputs, Utxos},
+            ledger::{Inputs, Utxos},
             ops::channel::{
                 Ed25519PublicKey as PublicKey,
                 withdraw::{ChannelWithdrawOp, WithdrawValidationContext},
@@ -274,7 +274,7 @@ mod tests {
                 .into(),
             configuration_threshold: 0,
             tip_message: MsgId::root(),
-            stake_manipulation_threshold: 0,
+            transfer_threshold: 0,
         }
     }
 
@@ -309,7 +309,7 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
                         balance,
-                        stake_manipulation_threshold: 1,
+                        transfer_threshold: 1,
                         posting_timeout: 0u32.into(),
                     },
                 ),
@@ -336,7 +336,7 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
                         balance: 5,
-                        stake_manipulation_threshold: 1,
+                        transfer_threshold: 1,
                         posting_timeout: 0u32.into(),
                     },
                 )
@@ -352,7 +352,7 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0.into(),
                         balance: 9,
-                        stake_manipulation_threshold: 2,
+                        transfer_threshold: 2,
                         posting_timeout: 0.into(),
                     },
                 ),
@@ -360,12 +360,9 @@ mod tests {
 
         let gas_context = MantleTxGasContext::from_channels(&channels, GasPrices::new(0, 0));
 
-        assert_eq!(gas_context.stake_manipulation_threshold(&first_id), Some(1));
-        assert_eq!(
-            gas_context.stake_manipulation_threshold(&second_id),
-            Some(2)
-        );
-        assert_eq!(gas_context.stake_manipulation_threshold(&missing_id), None);
+        assert_eq!(gas_context.transfer_threshold(&first_id), Some(1));
+        assert_eq!(gas_context.transfer_threshold(&second_id), Some(2));
+        assert_eq!(gas_context.transfer_threshold(&missing_id), None);
     }
 
     #[test]
@@ -377,10 +374,6 @@ mod tests {
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
             inputs: Inputs::new(NoteId(Fr::from(3u64))),
-            outputs: Outputs::new([Note {
-                value: 6,
-                pk: ZkPublicKey::zero(),
-            }]),
         };
 
         let utxo_tree = utxo_tree(vec![utxo]);

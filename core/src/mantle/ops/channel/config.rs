@@ -27,7 +27,7 @@ pub struct ChannelConfigOp {
     pub posting_timeframe: SlotTimeframe,
     pub posting_timeout: SlotTimeout,
     pub configuration_threshold: u16,
-    pub stake_manipulation_threshold: u16,
+    pub transfer_threshold: u16,
 }
 
 impl ChannelConfigOp {
@@ -49,7 +49,7 @@ impl NomEncode for ChannelConfigOp {
         bytes.extend(self.posting_timeframe.encode());
         bytes.extend(self.posting_timeout.encode());
         bytes.extend(self.configuration_threshold.encode());
-        bytes.extend(self.stake_manipulation_threshold.encode());
+        bytes.extend(self.transfer_threshold.encode());
         bytes
     }
 }
@@ -63,7 +63,7 @@ impl NomDecode for ChannelConfigOp {
         let (bytes, posting_timeframe) = SlotTimeframe::decode(bytes)?;
         let (bytes, posting_timeout) = SlotTimeout::decode(bytes)?;
         let (bytes, configuration_threshold) = u16::decode(bytes)?;
-        let (bytes, stake_manipulation_threshold) = u16::decode(bytes)?;
+        let (bytes, transfer_threshold) = u16::decode(bytes)?;
 
         Ok((
             bytes,
@@ -73,7 +73,7 @@ impl NomDecode for ChannelConfigOp {
                 posting_timeframe,
                 posting_timeout,
                 configuration_threshold,
-                stake_manipulation_threshold,
+                transfer_threshold,
             },
         ))
     }
@@ -102,9 +102,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
         // index. This is enforced by the proof structure that enforces it.
 
         // Check config wellformness
-        if self.configuration_threshold == 0
-            || self.stake_manipulation_threshold == 0
-            || self.keys.is_empty()
+        if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
         {
             return Err(Error::InvalidChannelConfig);
         }
@@ -153,7 +151,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
             channel.tip_sequencer_starting_slot = ctx.block_slot;
             channel.posting_timeframe = self.posting_timeframe.clone();
             channel.posting_timeout = self.posting_timeout.clone();
-            channel.stake_manipulation_threshold = self.stake_manipulation_threshold;
+            channel.transfer_threshold = self.transfer_threshold;
             channel.tip_slot = ctx.block_slot;
             channel.tip_message = self.id();
         } else {
@@ -168,7 +166,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
                     tip_sequencer_starting_slot: ctx.block_slot,
                     posting_timeframe: self.posting_timeframe.clone(),
                     balance: 0,
-                    stake_manipulation_threshold: self.stake_manipulation_threshold,
+                    transfer_threshold: self.transfer_threshold,
                     posting_timeout: self.posting_timeout.clone(),
                 },
             );

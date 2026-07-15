@@ -6,8 +6,8 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        encoding::{NomInputs, NomOutputs},
-        ledger::{Inputs, Operation, Outputs, Utxos},
+        encoding::NomInputs,
+        ledger::{Inputs, Operation, Utxos},
         nom::{NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
@@ -19,7 +19,6 @@ use crate::{
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
-    pub outputs: Outputs,
 }
 
 impl OpId for ChannelWithdrawOp {
@@ -33,7 +32,6 @@ impl NomEncode for ChannelWithdrawOp {
         let mut bytes = Vec::new();
         bytes.extend(self.channel_id.encode());
         bytes.extend(NomInputs::from(self.inputs.as_ref()).encode());
-        bytes.extend(NomOutputs::from(self.outputs.as_ref()).encode());
         bytes
     }
 }
@@ -44,13 +42,11 @@ impl NomDecode for ChannelWithdrawOp {
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let (bytes, channel_id) = ChannelId::decode(bytes)?;
         let (bytes, inputs) = NomInputs::decode(bytes)?;
-        let (bytes, outputs) = NomOutputs::decode(bytes)?;
         Ok((
             bytes,
             Self {
                 channel_id,
                 inputs: Inputs::new(inputs),
-                outputs: Outputs::new(outputs),
             },
         ))
     }
@@ -77,9 +73,6 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     type Error = Error;
 
     fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check that the outputs are valid
-        self.outputs.validate()?;
-
         // Check that the channel exist
         if !ctx.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {
@@ -99,22 +92,15 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         self.inputs
             .validate(ctx.locked_notes, ctx.utxos, Some(self.channel_id))?;
 
-        // Check the operation is balanced
-        let input_amount = self.inputs.amount(ctx.utxos)?;
-        let output_amount = self.outputs.amount()?;
-        if input_amount != output_amount {
-            return Err(Error::UnbalancedOperation);
-        }
-
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
         // Check there is enough signatures
         let signatures = ctx.withdraw_sigs.signatures();
-        if signatures.len() != channel.stake_manipulation_threshold as usize {
+        if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
-                threshold: channel.stake_manipulation_threshold,
+                threshold: channel.transfer_threshold,
                 actual: ctx.withdraw_sigs.signatures().len(),
             });
         }
@@ -136,11 +122,8 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
-        // Remove inputs from the ledger
-        ctx.utxos = self.inputs.execute(ctx.utxos)?;
-
-        // Add the ouputs to the ledger
-        ctx.utxos = self.outputs.execute(ctx.utxos, self);
+        // Marks the inputs as bedrock notes
+        ctx.utxos = self.inputs.to_bedrock(ctx.utxos)?;
 
         Ok((ctx, Events::new()))
     }

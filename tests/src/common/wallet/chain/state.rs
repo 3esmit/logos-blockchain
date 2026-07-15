@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use lb_core::mantle::{
-    Note, NoteId, SignedMantleTx, Utxo,
-    ops::{Op, OpId as _},
+    NoteId, SignedMantleTx, Utxo,
+    ops::{Op, channel::ChannelId},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use thiserror::Error;
@@ -187,66 +187,27 @@ impl WalletChainState {
                 );
             }
             Op::ChannelDeposit(deposit) => {
-                // A deposit consumes user notes and creates a single
-                // channel-owned note worth the deposited
-                // amount, tagged with the channel id.
-                let amount = self.sum_note_values(deposit.inputs.iter().copied());
-                self.apply_spent_note_ids(
+                // A deposit marks bedrock notes as channel notes.
+                self.set_notes_channel(
                     deposit.inputs.iter().copied(),
-                    &mut changes.observed_spends,
+                    Some(deposit.channel_id),
+                    changes,
                 );
-                if amount != 0 {
-                    self.apply_owned_outputs(
-                        std::iter::once(Utxo::new_channel(
-                            deposit.op_id(),
-                            0,
-                            deposit.channel_id,
-                            Note::new(amount, ZkPublicKey::zero()),
-                        )),
-                        &mut changes.observed_outputs,
-                    );
-                }
             }
-            Op::ChannelStakeAssignation(stake_assignation) => {
-                // A stake assignation is a balanced re-distribution of stake
-                // within a channel: it spends channel-owned notes and produces
-                // new channel-owned notes (all tagged with the same channel id).
+            Op::ChannelTransfer(chan_transfer) => {
+                // A channel transfer is a balanced re-distribution of channel notes
                 self.apply_spent_note_ids(
-                    stake_assignation.inputs.iter().copied(),
+                    chan_transfer.inputs.iter().copied(),
                     &mut changes.observed_spends,
                 );
                 self.apply_owned_outputs(
-                    stake_assignation.outputs.utxos(stake_assignation),
+                    chan_transfer.outputs.utxos(chan_transfer),
                     &mut changes.observed_outputs,
                 );
             }
             Op::ChannelWithdraw(withdraw) => {
-                // A withdraw spends channel-owned notes, pays the recipient
-                // outputs, and returns the unspent remainder as a fresh
-                // channel-owned change note.
-                let input_amount = self.sum_note_values(withdraw.inputs.iter().copied());
-                self.apply_spent_note_ids(
-                    withdraw.inputs.iter().copied(),
-                    &mut changes.observed_spends,
-                );
-                self.apply_owned_outputs(
-                    withdraw.outputs.utxos(withdraw),
-                    &mut changes.observed_outputs,
-                );
-                let output_amount: u64 = withdraw.outputs.iter().map(|note| note.value).sum();
-                if let Some(returned) = input_amount.checked_sub(output_amount)
-                    && returned != 0
-                {
-                    self.apply_owned_outputs(
-                        std::iter::once(Utxo::new_channel(
-                            withdraw.op_id(),
-                            withdraw.outputs.len(),
-                            withdraw.channel_id,
-                            Note::new(returned, ZkPublicKey::zero()),
-                        )),
-                        &mut changes.observed_outputs,
-                    );
-                }
+                // A withdraw marks channel notes, as bedrock notes.
+                self.set_notes_channel(withdraw.inputs.iter().copied(), None, changes);
             }
             Op::SDPDeclare(declaration) => self.lock_note(declaration.locked_note_id),
             Op::SDPWithdraw(withdrawal) => self.unlock_note(withdrawal.locked_note_id),
@@ -279,18 +240,38 @@ impl WalletChainState {
         }
     }
 
-    /// Sums the value of the tracked notes referenced by `note_ids`, ignoring
-    /// ids the wallet does not currently hold.
-    fn sum_note_values(&self, note_ids: impl IntoIterator<Item = NoteId>) -> u64 {
-        note_ids
-            .into_iter()
-            .filter_map(|note_id| {
-                self.utxos_by_wallet
-                    .values()
-                    .find_map(|utxos_by_note| utxos_by_note.get(&note_id))
-                    .map(|utxo| utxo.note().value)
-            })
-            .sum()
+    /// Sets the channel the tracked notes referenced by `note_ids` belong to,
+    /// or moves them back to the bedrock when it is `None`. The notes keep
+    /// their id, value and owner.
+    fn set_notes_channel(
+        &mut self,
+        note_ids: impl IntoIterator<Item = NoteId>,
+        channel_id: Option<ChannelId>,
+        changes: &mut ObservedWalletChanges,
+    ) {
+        for note_id in note_ids {
+            for (wallet_id, utxos_by_note) in &mut self.utxos_by_wallet {
+                let Some(utxo) = utxos_by_note.get_mut(&note_id) else {
+                    continue;
+                };
+                let data = *utxo.data();
+                *utxo = channel_id.map_or_else(
+                    || Utxo::new_bedrock(data.op_id, data.output_index, data.note),
+                    |channel_id| {
+                        Utxo::new_channel(data.op_id, data.output_index, channel_id, data.note)
+                    },
+                );
+
+                changes.observed_spends.push(WalletObservedSpend {
+                    wallet_id: wallet_id.clone(),
+                    note_id,
+                });
+                changes.observed_outputs.push(WalletObservedOutput {
+                    wallet_id: wallet_id.clone(),
+                    utxo: *utxo,
+                });
+            }
+        }
     }
 
     fn apply_spent_note_ids(
@@ -394,9 +375,9 @@ fn wallet_public_keys_by_owner(
 mod tests {
     use lb_core::{
         mantle::{
-            MantleTx,
-            ledger::{Inputs, Outputs},
-            ops::channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
+            MantleTx, Note,
+            ledger::Inputs,
+            ops::channel::{deposit::DepositOp, withdraw::ChannelWithdrawOp},
         },
         sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
     };
@@ -519,7 +500,6 @@ mod tests {
         let withdraw = ChannelWithdrawOp {
             channel_id: ChannelId::from([0; 32]),
             inputs: Inputs::new(NoteId(Fr::ZERO)),
-            outputs: Outputs::new([Note::new(10, pk(1)), Note::new(20, pk(2))]),
         };
 
         let tx = SignedMantleTx::new_unverified(

@@ -623,9 +623,7 @@ impl LedgerState {
         }
 
         Ok(Self::from_utxos(
-            transfer_op
-                .outputs
-                .utxos(transfer_op),
+            transfer_op.outputs.utxos(transfer_op),
             config,
             epoch_nonce,
         ))
@@ -1639,14 +1637,8 @@ pub mod tests {
         // Verify outputs were created
         let (_, transfer_op, _) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
-        let output_utxo1 = transfer_op
-            .outputs
-            .utxo_by_index(0, &transfer_op)
-            .unwrap();
-        let output_utxo2 = transfer_op
-            .outputs
-            .utxo_by_index(1, &transfer_op)
-            .unwrap();
+        let output_utxo1 = transfer_op.outputs.utxo_by_index(0, &transfer_op).unwrap();
+        let output_utxo2 = transfer_op.outputs.utxo_by_index(1, &transfer_op).unwrap();
 
         assert!(new_state.utxos.contains(&output_utxo1.id()));
         assert!(new_state.utxos.contains(&output_utxo2.id()));
@@ -1792,7 +1784,8 @@ pub mod tests {
     #[test]
     fn test_output_not_zero() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo::new_bedrock([1u8; 32], 0, Note::new(10000, input_sk.to_public_key()));
+        let input_utxo =
+            Utxo::new_bedrock([1u8; 32], 0, Note::new(10000, input_sk.to_public_key()));
 
         let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);

@@ -15,6 +15,7 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::Events,
     mantle::{
+        Utxo::Bedrock,
         encoding::{BoundedInputs, BoundedOutputs, NomInputs},
         nom::{NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
@@ -260,6 +261,41 @@ impl Inputs {
             (utxos, _) = utxos
                 .remove(input)
                 .map_err(|_| InputsError::InexistingNote(*input))?;
+        }
+        Ok(utxos)
+    }
+
+    pub fn to_channel(
+        &self,
+        mut utxos: Utxos,
+        channel_id: ChannelId,
+    ) -> Result<Utxos, InputsError> {
+        for input in &self.0 {
+            let utxo = utxos
+                .get_mut(input)
+                .ok_or(InputsError::InexistingNote(*input))?;
+            // Only bedrock notes can be moved into a channel
+            let Bedrock(utxo_data) = *utxo else {
+                return Err(InputsError::InvalidChannel(*input, None));
+            };
+            *utxo = Utxo::Channel {
+                utxo_data,
+                channel_id,
+            };
+        }
+        Ok(utxos)
+    }
+
+    pub fn to_bedrock(&self, mut utxos: Utxos) -> Result<Utxos, InputsError> {
+        for input in &self.0 {
+            let utxo = utxos
+                .get_mut(input)
+                .ok_or(InputsError::InexistingNote(*input))?;
+            // Only channel notes can be moved to the bedrock
+            let Utxo::Channel { utxo_data, .. } = *utxo else {
+                return Err(InputsError::InvalidChannel(*input, None));
+            };
+            *utxo = Bedrock(utxo_data);
         }
         Ok(utxos)
     }

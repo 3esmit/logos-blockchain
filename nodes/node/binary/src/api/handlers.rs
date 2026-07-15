@@ -670,7 +670,7 @@ where
         BlendService,
         BroadcastSettings,
         RuntimeServiceId,
-    >(&handle, req.locator, req.locked_note_id))
+    >(&handle, req.locator, req.service_note_id))
 }
 
 #[utoipa::path(

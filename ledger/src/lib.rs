@@ -580,13 +580,13 @@ impl LedgerState {
                 }
                 (Op::ChannelDeposit(op), OpProof::ZkSig(sig)) => {
                     let channels = self.mantle_ledger.channels();
-                    let locked_notes = self.mantle_ledger.locked_notes();
+                    let service_notes = self.mantle_ledger.service_notes();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
                     // Validate the Deposit
                     op.validate(&DepositValidationContext {
                         channels,
-                        locked_notes,
+                        service_notes,
                         utxos,
                         tx_hash: &tx_hash,
                         deposit_sig: sig,
@@ -597,7 +597,7 @@ impl LedgerState {
                     let (result, events) = op
                         .execute(DepositExecutionContext {
                             channels: channels.clone(),
-                            locked_notes: locked_notes.clone(),
+                            service_notes: service_notes.clone(),
                             utxos: utxos.clone(),
                             tx_hash,
                         })
@@ -608,13 +608,13 @@ impl LedgerState {
                 }
                 (Op::ChannelWithdraw(op), OpProof::ChannelMultiSigProof(sigs)) => {
                     let channels = self.mantle_ledger.channels();
-                    let locked_notes = self.mantle_ledger.locked_notes();
+                    let service_notes = self.mantle_ledger.service_notes();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
                     // Validate the Withdraw
                     op.validate(&WithdrawValidationContext {
                         channels,
-                        locked_notes,
+                        service_notes,
                         utxos,
                         tx_hash: &tx_hash,
                         withdraw_sigs: sigs,
@@ -701,7 +701,7 @@ impl LedgerState {
                     let events;
                     (self.cryptarchia_ledger, transfer_balance, events) =
                         self.cryptarchia_ledger.try_apply_transfer::<_, Constants>(
-                            self.mantle_ledger.locked_notes(),
+                            self.mantle_ledger.service_notes(),
                             op,
                             sig,
                             tx_hash,

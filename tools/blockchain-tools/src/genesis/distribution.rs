@@ -81,7 +81,7 @@ pub enum DistributionError {
 
 /// `distribute` stake to stake holders.
 /// Provider has to be a stakeholder, because stake holders note id will be used
-/// as a locked note.
+/// as a service note.
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
@@ -117,7 +117,7 @@ where
                 locators: provider.locators,
                 provider_id: provider.provider_id.into(),
                 zk_id: provider.zk_id,
-                locked_note_id: utxo.id(),
+                service_note_id: utxo.id(),
             });
         }
     }
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(declarations.len(), 1);
         assert_eq!(declarations[0].zk_id, zk_id_1);
         assert_eq!(
-            declarations[0].locked_note_id,
+            declarations[0].service_note_id,
             transfer_op.utxo_by_index(0).unwrap().id(),
         );
     }

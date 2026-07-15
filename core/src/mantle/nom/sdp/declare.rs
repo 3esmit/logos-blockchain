@@ -97,7 +97,7 @@ impl NomEncode for SDPDeclareOp {
         bytes.extend(self.locators.encode());
         bytes.extend(self.provider_id.encode());
         bytes.extend(self.zk_id.encode());
-        bytes.extend(self.locked_note_id.encode());
+        bytes.extend(self.service_note_id.encode());
         bytes
     }
 }
@@ -110,7 +110,7 @@ impl NomDecode for SDPDeclareOp {
         let (bytes, locators) = Locators::decode(bytes)?;
         let (bytes, provider_id) = ProviderId::decode(bytes)?;
         let (bytes, zk_id) = ZkPublicKey::decode(bytes)?;
-        let (bytes, locked_note_id) = NoteId::decode(bytes)?;
+        let (bytes, service_note_id) = NoteId::decode(bytes)?;
 
         Ok((
             bytes,
@@ -119,7 +119,7 @@ impl NomDecode for SDPDeclareOp {
                 locators,
                 provider_id,
                 zk_id,
-                locked_note_id,
+                service_note_id,
             },
         ))
     }

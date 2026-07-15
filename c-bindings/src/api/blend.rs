@@ -46,10 +46,10 @@ unsafe fn parse_zk_id(ptr: *const u8) -> Result<ZkPublicKey, OperationStatus> {
     })
 }
 
-unsafe fn parse_locked_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus> {
+unsafe fn parse_service_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus> {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, KEY_SIZE) };
     fr_from_bytes(bytes).map(NoteId).map_err(|_| {
-        logging::error!("parse_locked_note_id", "Invalid `locked_note_id` bytes.");
+        logging::error!("parse_service_note_id", "Invalid `service_note_id` bytes.");
         OperationStatus::ValidationError
     })
 }
@@ -88,7 +88,7 @@ unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult
 /// - `provider_id`: A non-null pointer to 32 bytes representing the Ed25519
 ///   provider public key.
 /// - `zk_id`: A non-null pointer to 32 bytes representing the ZK public key.
-/// - `locked_note_id`: A non-null pointer to 32 bytes representing the locked
+/// - `service_note_id`: A non-null pointer to 32 bytes representing the locked
 ///   note ID.
 /// - `locators`: A pointer to an array of locator C strings. May be null if
 ///   `locators_len` is 0.
@@ -107,21 +107,21 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     node: *const LogosBlockchainNode,
     provider_id: *const u8,
     zk_id: *const u8,
-    locked_note_id: *const u8,
+    service_note_id: *const u8,
     locators: *const *const c_char,
     locators_len: usize,
 ) -> FfiStatusResult<DeclarationId> {
     return_error_if_null_pointer!("blend_join_as_core_node", node);
     return_error_if_null_pointer!("blend_join_as_core_node", provider_id);
     return_error_if_null_pointer!("blend_join_as_core_node", zk_id);
-    return_error_if_null_pointer!("blend_join_as_core_node", locked_note_id);
+    return_error_if_null_pointer!("blend_join_as_core_node", service_note_id);
     if locators_len > 0 {
         return_error_if_null_pointer!("blend_join_as_core_node", locators);
     }
 
     let provider_id = unwrap_or_return_error!(unsafe { parse_provider_id(provider_id) });
     let zk_id = unwrap_or_return_error!(unsafe { parse_zk_id(zk_id) });
-    let locked_note_id = unwrap_or_return_error!(unsafe { parse_locked_note_id(locked_note_id) });
+    let service_note_id = unwrap_or_return_error!(unsafe { parse_service_note_id(service_note_id) });
     let locators = unwrap_or_return_error!(unsafe { parse_locators(locators, locators_len) });
 
     let node = unsafe { &*node };
@@ -131,7 +131,7 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         locators,
         provider_id,
         zk_id,
-        locked_note_id,
+        service_note_id,
     };
     post_declaration_sync(node, join_blend_as_core_node_message)
         .inspect_err(|(message, _operation_status)| {

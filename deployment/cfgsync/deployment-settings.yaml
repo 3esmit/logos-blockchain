@@ -95,7 +95,7 @@ cryptarchia:
             - /ip4/127.0.0.0/udp/3400/quic-v1
             provider_id: 3f7f2571f9d148850297183cc8643992201ad44c258b72f8306e8f2337b7127b
             zk_id: 2752ce5ec271b0a11afc5c974e597309bb9f0ab9086b7b59f97762bd4334121d
-            locked_note_id: dab245d522e643c2da007f909485a1b6af7bccff4e72ee6c7290924ef1af6b26
+            service_note_id: dab245d522e643c2da007f909485a1b6af7bccff4e72ee6c7290924ef1af6b26
         - opcode: 32
           payload:
             service_type: BN
@@ -103,7 +103,7 @@ cryptarchia:
             - /ip4/127.0.0.1/udp/3400/quic-v1
             provider_id: 610fa99408cb462bb6ad66d5e935225a3883a272907a5759fa158fc71a7be785
             zk_id: 139fd98b206b2667d83b804ee2a8545bff90a93e3ffd0306896fce475a0e521a
-            locked_note_id: 7fdf4585a06e05bfa4c66e754285f7037700b2ac7097b92b2994d4f19d1b3002
+            service_note_id: 7fdf4585a06e05bfa4c66e754285f7037700b2ac7097b92b2994d4f19d1b3002
         - opcode: 32
           payload:
             service_type: BN
@@ -111,7 +111,7 @@ cryptarchia:
             - /ip4/127.0.0.2/udp/3400/quic-v1
             provider_id: 1c699b5643398e5bf3484dab5719d2ece926261279cb44ea6d3029279a1b30c9
             zk_id: 226a9de2c0b048bf5e9cef73d41e7c6763f5fdf9b3d3d43e7cdb80827342522c
-            locked_note_id: 6f67c79beededa8dae679d9a0b2312665e8e08d52bcf1748575230b244ed7112
+            service_note_id: 6f67c79beededa8dae679d9a0b2312665e8e08d52bcf1748575230b244ed7112
         - opcode: 32
           payload:
             service_type: BN
@@ -119,7 +119,7 @@ cryptarchia:
             - /ip4/127.0.0.3/udp/3400/quic-v1
             provider_id: 06eedc1cc35a76bb90e85df450d78e91d65cbcf0e708d721c84b300c68081149
             zk_id: e99dadf14565a85899503987ad745d481aac4f4e1724a9f1705a80acb855b619
-            locked_note_id: 0a251ef6301954a8bc3b76f66c5881aab979a9f99b8918e7e37d78231438f118
+            service_note_id: 0a251ef6301954a8bc3b76f66c5881aab979a9f99b8918e7e37d78231438f118
       ops_proofs:
       - !ZkSig
         pi_a: '0000000000000000000000000000000000000000000000000000000000000000'

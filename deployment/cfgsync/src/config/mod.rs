@@ -437,7 +437,7 @@ mod cfgsync_tests {
 
         assert!(faucet_pk.is_some(), "Faucet PK should be set");
 
-        // All nodes should have 6 keys (blend_signing, blend_zk, blend_locked_note,
+        // All nodes should have 6 keys (blend_signing, blend_zk, blend_service_note,
         // known, funding, faucet) and the faucet key in other_keys, so the
         // faucet service can route to any node.
         for host in &hosts {

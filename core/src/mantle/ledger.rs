@@ -20,7 +20,7 @@ use crate::{
         nom::{NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
-    sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
+    sdp::{Declaration, DeclarationId, service_notes::ServiceNotes},
 };
 
 pub trait Operation<ValidationContext> {
@@ -44,8 +44,8 @@ pub type Value = u64;
 pub enum InputsError {
     #[error("Note: {0:?} isn't in the ledger")]
     InexistingNote(NoteId),
-    #[error("Locked note: {0:?}")]
-    LockedNote(NoteId),
+    #[error("Service note: {0:?}")]
+    ServiceNote(NoteId),
     #[error("Note {0:?} doesn't belong to the channel: {1:?}")]
     InvalidChannel(NoteId, Option<ChannelId>),
     #[error("Inputs contain try to double spend the same NoteId")]
@@ -223,7 +223,7 @@ impl Inputs {
 
     pub fn validate(
         &self,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         utxos: &Utxos,
         channel_id: Option<ChannelId>,
     ) -> Result<(), InputsError> {
@@ -235,8 +235,8 @@ impl Inputs {
         // Check each note is spendable
         for input in self.0.iter() {
             // Check the note isn't locked
-            if locked_notes.contains(input) {
-                return Err(InputsError::LockedNote(*input));
+            if service_notes.contains(input) {
+                return Err(InputsError::ServiceNote(*input));
             }
             // Check the note exist in the ledger
             if !utxos.contains(input) {

@@ -12,7 +12,7 @@ use crate::{
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-    sdp::locked_notes::LockedNotes,
+    sdp::service_notes::ServiceNotes,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -54,7 +54,7 @@ impl NomDecode for ChannelWithdrawOp {
 
 pub struct WithdrawValidationContext<'a> {
     pub channels: &'a Channels,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
     pub withdraw_sigs: &'a ChannelMultiSigProof,
@@ -90,7 +90,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
 
         // Check that the inputs exist and belong to the channel
         self.inputs
-            .validate(ctx.locked_notes, ctx.utxos, Some(self.channel_id))?;
+            .validate(ctx.service_notes, ctx.utxos, Some(self.channel_id))?;
 
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.

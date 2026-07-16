@@ -755,8 +755,11 @@ mod tests {
         mantle::{
             NoteId,
             gas::MainnetGasConstants,
-            ledger::Inputs,
-            ops::channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
+            ledger::{Inputs, Outputs},
+            ops::channel::{
+                config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+                transfer::ChannelTransferOp,
+            },
         },
         proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
     };
@@ -875,6 +878,14 @@ mod tests {
         }
     }
 
+    fn create_channel_transfer_op(channel_id: ChannelId) -> ChannelTransferOp {
+        ChannelTransferOp {
+            channel_id,
+            inputs: Inputs::empty(),
+            outputs: Outputs::empty(),
+        }
+    }
+
     #[test]
     fn unsigned_execution_gas_uses_channel_thresholds() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -882,17 +893,24 @@ mod tests {
         let config_channel = ChannelId::from([2; 32]);
         let deposit_channel = ChannelId::from([3; 32]);
         let withdraw_channel = ChannelId::from([4; 32]);
+        let transfer_channel = ChannelId::from([5; 32]);
 
         let mantle_tx = create_test_mantle_tx(vec![
             Op::ChannelConfig(create_config_op(config_channel, &signing_key)),
             Op::ChannelDeposit(create_deposit_op(deposit_channel)),
             Op::ChannelWithdraw(create_withdraw_op(withdraw_channel)),
+            Op::ChannelTransfer(create_channel_transfer_op(transfer_channel)),
         ]);
 
         let config_threshold = 3;
-        let withdraw_threshold = 2;
+        let withdraw_transfer_threshold = 2;
+        let transfer_transfer_threshold = 4;
         let context = MantleTxGasContext::new(
-            [(withdraw_channel, withdraw_threshold)].into(),
+            [
+                (withdraw_channel, withdraw_transfer_threshold),
+                (transfer_channel, transfer_transfer_threshold),
+            ]
+            .into(),
             [(config_channel, config_threshold)].into(),
             GasPrices::new(1, 0),
         );
@@ -903,8 +921,12 @@ mod tests {
 
         let expected_config_gas = u64::from(config_threshold) * 56;
         let expected_deposit_gas = 590;
-        let expected_withdraw_gas = u64::from(withdraw_threshold) * 56;
-        let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
+        let expected_withdraw_gas = u64::from(withdraw_transfer_threshold) * 56;
+        let expected_transfer_gas = u64::from(transfer_transfer_threshold) * 56;
+        let expected_total_gas = expected_config_gas
+            + expected_deposit_gas
+            + expected_withdraw_gas
+            + expected_transfer_gas;
 
         assert_eq!(gas.into_inner(), expected_total_gas);
     }

@@ -241,7 +241,7 @@ impl MantleTxBuilder {
             if let Op::ChannelWithdraw(operation) = op
                 && context
                     .gas_context
-                    .withdraw_threshold(&operation.channel_id)
+                    .transfer_threshold(&operation.channel_id)
                     .is_none()
             {
                 return Err(TxBuilderError::MissingWithdrawThreshold {
@@ -462,11 +462,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([Note {
-                value: 5,
-                pk: ZkPublicKey::zero(),
-            }]),
-            withdraw_nonce: 0,
+            inputs: Inputs::empty(),
         };
 
         let builder = MantleTxBuilder::new()

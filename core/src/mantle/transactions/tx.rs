@@ -274,7 +274,10 @@ fn contextual_op_execution_gas<Constants: GasConstants>(
             .configuration_threshold(&operation.channel)
             .unwrap_or(0),
         Op::ChannelWithdraw(operation) => context
-            .withdraw_threshold(&operation.channel_id)
+            .transfer_threshold(&operation.channel_id)
+            .unwrap_or(0),
+        Op::ChannelTransfer(operation) => context
+            .transfer_threshold(&operation.channel_id)
             .unwrap_or(0),
         _ => return Ok(op.execution_gas::<Constants>()),
     };
@@ -680,9 +683,10 @@ fn signed_op_execution_gas<Constants: GasConstants>(
     // already have replaced the channel threshold. The validated proof length
     // preserves the threshold that was actually checked.
     let signature_count = match (op, proof) {
-        (Op::ChannelConfig(_) | Op::ChannelWithdraw(_), OpProof::ChannelMultiSigProof(proof)) => {
-            proof.signatures().len()
-        }
+        (
+            Op::ChannelConfig(_) | Op::ChannelWithdraw(_) | Op::ChannelTransfer(_),
+            OpProof::ChannelMultiSigProof(proof),
+        ) => proof.signatures().len(),
         _ => return Ok(op.execution_gas::<Constants>()),
     };
     let multiplier = Value::try_from(signature_count)
@@ -749,9 +753,9 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId,
+            NoteId,
             gas::MainnetGasConstants,
-            ledger::{Inputs, Outputs},
+            ledger::Inputs,
             ops::channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
         },
         proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
@@ -852,7 +856,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
-            withdraw_threshold: 1,
+            transfer_threshold: 1,
         }
     }
 
@@ -867,11 +871,7 @@ mod tests {
     fn create_withdraw_op(channel_id: ChannelId) -> ChannelWithdrawOp {
         ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([Note {
-                value: 5,
-                pk: ZkPublicKey::from(Fr::from(BigUint::from(0u32))),
-            }]),
-            withdraw_nonce: 0,
+            inputs: Inputs::empty(),
         }
     }
 

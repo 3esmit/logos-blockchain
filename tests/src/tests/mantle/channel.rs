@@ -61,7 +61,6 @@ const FEE_NOTE_AMOUNT: u64 = 50_000;
 /// 5. Verify the block containing the deposit tx exposes a matching `Deposit`
 ///    event via the `/cryptarchia/blocks/:id/events` endpoint.
 /// 6. Verify the funding key's wallet balance decreases.
-/// 7. Verify the channel balance increases.
 #[tokio::test]
 #[serial]
 async fn channel_deposit() {
@@ -99,7 +98,6 @@ async fn channel_deposit() {
 
     let balance_before = get_wallet_balance(&validator.client, funding_pk).await;
 
-    // Also, record the channel balance before deposit
     // We use the channel created by the genesis inscription for simplicity.
     let channel_id = base
         .deployment()
@@ -110,9 +108,6 @@ async fn channel_deposit() {
         .genesis_tx()
         .genesis_inscription()
         .channel_id;
-    let channel_balance_before = get_channel_balance(&validator.client, channel_id).await;
-    println!("Channel balance before deposit: {channel_balance_before}");
-
     // Subscribe before submitting so we can locate the block that includes the
     // deposit tx and then query its events via the HTTP API.
     let mut block_stream = validator.client.blocks_stream().await.unwrap();
@@ -198,13 +193,6 @@ async fn channel_deposit() {
         spent >= deposit_amount && spent <= deposit_amount + MAX_CHANNEL_TX_FEE,
         "wallet balance should decrease by deposit plus fee: before={balance_before}, after={balance_after}, deposit_amount={deposit_amount}",
     );
-
-    let channel_balance_after = get_channel_balance(&validator.client, channel_id).await;
-    assert_eq!(
-        channel_balance_after,
-        channel_balance_before + deposit_amount,
-        "channel balance should increase after deposit: before={channel_balance_before}, after={channel_balance_after}, deposit_amount={deposit_amount}",
-    );
 }
 
 /// End-to-end test for the channel withdraw wallet path:
@@ -213,8 +201,7 @@ async fn channel_deposit() {
 /// 2. Create a channel with a known signer.
 /// 3. Deposit funds into that channel.
 /// 4. Submit a signed channel withdraw transaction.
-/// 5. Verify the recipient wallet balance increases.
-/// 6. Verify the channel balance decreases.
+/// 5. Verify the withdrawn note returns to the wallet.
 #[tokio::test]
 #[serial]
 async fn channel_withdraw_updates_wallet_balance() {
@@ -561,23 +548,3 @@ async fn fetch_block_events(node: &NodeHttpClient, block_id: HeaderId) -> Events
         .expect("block events response should be valid JSON")
 }
 
-async fn get_channel_balance(node: &NodeHttpClient, channel_id: ChannelId) -> u64 {
-    let url = api_url(node, &format!("channel/{channel_id}"));
-
-    for _ in 0..5 {
-        let response = reqwest::Client::new()
-            .get(url.clone())
-            .send()
-            .await
-            .expect("channel request should not fail");
-
-        if response.status().is_success() {
-            let body: serde_json::Value = response.json().await.unwrap();
-            return body["balance"].as_u64().unwrap_or(0);
-        }
-
-        sleep(Duration::from_millis(500)).await;
-    }
-
-    panic!("failed to get channel state after retries");
-}

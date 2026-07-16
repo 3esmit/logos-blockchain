@@ -1178,7 +1178,8 @@ mod tests {
             "the active provider must receive exactly one reward UTXO",
         );
         assert_eq!(
-            received[0].note().value, income,
+            received[0].note().value,
+            income,
             "single-provider reward must equal the full accrued income",
         );
 

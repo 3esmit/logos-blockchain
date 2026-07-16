@@ -453,33 +453,28 @@ pub(super) fn zone_balance_rows(step: &Step) -> Result<Vec<ZoneBalanceRow>, Step
 /// `WithdrawArg`; the comma list lets a single arg carry multiple output
 /// notes so the SDK's `publish_atomic_withdraw(inscribe, vec![WithdrawArg])`
 /// signature is exercised at full width (multi-arg + multi-output-per-arg).
-pub(super) fn zone_atomic_withdraw_rows(step: &Step) -> Result<Vec<(String, Vec<u64>)>, StepError> {
+pub(super) fn zone_atomic_withdraw_rows(step: &Step) -> Result<Vec<(String, usize)>, StepError> {
     parse_zone_table_rows(
         step,
-        &["withdraw", "outputs"],
+        &["withdraw", "notes"],
         "Atomic withdraw",
         |row| match row {
-            [alias, outputs] => {
-                let amounts = outputs
-                    .split(',')
-                    .map(|s| {
-                        s.trim()
-                            .parse::<u64>()
-                            .map_err(|error| StepError::InvalidArgument {
-                                message: format!("Invalid withdraw output amount '{s}': {error}"),
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                if amounts.is_empty() {
+            [alias, notes] => {
+                let count =
+                    notes
+                        .trim()
+                        .parse::<usize>()
+                        .map_err(|error| StepError::InvalidArgument {
+                            message: format!("Invalid withdraw note count '{notes}': {error}"),
+                        })?;
+                if count == 0 {
                     return Err(StepError::InvalidArgument {
-                        message: format!(
-                            "Atomic withdraw '{alias}' must list at least one output amount"
-                        ),
+                        message: format!("Atomic withdraw '{alias}' must take at least one note"),
                     });
                 }
-                Ok((alias.clone(), amounts))
+                Ok((alias.clone(), count))
             }
-            _ => invalid_zone_table_row("Atomic withdraw", &["withdraw", "outputs"], row.len()),
+            _ => invalid_zone_table_row("Atomic withdraw", &["withdraw", "notes"], row.len()),
         },
     )
 }

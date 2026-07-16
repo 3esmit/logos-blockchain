@@ -228,9 +228,7 @@ impl WalletState {
         let mut utxos = self
             .utxos_owned_by_pks(pks)
             .into_iter()
-            .filter(|utxo| {
-                utxo.channel_id().is_none() && !consumed_or_locked.contains(&utxo.id())
-            })
+            .filter(|utxo| utxo.channel_id().is_none() && !consumed_or_locked.contains(&utxo.id()))
             .collect::<Vec<_>>();
 
         // Consume large valued notes first to ensure we converge.

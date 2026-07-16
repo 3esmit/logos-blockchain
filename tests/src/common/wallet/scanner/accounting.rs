@@ -245,7 +245,6 @@ mod tests {
             ledger::{Inputs, Outputs},
             ops::{
                 Op,
-                channel::{ChannelId, deposit::DepositOp},
                 transfer::TransferOp,
             },
         },
@@ -364,11 +363,10 @@ mod tests {
         let owned = utxo(10, 0, pk(1));
         let spend = SignedMantleTx::new_unverified(
             MantleTx(
-                [Op::ChannelDeposit(DepositOp {
-                    channel_id: ChannelId::from([0; 32]),
-                    inputs: Inputs::from([owned.id()]),
-                    metadata: b"deposit".into(),
-                })]
+                [Op::Transfer(TransferOp::new(
+                    Inputs::from([owned.id()]),
+                    Outputs::empty(),
+                ))]
                 .into(),
             ),
             Vec::new(),

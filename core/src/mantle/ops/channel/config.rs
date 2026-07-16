@@ -123,7 +123,6 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
                     tip_sequencer: 0,
                     tip_sequencer_starting_slot: ctx.block_slot,
                     posting_timeframe: self.posting_timeframe.clone(),
-                    balance: 0,
                     transfer_threshold: self.transfer_threshold,
                     posting_timeout: self.posting_timeout.clone(),
                 },

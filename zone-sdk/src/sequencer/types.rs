@@ -8,7 +8,7 @@ use lb_core::{
         SignedMantleTx, Transaction as _, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::{Inputs, Outputs},
+        ledger::Inputs,
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -63,12 +63,12 @@ impl PublishResult {
 
 /// One withdraw to bundle atomically with an inscription.
 ///
-/// The SDK fills `channel_id` and `withdraw_nonce` from internal state.
-/// The caller only specifies the outputs (recipients + amounts).
+/// The SDK fills `channel_id` from internal state. The caller only specifies
+/// the channel notes to move back to the bedrock. Bundled withdraws must take
+/// disjoint inputs: a note can only leave the channel once.
 #[derive(Debug, Clone)]
 pub struct WithdrawArg {
     pub inputs: Inputs,
-    pub outputs: Outputs,
 }
 
 /// A tx reported in a [`ChannelUpdate`], in both `adopted` and `orphaned`.
@@ -81,8 +81,8 @@ pub struct WithdrawArg {
 /// - [`ChannelUpdateTx::AtomicWithdraw`] →
 ///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
 ///   with `info.inscription.payload` and `WithdrawArg`s reconstructed from
-///   `info.withdraws[i].op.outputs`. The SDK fills fresh `parent_msg` and
-///   current `withdraw_nonce` internally on each publish.
+///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg`
+///   internally on each publish.
 /// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
 ///   the SDK cannot demystify the tx, so it hands back the whole
 ///   [`SignedMantleTx`] and the caller's own logic decides how to parse and

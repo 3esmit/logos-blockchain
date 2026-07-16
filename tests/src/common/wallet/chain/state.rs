@@ -328,11 +328,7 @@ fn wallet_public_keys_by_owner(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        MantleTx, Note,
-        ledger::Inputs,
-        ops::channel::deposit::DepositOp,
-    };
+    use lb_core::mantle::{MantleTx, Note, ledger::Inputs, ops::channel::deposit::DepositOp};
 
     use super::*;
 
@@ -372,9 +368,10 @@ mod tests {
     }
 
     #[test]
-    fn channel_deposit_inputs_remove_tracked_wallet_outputs() {
+    fn channel_deposit_inputs_become_tracked_channel_notes() {
         let wallet_id = WalletId::from("alice");
         let deposited = utxo(10, 0, pk(1));
+        let channel_id = ChannelId::from([0; 32]);
         let mut chain_state = WalletChainState::from_tracked_wallets(&[TrackedWalletKeys::new(
             wallet_id.clone(),
             [pk(1)],
@@ -385,7 +382,7 @@ mod tests {
         let tx = SignedMantleTx::new_unverified(
             MantleTx(
                 [Op::ChannelDeposit(DepositOp {
-                    channel_id: ChannelId::from([0; 32]),
+                    channel_id,
                     inputs: Inputs::from([deposited.id()]),
                     metadata: b"deposit".into(),
                 })]
@@ -399,11 +396,12 @@ mod tests {
 
         assert_eq!(update.observed_spends.len(), 1);
         assert_eq!(update.observed_spends[0].note_id, deposited.id());
-        assert!(
+        // The wallet keeps the note, now belonging to the channel.
+        assert_eq!(
             wallet_utxos
                 .get(wallet_id.as_str())
-                .expect("wallet should be present")
-                .is_empty()
+                .expect("wallet should be present"),
+            &vec![deposited.to_channel(channel_id)]
         );
     }
 }

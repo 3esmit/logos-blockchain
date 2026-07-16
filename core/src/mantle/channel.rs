@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::TxEvent,
     mantle::{
-        Value,
         ledger::{self, Operation as _},
         nom::NomCodec,
         ops::channel::{
@@ -117,7 +116,6 @@ pub struct ChannelState {
     pub posting_timeout: SlotTimeout,     // number of slots (0 = no timeout)
 
     // Bridging
-    pub balance: Value,
     pub transfer_threshold: ChannelKeyIndex, /* indicating how many keys are required
                                               * to
                                               * withdraw, or transfer channel notes
@@ -207,7 +205,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId, Utxo,
+            Note, NoteId, Utxo, Value,
             ledger::{Inputs, Utxos},
             ops::channel::{
                 Ed25519PublicKey as PublicKey,
@@ -237,7 +235,6 @@ mod tests {
             tip_sequencer_starting_slot: Slot::new(tip_sequencer_starting_slot),
             posting_timeframe: SlotTimeframe(posting_timeframe),
             posting_timeout: SlotTimeout(posting_timeout),
-            balance: 0,
             accredited_keys: Keys::try_from((0..num_keys).map(test_public_key).collect::<Vec<_>>())
                 .unwrap()
                 .into(),
@@ -263,29 +260,6 @@ mod tests {
         utxo_tree
     }
 
-    impl Channels {
-        #[must_use]
-        pub fn with_balance(channel_id: ChannelId, balance: Value) -> Self {
-            Self {
-                channels: rpds::HashTrieMapSync::new_sync().insert(
-                    channel_id,
-                    ChannelState {
-                        accredited_keys: Keys::from(test_public_key(7)).into(),
-                        configuration_threshold: 1,
-                        tip_message: MsgId::root(),
-                        tip_slot: Slot::default(),
-                        tip_sequencer: 0,
-                        tip_sequencer_starting_slot: Slot::default(),
-                        posting_timeframe: 0u32.into(),
-                        balance,
-                        transfer_threshold: 1,
-                        posting_timeout: 0u32.into(),
-                    },
-                ),
-            }
-        }
-    }
-
     #[test]
     fn channels_to_gas_context_tracks_withdraw_thresholds() {
         let first_id = ChannelId::from([1u8; 32]);
@@ -304,7 +278,6 @@ mod tests {
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
-                        balance: 5,
                         transfer_threshold: 1,
                         posting_timeout: 0u32.into(),
                     },
@@ -320,7 +293,6 @@ mod tests {
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0.into(),
-                        balance: 9,
                         transfer_threshold: 2,
                         posting_timeout: 0.into(),
                     },
@@ -346,7 +318,7 @@ mod tests {
         };
 
         let utxo_tree = utxo_tree(vec![utxo]);
-        
+
         let result = withdraw_op.validate(&WithdrawValidationContext {
             channels: &channels,
             locked_notes: &LockedNotes::new(),

@@ -28,11 +28,10 @@ pub(crate) use crate::{
         },
         utils::{
             decode_ed25519_public_key_hex, decode_hex_bincode, decode_mantle_tx_hex,
-            decode_msg_id_hex, decode_note_id_hex, decode_signed_mantle_tx_hex,
-            encode_hex_bincode, ensure_tx_hash, fixed_bytes, load_or_create_signing_key,
-            node_client, print_channel_balance, query_channel_state, read_json, resolve_channel_id,
-            start_cli_sequencer, start_cli_sequencer_with_channel_state, timestamp, validate_kind,
-            write_json,
+            decode_msg_id_hex, decode_note_id_hex, decode_signed_mantle_tx_hex, encode_hex_bincode,
+            ensure_tx_hash, fixed_bytes, load_or_create_signing_key, read_json,
+            resolve_channel_id, start_cli_sequencer, start_cli_sequencer_with_channel_state,
+            timestamp, validate_kind, write_json,
         },
     },
 };
@@ -300,8 +299,5 @@ pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<(
         "withdraw",
     )
     .await?;
-    let node = node_client(&node_key.node_url)?;
-    let channel_state = query_channel_state(&node, channel_id).await;
-    print_channel_balance("withdraw after", &channel_id, channel_state.as_ref());
     Ok(())
 }

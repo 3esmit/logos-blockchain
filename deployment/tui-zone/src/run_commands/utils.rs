@@ -177,23 +177,6 @@ pub async fn query_channel_state(
     }
 }
 
-/// Print the channel's current balance.
-pub fn print_channel_balance(label: &str, channel_id: &ChannelId, state: Option<&ChannelState>) {
-    match state {
-        Some(state) => println!(
-            "{} {label}: channel_id={} balance={}",
-            timestamp(),
-            hex::encode(channel_id.as_ref()),
-            state.balance,
-        ),
-        None => println!(
-            "{} {label}: channel_id={} balance=unknown channel_state=missing",
-            timestamp(),
-            hex::encode(channel_id.as_ref())
-        ),
-    }
-}
-
 /// Print the channel's current balance and configuration state.
 pub fn print_channel_state(label: &str, channel_id: &ChannelId, state: Option<&ChannelState>) {
     match state {

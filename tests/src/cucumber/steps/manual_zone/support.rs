@@ -17,7 +17,7 @@ use lb_core::{
     mantle::{
         MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
         gas::GasCost,
-        ledger::{Inputs, Outputs, OutputsError},
+        ledger::{Inputs, OutputsError},
         ops::{
             channel::{
                 ChannelId, MsgId,
@@ -1830,31 +1830,19 @@ pub struct ZoneAtomicWithdrawSubmission {
 /// any arg able to carry multiple output notes.
 pub async fn publish_atomic_zone_withdraw(
     client: &SequencerClient,
-    inputs: Inputs,
-    funding_public_key: ZkPublicKey,
-    outputs_per_arg: Vec<Vec<Value>>,
+    inputs_per_arg: Vec<Inputs>,
     inscription_data: Inscription,
     _deadline: PublishDeadline,
 ) -> Result<ZoneAtomicWithdrawSubmission, ZoneTestError> {
-    if outputs_per_arg.is_empty() {
+    if inputs_per_arg.is_empty() {
         return Err(ZoneTestError::SubmitWithdraw {
             message: "publish_atomic_zone_withdraw requires at least one withdraw arg".to_owned(),
         });
     }
-    let withdraw_args: Vec<WithdrawArg> = outputs_per_arg
-        .iter()
-        .map(|amounts| {
-            Ok::<WithdrawArg, ZoneTestError>(WithdrawArg {
-                inputs: inputs.clone(),
-                outputs: Outputs::try_new(
-                    amounts
-                        .iter()
-                        .map(|amount| Note::new(*amount, funding_public_key))
-                        .collect::<Vec<_>>(),
-                )?,
-            })
-        })
-        .collect::<Result<Vec<_>, ZoneTestError>>()?;
+    let withdraw_args: Vec<WithdrawArg> = inputs_per_arg
+        .into_iter()
+        .map(|inputs| WithdrawArg { inputs })
+        .collect();
 
     let (result, _cp) = client
         .publish_atomic_withdraw(inscription_data, withdraw_args)

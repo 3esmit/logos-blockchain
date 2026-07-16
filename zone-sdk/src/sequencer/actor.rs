@@ -749,7 +749,6 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
                         posting_timeout: 0u32.into(),
-                        balance: 0,
                         transfer_threshold: 1,
                     }),
                 },
@@ -1396,7 +1395,6 @@ mod tests {
             tip_sequencer_starting_slot: Slot::default(),
             posting_timeframe: 0u32.into(),
             posting_timeout: 0u32.into(),
-            balance: 0,
             transfer_threshold: 1,
         });
 

@@ -3,7 +3,7 @@ use std::{error::Error, path::PathBuf};
 use clap::{Args, Parser, Subcommand};
 
 use crate::run_commands::{
-    run_balance::{run_state_balance, run_state_full},
+    run_balance::run_state_full,
     run_config::{
         run_config, run_config_combine, run_config_prepare, run_config_sign, run_config_submit,
     },
@@ -69,10 +69,8 @@ enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 enum StateCommand {
-    /// Print the channel balance and configuration state.
+    /// Print the channel configuration state.
     Full(StateArgs),
-    /// Print the channel balance.
-    Balance(StateArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -325,7 +323,6 @@ pub async fn run_cli(cli: Cli) -> RunResult<()> {
         },
         Some(Command::State { command }) => match command {
             StateCommand::Full(args) => run_state_full(args).await,
-            StateCommand::Balance(args) => run_state_balance(args).await,
         },
         Some(Command::Deposit(args)) => run_deposit(args).await,
         Some(Command::Keygen(args)) => {

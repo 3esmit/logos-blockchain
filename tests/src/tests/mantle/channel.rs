@@ -547,4 +547,3 @@ async fn fetch_block_events(node: &NodeHttpClient, block_id: HeaderId) -> Events
         .await
         .expect("block events response should be valid JSON")
 }
-

@@ -40,7 +40,8 @@ use super::{
 };
 use crate::{
     common::{
-        mantle_inscription::make_inscription, manual_cluster::wait_for_height,
+        mantle_inscription::make_inscription,
+        manual_cluster::wait_for_height,
         wallet::{NodeHttpWalletChainSource, WalletReservedInputs, channel_notes_from_chain},
     },
     cucumber::{

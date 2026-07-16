@@ -243,10 +243,7 @@ mod tests {
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _, Utxo,
             ledger::{Inputs, Outputs},
-            ops::{
-                Op,
-                transfer::TransferOp,
-            },
+            ops::{Op, transfer::TransferOp},
         },
         proofs::leader_proof::Groth16LeaderProof,
         sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},

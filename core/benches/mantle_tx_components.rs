@@ -154,7 +154,7 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
             (tx, op_sig)
         })
         .bench_values(|(tx, op_sig): (MantleTx, Ed25519Signature)| {
-            black_box(SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]))
+            black_box(SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]).preverify())
         });
 }
 
@@ -173,7 +173,7 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
         })
         .bench_values(|(tx, tx_hash): (MantleTx, TxHash)| {
             let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
-            black_box(SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]))
+            black_box(SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]).preverify())
         });
 }
 

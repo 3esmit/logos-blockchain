@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    marker::PhantomData,
     sync::LazyLock,
 };
 
@@ -357,7 +358,7 @@ pub struct SignedMantleTx<State: VerificationState> {
     mantle_tx: MantleTx,
     // TODO: make this more efficient
     ops_proofs: Vec<OpProof>,
-    state: State,
+    state: PhantomData<State>,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -458,7 +459,7 @@ pub trait OperationVerificationHelper {
 }
 
 impl<State: VerificationState> SignedMantleTx<State> {
-    fn with_state<T: VerificationState>(self, state: T) -> SignedMantleTx<T> {
+    fn into_state<T: VerificationState>(self) -> SignedMantleTx<T> {
         let Self {
             mantle_tx,
             ops_proofs,
@@ -467,7 +468,7 @@ impl<State: VerificationState> SignedMantleTx<State> {
         SignedMantleTx::<T> {
             mantle_tx,
             ops_proofs,
-            state,
+            state: PhantomData,
         }
     }
 
@@ -479,14 +480,17 @@ impl<State: VerificationState> SignedMantleTx<State> {
         self.mantle_tx.ops().iter().zip(self.ops_proofs.iter())
     }
 
+    #[must_use]
     pub const fn mantle_tx(&self) -> &MantleTx {
         &self.mantle_tx
     }
 
+    #[must_use]
     pub const fn ops_proofs(&self) -> &Vec<OpProof> {
         &self.ops_proofs
     }
 
+    #[must_use]
     pub fn into_parts(self) -> (MantleTx, Vec<OpProof>) {
         (self.mantle_tx, self.ops_proofs)
     }
@@ -498,7 +502,7 @@ impl SignedMantleTx<Unverified> {
         Self {
             mantle_tx,
             ops_proofs,
-            state: Unverified,
+            state: PhantomData,
         }
     }
 
@@ -568,7 +572,7 @@ impl SignedMantleTx<Unverified> {
     }
 
     fn into_preverified(self) -> SignedMantleTx<Preverified> {
-        self.with_state(Preverified)
+        self.into_state()
     }
 
     /// Runs stateless verification on the transaction, ensuring that each
@@ -613,7 +617,7 @@ impl SignedMantleTx<Preverified> {
         Self {
             mantle_tx,
             ops_proofs,
-            state: Preverified,
+            state: PhantomData,
         }
     }
 
@@ -1044,12 +1048,12 @@ impl<State: VerificationState> StorageSize for SignedMantleTx<State> {
 
 #[derive(Serialize)]
 #[serde(rename = "SignedMantleTx")]
-struct SignedMantleTxHelper<'a> {
+struct SignedMantleTxSerde<'a> {
     mantle_tx: &'a MantleTx,
     ops_proofs: &'a [OpProof],
 }
 
-impl<'a, State: VerificationState> From<&'a SignedMantleTx<State>> for SignedMantleTxHelper<'a> {
+impl<'a, State: VerificationState> From<&'a SignedMantleTx<State>> for SignedMantleTxSerde<'a> {
     fn from(signed_mantle_tx: &'a SignedMantleTx<State>) -> Self {
         Self {
             mantle_tx: &signed_mantle_tx.mantle_tx,
@@ -1064,7 +1068,7 @@ impl<State: VerificationState> Serialize for SignedMantleTx<State> {
         S: Serializer,
     {
         if serializer.is_human_readable() {
-            SignedMantleTxHelper::from(self).serialize(serializer)
+            SignedMantleTxSerde::from(self).serialize(serializer)
         } else {
             encode_signed_mantle_tx(self).serialize(serializer)
         }
@@ -1073,13 +1077,13 @@ impl<State: VerificationState> Serialize for SignedMantleTx<State> {
 
 #[derive(Deserialize)]
 #[serde(rename = "SignedMantleTx")]
-struct OwnedSignedMantleTxHelper {
+struct OwnedSignedMantleTxSerde {
     mantle_tx: MantleTx,
     ops_proofs: Vec<OpProof>,
 }
 
-impl From<OwnedSignedMantleTxHelper> for SignedMantleTx<Unverified> {
-    fn from(helper: OwnedSignedMantleTxHelper) -> Self {
+impl From<OwnedSignedMantleTxSerde> for SignedMantleTx<Unverified> {
+    fn from(helper: OwnedSignedMantleTxSerde) -> Self {
         Self::new(helper.mantle_tx, helper.ops_proofs)
     }
 }
@@ -1090,7 +1094,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Unverified> {
         D: Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
-            OwnedSignedMantleTxHelper::deserialize(deserializer).map(Self::from)
+            OwnedSignedMantleTxSerde::deserialize(deserializer).map(Self::from)
         } else {
             let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
             all_consuming(decode_signed_mantle_tx)

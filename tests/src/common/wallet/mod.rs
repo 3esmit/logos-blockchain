@@ -24,8 +24,9 @@ pub(crate) use funding::{
     WalletFundingOutcome, WalletFundingPlan, WalletFundingUtxos, WalletSelectedInputs,
 };
 pub use funding_from_chain::{
-    DirectWalletSourceError, WalletFundingSourceFromChainError, current_wallet_funding_source,
-    funded_signed_tx, wallet_funding_source_from_chain, wallet_utxos_from_chain,
+    DirectWalletSourceError, WalletFundingSourceFromChainError, channel_notes_from_chain,
+    current_wallet_funding_source, funded_signed_tx, wallet_funding_source_from_chain,
+    wallet_utxos_from_chain,
 };
 pub use ids::{WalletChainSourceId, WalletId, wallet_id_for_chain_source};
 pub use tracked::{

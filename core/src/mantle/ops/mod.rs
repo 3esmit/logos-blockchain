@@ -183,6 +183,8 @@ impl NomDecode for Op {
             CHANNEL_DEPOSIT => {
                 DepositOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelDeposit(op)))
             }
+            CHANNEL_TRANSFER => ChannelTransferOp::decode(bytes)
+                .map(|(bytes, op)| (bytes, Self::ChannelTransfer(op))),
             CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(bytes)
                 .map(|(bytes, op)| (bytes, Self::ChannelWithdraw(op))),
             SDP_DECLARE => {

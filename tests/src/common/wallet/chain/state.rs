@@ -46,6 +46,7 @@ pub struct WalletChainState {
     wallets_by_pk: HashMap<ZkPublicKey, WalletId>,
     utxos_by_wallet: HashMap<WalletId, HashMap<NoteId, Utxo>>,
     locked_note_ids: HashSet<NoteId>,
+    channel_notes: HashMap<ChannelId, HashSet<NoteId>>,
 }
 
 impl WalletChainState {
@@ -79,7 +80,18 @@ impl WalletChainState {
             wallets_by_pk,
             utxos_by_wallet,
             locked_note_ids: HashSet::new(),
+            channel_notes: HashMap::new(),
         })
+    }
+
+    #[must_use]
+    pub fn channel_notes(&self, channel_id: &ChannelId) -> Vec<NoteId> {
+        self.channel_notes
+            .get(channel_id)
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect()
     }
 
     pub fn seed_genesis_utxos(&mut self, genesis_utxos: &[Utxo]) {
@@ -139,6 +151,8 @@ impl WalletChainState {
             Op::ChannelDeposit(deposit) => {
                 // A deposit marks bedrock notes as channel notes.
                 self.notes_to_channel(deposit.inputs.iter().copied(), deposit.channel_id, changes);
+                let channel = self.channel_notes.entry(deposit.channel_id).or_default();
+                channel.extend(deposit.inputs.iter().copied());
             }
             Op::ChannelTransfer(chan_transfer) => {
                 // A channel transfer is a balanced re-distribution of channel notes
@@ -150,10 +164,28 @@ impl WalletChainState {
                     chan_transfer.outputs.utxos(chan_transfer),
                     &mut changes.observed_outputs,
                 );
+                let channel = self
+                    .channel_notes
+                    .entry(chan_transfer.channel_id)
+                    .or_default();
+                for note_id in chan_transfer.inputs.iter() {
+                    channel.remove(note_id);
+                }
+                channel.extend(
+                    chan_transfer
+                        .outputs
+                        .utxos(chan_transfer)
+                        .map(|utxo| utxo.id()),
+                );
             }
             Op::ChannelWithdraw(withdraw) => {
                 // A withdraw marks channel notes, as bedrock notes.
                 self.notes_to_bedrock(withdraw.inputs.iter().copied(), changes);
+                if let Some(channel) = self.channel_notes.get_mut(&withdraw.channel_id) {
+                    for note_id in withdraw.inputs.iter() {
+                        channel.remove(note_id);
+                    }
+                }
             }
             Op::SDPDeclare(declaration) => self.lock_note(declaration.locked_note_id),
             Op::SDPWithdraw(withdrawal) => self.unlock_note(withdrawal.locked_note_id),

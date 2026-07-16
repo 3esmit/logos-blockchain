@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use lb_common_http_client::{ApiBlock, Error as HttpClientError};
 use lb_core::mantle::{
-    Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
+    NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
     gas::MainnetGasConstants,
     ops::channel::{ChannelId, ChannelKeyIndex},
     transactions::{GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext},
@@ -41,7 +41,7 @@ pub enum WalletFundingSourceFromChainError<FetchError> {
 ///
 /// The op fee is paid from the funding wallet (synced from chain), whose
 /// trailing transfer op gets its own proof. The op proof is built via
-/// `op_proof` from the funded transaction hash. `withdraw_thresholds` is
+/// `op_proof` from the funded transaction hash. `transfer_thresholds` is
 /// needed by the gas-size predictor for `ChannelWithdraw` ops. Returns the
 /// signed transaction and its fee at genesis gas prices.
 #[expect(
@@ -52,7 +52,7 @@ pub async fn funded_signed_tx(
     node: &NodeHttpClient,
     genesis_utxos: &[Utxo],
     funding_account: &WalletAccount,
-    withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+    transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     op: Op,
     op_proof: impl FnOnce(TxHash) -> OpProof,
 ) -> (SignedMantleTx, u64) {
@@ -63,7 +63,7 @@ pub async fn funded_signed_tx(
 
     let tx_context = MantleTxContext {
         gas_context: MantleTxGasContext::new(
-            withdraw_thresholds,
+            transfer_thresholds,
             HashMap::new(),
             GasPrices::default(),
         ),
@@ -162,6 +162,32 @@ where
         transactions_hashes,
         tail_blocks_len,
     ))
+}
+
+/// Scans the chain and returns the notes `channel_id` currently owns, tracked
+/// by channel.
+pub async fn channel_notes_from_chain<BlockSource>(
+    source: &mut BlockSource,
+    channel_id: ChannelId,
+) -> Result<Vec<NoteId>, WalletFundingSourceFromChainError<BlockSource::Error>>
+where
+    BlockSource: WalletChainSource,
+{
+    let mut chain_state = WalletChainState::from_tracked_wallets(&[])?;
+    let mut tail_blocks = Vec::new();
+    let mut current = source.tip();
+
+    while let Some(block) = fetch_block(source, current).await? {
+        current = block.header.parent_block;
+        tail_blocks.push(block);
+    }
+
+    tail_blocks.reverse();
+    for block in tail_blocks {
+        apply_block_transactions(&mut chain_state, &block);
+    }
+
+    Ok(chain_state.channel_notes(&channel_id))
 }
 
 async fn fetch_block<BlockSource>(

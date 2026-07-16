@@ -160,7 +160,7 @@ pub(super) enum ActorRequest {
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
-        withdraw_threshold: u16,
+        transfer_threshold: u16,
         response_tx:
             oneshot::Sender<Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error>>,
     },
@@ -496,7 +496,7 @@ where
                 posting_timeframe,
                 posting_timeout,
                 configuration_threshold,
-                withdraw_threshold,
+                transfer_threshold,
                 response_tx,
             } => {
                 drop(
@@ -506,7 +506,7 @@ where
                             posting_timeframe,
                             posting_timeout,
                             configuration_threshold,
-                            withdraw_threshold,
+                            transfer_threshold,
                         )
                         .await,
                     ),
@@ -759,7 +759,7 @@ where
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
-        withdraw_threshold: u16,
+        transfer_threshold: u16,
     ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
@@ -786,7 +786,7 @@ where
             posting_timeframe,
             posting_timeout,
             configuration_threshold,
-            withdraw_threshold,
+            transfer_threshold,
         )
         .await?;
         let tx_hash = signed_tx.mantle_tx.hash();

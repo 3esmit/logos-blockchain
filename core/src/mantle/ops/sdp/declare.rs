@@ -124,6 +124,11 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
             return Err(SdpError::InexistingNote(self.locked_note_id));
         };
 
+        // Check the note isn't a channel note
+        if utxo.channel_id().is_some() {
+            return Err(SdpError::ChannelNote(self.locked_note_id));
+        }
+
         // Ensure locked note exists and ownership over the locked note and `zk_id`
         let note = utxo.note();
         if !ZkPublicKey::verify_multi(
@@ -172,6 +177,12 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
         let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
         };
+
+        // Check the note isn't a channel note
+        if utxo.channel_id().is_some() {
+            return Err(SdpError::ChannelNote(self.locked_note_id));
+        }
+
         let note = utxo.note();
 
         SDPDeclareValidationExt::validate(

@@ -25,6 +25,10 @@ impl OpId for ChannelTransferOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
     }
+
+    fn outputs_channel_id(&self) -> Option<ChannelId> {
+        Some(self.channel_id)
+    }
 }
 
 pub struct ChannelTransferValidationContext<'a> {

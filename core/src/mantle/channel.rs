@@ -122,7 +122,7 @@ pub struct ChannelState {
                                               * from the channel */
 }
 
-pub(crate) const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
+pub(crate) const DEFAULT_TRANSFER_THRESHOLD: ChannelKeyIndex = 1;
 
 impl Default for Channels {
     fn default() -> Self {
@@ -261,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn channels_to_gas_context_tracks_withdraw_thresholds() {
+    fn channels_to_gas_context_tracks_transfer_thresholds() {
         let first_id = ChannelId::from([1u8; 32]);
         let second_id = ChannelId::from([2u8; 32]);
         let missing_id = ChannelId::from([0u8; 32]);

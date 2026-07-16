@@ -400,7 +400,7 @@ pub struct WithdrawInfo {
     /// `tx_hash`; for standalone withdraws surfaced via
     /// [`FinalizedOp::Withdraw`] this is the source tx.
     pub tx_hash: TxHash,
-    /// The withdraw op (`channel_id`, outputs, `withdraw_nonce`).
+    /// The withdraw op (`channel_id`, `inputs`).
     pub op: ChannelWithdrawOp,
 }
 

@@ -4,7 +4,7 @@ use cucumber::gherkin::Step;
 use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
-    TxHash, Utxo,
+    NoteId, TxHash, Utxo,
     gas::GasCost,
     ledger::Inputs,
     ops::channel::{ChannelId, config::Keys, deposit::Metadata, inscribe::Inscription},
@@ -41,7 +41,7 @@ use super::{
 use crate::{
     common::{
         mantle_inscription::make_inscription, manual_cluster::wait_for_height,
-        wallet::WalletReservedInputs,
+        wallet::{NodeHttpWalletChainSource, WalletReservedInputs, channel_notes_from_chain},
     },
     cucumber::{
         error::{StepError, StepResult},
@@ -60,7 +60,7 @@ use crate::{
     },
 };
 
-const ZONE_CHANNEL_WITHDRAW_THRESHOLD: u16 = 1;
+const ZONE_CHANNEL_TRANSFER_THRESHOLD: u16 = 1;
 const ZONE_CHANNEL_DEPOSIT_THRESHOLD: u16 = 1;
 const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -268,7 +268,7 @@ pub(super) async fn submit_zone_channel_config(
             Keys::new_unchecked(authorized_keys),
             posting_timeframe.into(),
             posting_timeout.into(),
-            ZONE_CHANNEL_WITHDRAW_THRESHOLD,
+            ZONE_CHANNEL_TRANSFER_THRESHOLD,
             ZONE_CHANNEL_DEPOSIT_THRESHOLD,
         )
         .await
@@ -408,39 +408,44 @@ fn user_owned_utxos(utxos: Vec<Utxo>) -> Vec<Utxo> {
 /// Hands each `(alias, note_count)` row its own slice of the channel-owned
 /// UTXOs the zone wallet tracks for `channel_id`, so bundled withdraws take
 /// disjoint inputs.
+/// Reads the notes `channel_id` currently owns from the chain — by channel, so
+/// the set is correct even after a channel transfer re-keys a note — and hands
+/// each `(alias, note_count)` row its own disjoint slice.
 async fn select_channel_withdraw_notes(
-    world: &mut CucumberWorld,
-    step: &Step,
-    wallet_name: &str,
+    world: &CucumberWorld,
+    sequencer_alias: &str,
     channel_id: ChannelId,
     withdraw_rows: &[(String, usize)],
 ) -> Result<Vec<Inputs>, StepError> {
-    let mut channel_utxos: Vec<Utxo> =
-        current_available_utxos_for_wallet(world, &step.value, wallet_name)
-            .await?
-            .into_iter()
-            .filter(|utxo| utxo.channel_id() == Some(channel_id))
-            .collect();
-
-    // Sort by id so the split is deterministic across runs.
-    channel_utxos.sort_by_key(Utxo::id);
+    let node_name = world.zone.sequencer_node_name(sequencer_alias)?;
+    let client = world.resolve_node_http_client(node_name)?;
+    let mut source =
+        NodeHttpWalletChainSource::from_client(format!("channel-notes-{sequencer_alias}"), client)
+            .await
+            .map_err(|error| StepError::LogicalError {
+                message: error.to_string(),
+            })?;
+    let channel_notes = channel_notes_from_chain(&mut source, channel_id)
+        .await
+        .map_err(|error| StepError::LogicalError {
+            message: error.to_string(),
+        })?;
 
     let needed: usize = withdraw_rows.iter().map(|(_, count)| count).sum();
-    if channel_utxos.len() < needed {
+    if channel_notes.len() < needed {
         return Err(StepError::LogicalError {
             message: format!(
-                "Zone wallet for channel {channel_id:?} holds {} channel note(s) but the atomic \
-                 withdraw needs {needed}",
-                channel_utxos.len()
+                "Channel {channel_id:?} holds {} note(s) but the atomic withdraw needs {needed}",
+                channel_notes.len()
             ),
         });
     }
 
-    let mut remaining = channel_utxos.into_iter();
+    let mut remaining = channel_notes.into_iter();
     withdraw_rows
         .iter()
         .map(|(alias, count)| {
-            let note_ids: Vec<_> = remaining.by_ref().take(*count).map(|utxo| utxo.id()).collect();
+            let note_ids: Vec<NoteId> = remaining.by_ref().take(*count).collect();
             Inputs::try_new(note_ids).map_err(|error| StepError::InvalidArgument {
                 message: format!("Invalid inputs for atomic withdraw '{alias}': {error}"),
             })
@@ -638,19 +643,10 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
     message_alias: String,
     withdraw_rows: Vec<(String, usize)>,
 ) -> StepResult {
-    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
     let channel_id = world.zone.sequencer_channel_id(sequencer_alias)?;
-    // Bundled withdraws must take disjoint inputs, so hand each row its own slice.
     let inputs_per_arg = log_step_error(
         step,
-        select_channel_withdraw_notes(
-            world,
-            step,
-            &wallet.wallet_name,
-            channel_id,
-            &withdraw_rows,
-        )
-        .await,
+        select_channel_withdraw_notes(world, sequencer_alias, channel_id, &withdraw_rows).await,
     )?;
     let inscription_data = make_inscription(&format!("Burn {}", withdraw_rows.len()));
     let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;

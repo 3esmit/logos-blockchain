@@ -155,7 +155,7 @@ impl MantleTxGasContext {
 
     #[must_use]
     pub fn from_channels(value: &Channels, base_prices: GasPrices) -> Self {
-        let withdraw_thresholds = value
+        let transfer_thresholds = value
             .channels
             .iter()
             .map(|(channel_id, channel)| (*channel_id, channel.transfer_threshold))
@@ -165,7 +165,7 @@ impl MantleTxGasContext {
             .iter()
             .map(|(channel_id, channel)| (*channel_id, channel.configuration_threshold))
             .collect();
-        Self::new(withdraw_thresholds, configuration_thresholds, base_prices)
+        Self::new(transfer_thresholds, configuration_thresholds, base_prices)
     }
 
     #[must_use]

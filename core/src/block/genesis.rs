@@ -158,7 +158,7 @@ impl GenesisBlock {
 
     #[must_use]
     pub fn genesis_tx(&self) -> GenesisTx {
-        self.0.transactions_vec()[0].clone()
+        self.0.transactions_ref()[0].clone()
     }
 
     #[must_use]

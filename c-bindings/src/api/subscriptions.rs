@@ -1,21 +1,14 @@
-use std::ffi::{CString, c_char};
+use std::ffi::c_char;
 
-use futures::StreamExt as _;
 use lb_api_service::http::storage::StorageAdapter as _;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
-    mantle::{
-        traits::{Hashable, StorageSize, hashable},
-        transactions::{
-            hash::TxHash,
-            states::{Preverified, Unverified},
-        },
-    },
+    mantle::{StorageSize, Transaction, TransactionHasher, TxHash},
 };
 use lb_node::{
-    ApiStorageAdapter, RocksBackend, RuntimeServiceId, SignedMantleTx, StorageService,
-    api::serializers::blocks::ApiProcessedBlockEventOwned, generic_services::CryptarchiaService,
+    ApiStorageAdapter, RuntimeServiceId, SignedMantleTx, StorageService,
+    generic_services::CryptarchiaService,
 };
 use serde::Serialize;
 
@@ -33,15 +26,19 @@ use crate::{
 pub struct TxWithId {
     id: TxHash,
     #[serde(flatten)]
-    tx: SignedMantleTx<Unverified>,
+    tx: SignedMantleTx,
 }
 
-impl Hashable for TxWithId {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
-    const HASHER: hashable::Hasher<Self> =
-        |tx| <SignedMantleTx<Unverified> as Hashable>::HASHER(&tx.tx);
-    type Hash = <SignedMantleTx<Unverified> as Hashable>::Hash;
+impl TxWithId {
+    pub(crate) fn new(tx: SignedMantleTx) -> Self {
+        let id = tx.hash();
+        Self { id, tx }
+    }
+}
+
+impl Transaction for TxWithId {
+    const HASHER: TransactionHasher<Self> = |tx| <SignedMantleTx as Transaction>::HASHER(&tx.tx);
+    type Hash = <SignedMantleTx as Transaction>::Hash;
 
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()
@@ -86,16 +83,13 @@ pub fn subscribe_to_new_blocks_sync(
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
                         let relay = storage_relay.clone();
-                        let res: Result<Option<CoreBlock<SignedMantleTx<Unverified>>>, _> =
+                        let res: Result<Option<CoreBlock<SignedMantleTx>>, _> =
                             ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
                                 .await;
                         if let Ok(Some(block)) = res {
                             let txs_with_id: Vec<TxWithId> = block
-                                .transactions_iter()
-                                .map(|tx| TxWithId {
-                                    id: tx.hash(),
-                                    tx: tx.clone(),
-                                })
+                                .transactions()
+                                .map(|tx| TxWithId::new(tx.clone()))
                                 .collect();
                             let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
                                 block.header().clone(),
@@ -131,13 +125,6 @@ pub fn subscribe_to_new_blocks_sync(
 /// Subscribes to new blocks on the blockchain and calls the provided callback
 /// for each new block.
 ///
-/// Deprecated: prefer [`subscribe_to_processed_blocks`], which additionally
-/// carries the chain state per event (tip, tip slot, LIB, LIB slot) and the
-/// block header id, uses the same JSON schema as the node's
-/// `/cryptarchia/blocks/stream` HTTP endpoint (transaction ids at
-/// `transactions[].mantle_tx.hash`), and signals the end of the stream. This
-/// call will be removed once consumers have migrated.
-///
 /// # Arguments
 ///
 /// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
@@ -164,157 +151,32 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
     subscribe_to_new_blocks_sync(node, callback_per_block)
 }
 
-/// Serializes `value` as JSON and invokes `on_event` with a pointer to the
-/// NUL-terminated string. The pointer is only valid for the duration of the
-/// callback invocation.
-fn emit_json<T: Serialize>(value: &T, on_event: &mut BoxedCallback<*const c_char>) {
-    let json = CString::new(
-        serde_json::to_string(value).expect("Serialization of an event should always succeed"),
-    )
-    .expect("Event JSON should not contain NUL bytes");
-    on_event(json.as_ptr());
-}
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::Transaction as _;
 
-#[must_use]
-pub fn subscribe_to_processed_blocks_sync(
-    node: &LogosBlockchainNode,
-    mut on_event: BoxedCallback<*const c_char>,
-) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
-    let overwatch = node.get_overwatch_handle();
-    runtime_handler.block_on(async move {
-        let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
-            SignedMantleTx<Preverified>,
-            RocksBackend,
-            CryptarchiaService<RuntimeServiceId>,
-            RuntimeServiceId,
-        >(overwatch)
-        .await
-        {
-            Ok(stream) => stream,
-            Err(e) => {
-                return OperationStatus::error(
-                    OperationStatusCode::ServiceError,
-                    format!("Failed to subscribe to processed blocks: {e}"),
-                );
-            }
-        };
-        runtime_handler.spawn(async move {
-            let mut stream = Box::pin(stream);
-            while let Some(event) = stream.next().await {
-                emit_json(&ApiProcessedBlockEventOwned::from(event), &mut on_event);
-            }
-            on_event(std::ptr::null());
-        });
-        OperationStatus::OK
-    })
-}
+    use super::{SignedMantleTx, TxHash, TxWithId};
 
-/// Subscribes to processed block events and calls `callback_per_event` for
-/// each one.
-///
-/// Each event carries the full block along with the chain state after
-/// processing it (tip, tip slot, LIB, LIB slot), serialized as JSON with the
-/// same schema as the node's `/cryptarchia/blocks/stream` HTTP endpoint.
-/// Transaction ids are at `transactions[].mantle_tx.hash`.
-///
-/// # Arguments
-///
-/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
-/// - `callback_per_event`: Called with a pointer to a NUL-terminated JSON event
-///   per processed block. The pointer is only valid for the duration of the
-///   call — copy the data if it is needed longer. When the stream ends (e.g. on
-///   node shutdown) the callback is called exactly once with NULL, after which
-///   no further events are delivered; re-subscribe to keep receiving events.
-///   Declared unsafe extern "C"; must be thread-safe.
-///
-/// # Returns
-///
-/// An [`OperationStatus`] indicating whether the subscription was established.
-/// On error, the callback is never called.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn subscribe_to_processed_blocks(
-    node: *const LogosBlockchainNode,
-    callback_per_event: CCallback<*const c_char>,
-) -> OperationStatus {
-    return_error_if_null_pointer!(node);
-    let node = unsafe { &*node };
-    subscribe_to_processed_blocks_sync(node, into_boxed_callback(callback_per_event))
-}
+    #[test]
+    fn transaction_with_id_serializes_the_hash_accepted_by_get_transaction() {
+        let transaction = serde_json::from_value::<SignedMantleTx>(serde_json::json!({
+            "mantle_tx": { "ops": [] },
+            "ops_proofs": []
+        }))
+        .expect("empty transaction should deserialize");
+        let expected_hash = transaction.hash();
+        let original =
+            serde_json::to_value(&transaction).expect("signed transaction should serialize");
+        let transaction_with_id = TxWithId::new(transaction);
+        let serialized = serde_json::to_value(&transaction_with_id)
+            .expect("transaction with id should serialize");
+        let emitted_id = serde_json::from_value::<TxHash>(serialized["id"].clone())
+            .expect("emitted id should deserialize as a transaction hash");
 
-#[must_use]
-pub fn subscribe_to_lib_blocks_sync(
-    node: &LogosBlockchainNode,
-    mut on_event: BoxedCallback<*const c_char>,
-) -> OperationStatus {
-    let runtime_handler = node.get_runtime_handle();
-    let overwatch = node.get_overwatch_handle();
-    runtime_handler.block_on(async move {
-        let stream = match lb_api_service::http::mantle::lib_block_stream(overwatch).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                return OperationStatus::error(
-                    OperationStatusCode::ServiceError,
-                    format!("Failed to subscribe to LIB blocks: {e}"),
-                );
-            }
-        };
-        runtime_handler.spawn(async move {
-            let mut stream = Box::pin(stream);
-            while let Some(item) = stream.next().await {
-                match item {
-                    Ok(block_info) => {
-                        emit_json(&block_info, &mut on_event);
-                    }
-                    Err(e) => {
-                        logging::error!(
-                            "subscribe_to_lib_blocks_sync",
-                            "LIB block stream failed: {e}"
-                        );
-                        break;
-                    }
-                }
-            }
-            on_event(std::ptr::null());
-        });
-        OperationStatus::OK
-    })
-}
-
-/// Subscribes to Last Irreversible Block (LIB) updates and calls
-/// `callback_per_event` for each newly finalized block.
-///
-/// Each event is the finalized block's info serialized as JSON with the same
-/// schema as the node's `/cryptarchia/lib/stream` HTTP endpoint.
-///
-/// # Arguments
-///
-/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
-/// - `callback_per_event`: Called with a pointer to a NUL-terminated JSON event
-///   per finalized block. The pointer is only valid for the duration of the
-///   call — copy the data if it is needed longer. When the stream ends or fails
-///   the callback is called exactly once with NULL, after which no further
-///   events are delivered; re-subscribe to keep receiving events. Declared
-///   unsafe extern "C"; must be thread-safe.
-///
-/// # Returns
-///
-/// An [`OperationStatus`] indicating whether the subscription was established.
-/// On error, the callback is never called.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn subscribe_to_lib_blocks(
-    node: *const LogosBlockchainNode,
-    callback_per_event: CCallback<*const c_char>,
-) -> OperationStatus {
-    return_error_if_null_pointer!(node);
-    let node = unsafe { &*node };
-    subscribe_to_lib_blocks_sync(node, into_boxed_callback(callback_per_event))
+        assert!(serialized["id"].as_str().is_some_and(|id| id.len() == 64));
+        assert_eq!(emitted_id, expected_hash);
+        assert_eq!(transaction_with_id.hash(), expected_hash);
+        assert_eq!(serialized["mantle_tx"], original["mantle_tx"]);
+        assert_eq!(serialized["ops_proofs"], original["ops_proofs"]);
+    }
 }

@@ -29,6 +29,13 @@ pub struct TxWithId {
     tx: SignedMantleTx,
 }
 
+impl TxWithId {
+    pub(crate) fn new(tx: SignedMantleTx) -> Self {
+        let id = tx.hash();
+        Self { id, tx }
+    }
+}
+
 impl Transaction for TxWithId {
     const HASHER: TransactionHasher<Self> = |tx| <SignedMantleTx as Transaction>::HASHER(&tx.tx);
     type Hash = <SignedMantleTx as Transaction>::Hash;
@@ -82,10 +89,7 @@ pub fn subscribe_to_new_blocks_sync(
                         if let Ok(Some(block)) = res {
                             let txs_with_id: Vec<TxWithId> = block
                                 .transactions()
-                                .map(|tx| TxWithId {
-                                    id: tx.hash(),
-                                    tx: tx.clone(),
-                                })
+                                .map(|tx| TxWithId::new(tx.clone()))
                                 .collect();
                             let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
                                 block.header().clone(),
@@ -145,4 +149,34 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
     let node = unsafe { &*node };
     let callback_per_block = into_boxed_callback(callback_per_block);
     subscribe_to_new_blocks_sync(node, callback_per_block)
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::Transaction as _;
+
+    use super::{SignedMantleTx, TxHash, TxWithId};
+
+    #[test]
+    fn transaction_with_id_serializes_the_hash_accepted_by_get_transaction() {
+        let transaction = serde_json::from_value::<SignedMantleTx>(serde_json::json!({
+            "mantle_tx": { "ops": [] },
+            "ops_proofs": []
+        }))
+        .expect("empty transaction should deserialize");
+        let expected_hash = transaction.hash();
+        let original =
+            serde_json::to_value(&transaction).expect("signed transaction should serialize");
+        let transaction_with_id = TxWithId::new(transaction);
+        let serialized = serde_json::to_value(&transaction_with_id)
+            .expect("transaction with id should serialize");
+        let emitted_id = serde_json::from_value::<TxHash>(serialized["id"].clone())
+            .expect("emitted id should deserialize as a transaction hash");
+
+        assert!(serialized["id"].as_str().is_some_and(|id| id.len() == 64));
+        assert_eq!(emitted_id, expected_hash);
+        assert_eq!(transaction_with_id.hash(), expected_hash);
+        assert_eq!(serialized["mantle_tx"], original["mantle_tx"]);
+        assert_eq!(serialized["ops_proofs"], original["ops_proofs"]);
+    }
 }

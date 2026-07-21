@@ -59,17 +59,80 @@ pub struct CryptarchiaInfo {
     pub slot: u64,
     pub height: u64,
     pub mode: State,
+    // Appended to retain the offsets of existing fields. Callers that read
+    // this field must use a matching C library that allocates it.
+    pub genesis_id: HeaderId,
 }
 
-impl From<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
-    fn from(value: lb_chain_service::ChainServiceInfo) -> Self {
-        Self {
+impl TryFrom<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
+    type Error = OperationStatus;
+
+    fn try_from(value: lb_chain_service::ChainServiceInfo) -> Result<Self, Self::Error> {
+        let genesis_id = value.cryptarchia_info.genesis_id.ok_or_else(|| {
+            OperationStatus::error(
+                OperationStatusCode::RelayError,
+                "Cryptarchia info did not include a genesis identity.",
+            )
+        })?;
+
+        Ok(Self {
             lib: value.cryptarchia_info.lib.into(),
             tip: value.cryptarchia_info.tip.into(),
             slot: u64::from(value.cryptarchia_info.slot),
             height: value.cryptarchia_info.height,
             mode: State::from(value.mode),
-        }
+            genesis_id: genesis_id.into(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversion_preserves_genesis_identity() {
+        let genesis_id = lb_core::header::HeaderId::from([1; 32]);
+        let info = lb_chain_service::ChainServiceInfo {
+            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
+                genesis_id: Some(genesis_id),
+                lib: lb_core::header::HeaderId::from([2; 32]),
+                lib_slot: lb_chain_service::Slot::new(3),
+                tip: lb_core::header::HeaderId::from([4; 32]),
+                slot: lb_chain_service::Slot::new(5),
+                height: 6,
+            },
+            mode: lb_chain_service::ChainServiceMode::Started(lb_chain_service::State::Online),
+        };
+
+        let ffi = CryptarchiaInfo::try_from(info).expect("genesis identity should be present");
+
+        assert_eq!(ffi.genesis_id, [1; 32]);
+    }
+
+    #[test]
+    fn conversion_rejects_missing_genesis_identity() {
+        let info = lb_chain_service::ChainServiceInfo {
+            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
+                genesis_id: None,
+                lib: lb_core::header::HeaderId::from([2; 32]),
+                lib_slot: lb_chain_service::Slot::new(3),
+                tip: lb_core::header::HeaderId::from([4; 32]),
+                slot: lb_chain_service::Slot::new(5),
+                height: 6,
+            },
+            mode: lb_chain_service::ChainServiceMode::Started(lb_chain_service::State::Online),
+        };
+
+        let result = CryptarchiaInfo::try_from(info);
+
+        assert!(matches!(
+            result,
+            Err(OperationStatus {
+                code: OperationStatusCode::RelayError,
+                ..
+            })
+        ));
     }
 }
 
@@ -136,7 +199,7 @@ pub unsafe extern "C" fn get_cryptarchia_info(
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
     let service_info = unwrap_or_return_error!(get_cryptarchia_info_sync(node));
-    let c_info = CryptarchiaInfo::from(service_info);
+    let c_info = unwrap_or_return_error!(CryptarchiaInfo::try_from(service_info));
 
     FfiCryptarchiaInfoResult::from_value(c_info)
 }

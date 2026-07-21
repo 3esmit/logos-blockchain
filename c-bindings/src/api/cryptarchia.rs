@@ -64,14 +64,29 @@ pub struct CryptarchiaInfo {
     pub genesis_id: HeaderId,
 }
 
+/// Version of the `CryptarchiaInfo` C ABI layout.
+///
+/// Consumers must check this before dereferencing a value returned by
+/// [`get_cryptarchia_info`]. Increment it whenever that layout changes.
+pub const CRYPTARCHIA_INFO_ABI_VERSION: u32 = 1;
+
+/// Gets the version of the `CryptarchiaInfo` C ABI layout.
+///
+/// Consumers use this to reject incompatible libraries before reading a
+/// `CryptarchiaInfo` allocation.
+#[unsafe(no_mangle)]
+pub extern "C" fn cryptarchia_info_abi_version() -> u32 {
+    CRYPTARCHIA_INFO_ABI_VERSION
+}
+
 impl TryFrom<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
     type Error = OperationStatus;
 
     fn try_from(value: lb_chain_service::ChainServiceInfo) -> Result<Self, Self::Error> {
         let genesis_id = value.cryptarchia_info.genesis_id.ok_or_else(|| {
             OperationStatus::error(
-                OperationStatusCode::RelayError,
-                "Cryptarchia info did not include a genesis identity.",
+                OperationStatusCode::ValidationError,
+                "Cryptarchia info omitted its genesis identity; use a matching node and C library version.",
             )
         })?;
 
@@ -111,6 +126,11 @@ mod tests {
     }
 
     #[test]
+    fn cryptarchia_info_abi_version_matches_the_current_layout() {
+        assert_eq!(cryptarchia_info_abi_version(), CRYPTARCHIA_INFO_ABI_VERSION);
+    }
+
+    #[test]
     fn conversion_rejects_missing_genesis_identity() {
         let info = lb_chain_service::ChainServiceInfo {
             cryptarchia_info: lb_chain_service::CryptarchiaInfo {
@@ -129,7 +149,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(OperationStatus {
-                code: OperationStatusCode::RelayError,
+                code: OperationStatusCode::ValidationError,
                 ..
             })
         ));

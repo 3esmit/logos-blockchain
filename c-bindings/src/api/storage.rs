@@ -15,18 +15,20 @@ use crate::{
 };
 
 fn block_with_transaction_ids(
-    block: &CoreBlock<SignedMantleTx>,
+    block: CoreBlock<SignedMantleTx>,
 ) -> Result<CoreBlock<TxWithId>, lb_core::block::Error> {
+    let header = block.header().clone();
+    let signature = *block.signature();
     let transactions = block
-        .transactions()
-        .cloned()
+        .into_transactions()
+        .into_iter()
         .map(TxWithId::new)
         .collect::<Vec<_>>();
 
     CoreBlock::reconstruct(
-        block.header().clone(),
+        header,
         BlockTransactions::try_from(transactions)?,
-        *block.signature(),
+        signature,
     )
 }
 
@@ -76,7 +78,7 @@ pub(crate) fn get_block_sync(
             )
         })?;
 
-    let block = block_with_transaction_ids(&block).map_err(|error| {
+    let block = block_with_transaction_ids(block).map_err(|error| {
         OperationStatus::error(
             OperationStatusCode::RuntimeError,
             format!("Failed to attach transaction IDs to block: {error}"),
@@ -284,7 +286,7 @@ pub(crate) fn get_blocks_sync(
 
     let blocks = blocks
         .into_iter()
-        .map(|block| block_with_transaction_ids(&block))
+        .map(block_with_transaction_ids)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
             OperationStatus::error(
@@ -314,10 +316,9 @@ pub type FfiGetBlocksResult = FfiStatusResult<*mut c_char>;
 
 /// Get blocks in a slot range as a JSON array string.
 ///
-/// Returns a JSON array of blocks for the specified slot range. Each
-/// serialized transaction includes its canonical `id`, which can be passed to
-/// [`get_transaction`].
-/// The JSON format matches the server's block serialization.
+/// Returns a JSON array of blocks for the specified slot range. The response
+/// is compatible with the server's block serialization and adds a canonical
+/// `id` field to each transaction, which can be passed to [`get_transaction`].
 ///
 /// # Arguments
 ///

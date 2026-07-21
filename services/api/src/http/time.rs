@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use crate::http::DynError;
 
-fn map_time_info(service_info: lb_time_service::TimeServiceInfo) -> TimeInfo {
+fn map_time_info(service_info: &lb_time_service::TimeServiceInfo) -> TimeInfo {
     TimeInfo {
         slot_duration_ms: service_info.slot_duration_ms,
         genesis_time_unix_ms: service_info.genesis_time_unix_ms,
@@ -35,7 +35,7 @@ where
         .map_err(|(error, _)| error)?;
     let service_info = receiver.await?.map_err(std::io::Error::other)?;
 
-    Ok(map_time_info(service_info))
+    Ok(map_time_info(&service_info))
 }
 
 #[cfg(test)]
@@ -54,7 +54,7 @@ mod tests {
             current_epoch: Epoch::new(7),
         };
 
-        let info = map_time_info(service_info);
+        let info = map_time_info(&service_info);
 
         assert_eq!(info.slot_duration_ms, 1_000);
         assert_eq!(info.genesis_time_unix_ms, 1_700_000_000_000);

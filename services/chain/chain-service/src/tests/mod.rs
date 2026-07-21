@@ -40,7 +40,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{Cryptarchia, CryptarchiaConsensus, Error, relays::CryptarchiaConsensusRelays};
+use crate::{
+    ChainServiceInfo, ChainServiceMode, Cryptarchia, CryptarchiaConsensus, CryptarchiaInfo, Error,
+    relays::CryptarchiaConsensusRelays,
+};
 
 #[test]
 fn cryptarchia_switch_to_online() {
@@ -88,6 +91,7 @@ fn cryptarchia_switch_to_online() {
     // Now, the chain is [G, B1, B2, B3].
     // We now switch to Online and check that LIB advances to B2.
     let (cryptarchia, pruned_blocks) = cryptarchia.online();
+    assert_eq!(cryptarchia.info().genesis_id, Some(genesis_id));
     assert_eq!(cryptarchia.lib(), block_ids[2]);
     // All immutable blocks (G, B1, excluding LIB) should have been pruned
     assert_eq!(
@@ -101,6 +105,36 @@ fn cryptarchia_switch_to_online() {
     // Check the ledger states of immutable blocks have been pruned
     assert!(cryptarchia.ledger.state(&block_ids[0]).is_none());
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
+}
+
+#[test]
+fn cryptarchia_info_deserializes_legacy_http_response_without_genesis_identity() {
+    let expected_genesis_id = HeaderId::from([1; 32]);
+    let mut response = serde_json::to_value(ChainServiceInfo {
+        cryptarchia_info: CryptarchiaInfo {
+            genesis_id: Some(expected_genesis_id),
+            lib: HeaderId::from([2; 32]),
+            lib_slot: Slot::new(3),
+            tip: HeaderId::from([4; 32]),
+            slot: Slot::new(5),
+            height: 6,
+        },
+        mode: ChainServiceMode::AwaitingStart,
+    })
+    .unwrap();
+    let current = serde_json::from_value::<ChainServiceInfo>(response.clone()).unwrap();
+    assert_eq!(
+        current.cryptarchia_info.genesis_id,
+        Some(expected_genesis_id)
+    );
+    response["cryptarchia_info"]
+        .as_object_mut()
+        .unwrap()
+        .remove("genesis_id");
+
+    let parsed = serde_json::from_value::<ChainServiceInfo>(response).unwrap();
+
+    assert_eq!(parsed.cryptarchia_info.genesis_id, None);
 }
 
 #[tokio::test(flavor = "multi_thread")]

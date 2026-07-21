@@ -333,6 +333,7 @@ mod tests {
         async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
             Ok(ChainServiceInfo {
                 cryptarchia_info: CryptarchiaInfo {
+                    genesis_id: Some(HeaderId::from([0; 32])),
                     lib: HeaderId::from([0; 32]),
                     lib_slot: self.lib_slot,
                     tip: HeaderId::from([0; 32]),

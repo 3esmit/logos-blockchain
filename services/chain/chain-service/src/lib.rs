@@ -209,6 +209,11 @@ pub struct ChainServiceInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CryptarchiaInfo {
+    /// Stable chain identity when supplied by the node. Legacy HTTP nodes omit
+    /// this field, in which case consumers must not infer it from a partial
+    /// block history.
+    #[serde(default)]
+    pub genesis_id: Option<HeaderId>,
     pub lib: HeaderId,
     pub lib_slot: Slot,
     pub tip: HeaderId,
@@ -334,6 +339,7 @@ impl Cryptarchia {
         let lib_branch = self.lib_branch();
 
         CryptarchiaInfo {
+            genesis_id: Some(self.genesis_id),
             lib: lib_branch.id(),
             lib_slot: lib_branch.slot(),
             tip: tip_branch.id(),

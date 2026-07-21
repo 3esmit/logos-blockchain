@@ -103,6 +103,37 @@ impl TimeBackend for NtpTimeBackend {
 
 type NtpResultStream = Pin<Box<dyn Stream<Item = NtpResult> + Send + Sync + Unpin>>;
 
+fn ntp_timestamp_to_date(timestamp: &NtpResult) -> Option<(OffsetDateTime, Duration)> {
+    let seconds = Duration::from_secs(timestamp.sec().into());
+    let nanos_fraction =
+        Duration::from_nanos(fraction_to_nanoseconds(timestamp.sec_fraction()).into());
+    let roundtrip = Duration::from_micros(timestamp.roundtrip());
+    let ts_nanos_u128 = (seconds + nanos_fraction + roundtrip / 2).as_nanos();
+
+    let ts_nanos_i128 = match i128::try_from(ts_nanos_u128) {
+        Ok(ts_nanos) => ts_nanos,
+        Err(e) => {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "Skipping invalid NTP timestamp {ts_nanos_u128} vs. {}: {e}",
+                i128::MAX
+            );
+            return None;
+        }
+    };
+
+    match OffsetDateTime::from_unix_timestamp_nanos(ts_nanos_i128) {
+        Ok(date) => Some((date, roundtrip)),
+        Err(e) => {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos_i128})"
+            );
+            None
+        }
+    }
+}
+
 /// Stream that updates itself every `interval` from an NTP server.
 pub struct NtpStream {
     /// Update interval stream
@@ -141,10 +172,6 @@ impl NtpStream {
     ///   reaches a slot strictly greater than the last emitted one.
     /// - Forward NTP corrections replace the synthetic timer immediately. This
     ///   can skip intermediate slot numbers if NTP jumps ahead.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     fn handle_ntp_update(self: Pin<&mut Self>, cx: &mut Context<'_>) {
         let this = self.get_mut();
 
@@ -152,33 +179,8 @@ impl NtpStream {
             return;
         };
 
-        let seconds = Duration::from_secs(timestamp.sec().into());
-        let nanos_fraction =
-            Duration::from_nanos(fraction_to_nanoseconds(timestamp.sec_fraction()).into());
-        let roundtrip = Duration::from_micros(timestamp.roundtrip());
-        let ts_nanos_u128 = (seconds + nanos_fraction + roundtrip / 2).as_nanos();
-
-        let ts_nanos_i128 = match i128::try_from(ts_nanos_u128) {
-            Ok(ts_nanos) => ts_nanos,
-            Err(e) => {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "Skipping invalid NTP timestamp {ts_nanos_u128} vs. {}: {e}",
-                    i128::MAX
-                );
-                return;
-            }
-        };
-
-        let date = match OffsetDateTime::from_unix_timestamp_nanos(ts_nanos_i128) {
-            Ok(date) => date,
-            Err(e) => {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos_i128})"
-                );
-                return;
-            }
+        let Some((date, roundtrip)) = ntp_timestamp_to_date(&timestamp) else {
+            return;
         };
 
         let current_slot = Slot::from_offset_and_config(date, this.slot_config);
@@ -252,6 +254,16 @@ mod tests {
         };
         let base_period_length = NonZeroU64::new(1).unwrap();
         (slot_config, epoch_config, base_period_length)
+    }
+
+    #[test]
+    fn ntp_timestamp_conversion_applies_half_roundtrip() {
+        let timestamp = NtpResult::new(10, 0, 2_000, 0, 1, 0);
+
+        let (date, roundtrip) = ntp_timestamp_to_date(&timestamp).expect("valid NTP timestamp");
+
+        assert_eq!(roundtrip, Duration::from_millis(2));
+        assert_eq!(date.unix_timestamp_nanos(), 10_001_000_000);
     }
 
     // Struct to hold richer NTP test data

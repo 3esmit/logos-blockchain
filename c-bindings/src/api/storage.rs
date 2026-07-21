@@ -1,14 +1,36 @@
 use std::ffi::{CString, c_char};
 
+use lb_core::block::{Block as CoreBlock, BlockTransactions};
 use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx};
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
-    api::cryptarchia::{HeaderId, TxHash, into_tx_hash},
+    api::{
+        cryptarchia::{HeaderId, TxHash, into_tx_hash},
+        subscriptions::TxWithId,
+    },
     errors::OperationStatusCode,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
+
+fn block_with_transaction_ids(
+    block: CoreBlock<SignedMantleTx>,
+) -> Result<CoreBlock<TxWithId>, lb_core::block::Error> {
+    let header = block.header().clone();
+    let signature = *block.signature();
+    let transactions = block
+        .into_transactions()
+        .into_iter()
+        .map(TxWithId::new)
+        .collect::<Vec<_>>();
+
+    CoreBlock::reconstruct(
+        header,
+        BlockTransactions::try_from(transactions)?,
+        signature,
+    )
+}
 
 /// Gets a block by its header ID as a JSON string.
 ///
@@ -25,7 +47,9 @@ use crate::{
 /// A `Result` containing a JSON string representation of `Block` on success,
 /// or an [`OperationStatus`] error on failure. Returns
 /// [`OperationStatusCode::NotFound`] if no block with the given header ID
-/// exists.
+/// exists. Each serialized transaction includes its canonical `id` as a
+/// 64-character hexadecimal string. Decode that string into a 32-byte
+/// [`TxHash`] before passing it to [`get_transaction`].
 pub(crate) fn get_block_sync(
     node: &LogosBlockchainNode,
     header_id: HeaderId,
@@ -54,6 +78,13 @@ pub(crate) fn get_block_sync(
                 format!("No block found for header id {header_id:?}"),
             )
         })?;
+
+    let block = block_with_transaction_ids(block).map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to attach transaction IDs to block: {error}"),
+        )
+    })?;
 
     let json = serde_json::to_string(&block).map_err(|e| {
         OperationStatus::error(
@@ -254,6 +285,17 @@ pub(crate) fn get_blocks_sync(
             )
         })?;
 
+    let blocks = blocks
+        .into_iter()
+        .map(block_with_transaction_ids)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to attach transaction IDs to blocks: {error}"),
+            )
+        })?;
+
     let json = serde_json::to_string(&blocks).map_err(|e| {
         OperationStatus::error(
             OperationStatusCode::RuntimeError,
@@ -275,8 +317,10 @@ pub type FfiGetBlocksResult = FfiStatusResult<*mut c_char>;
 
 /// Get blocks in a slot range as a JSON array string.
 ///
-/// Returns a JSON array of blocks for the specified slot range.
-/// The JSON format matches the server's block serialization.
+/// Returns a JSON array of blocks for the specified slot range. The response
+/// is compatible with the server's block serialization and adds a canonical
+/// `id` field to each transaction as a 64-character hexadecimal string. Decode
+/// it into a 32-byte [`TxHash`] before passing it to [`get_transaction`].
 ///
 /// # Arguments
 ///

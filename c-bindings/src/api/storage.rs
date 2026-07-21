@@ -47,8 +47,9 @@ fn block_with_transaction_ids(
 /// A `Result` containing a JSON string representation of `Block` on success,
 /// or an [`OperationStatus`] error on failure. Returns
 /// [`OperationStatusCode::NotFound`] if no block with the given header ID
-/// exists. Each serialized transaction includes its canonical `id`, which can
-/// be passed to [`get_transaction`].
+/// exists. Each serialized transaction includes its canonical `id` as a
+/// 64-character hexadecimal string. Decode that string into a 32-byte
+/// [`TxHash`] before passing it to [`get_transaction`].
 pub(crate) fn get_block_sync(
     node: &LogosBlockchainNode,
     header_id: HeaderId,
@@ -318,7 +319,8 @@ pub type FfiGetBlocksResult = FfiStatusResult<*mut c_char>;
 ///
 /// Returns a JSON array of blocks for the specified slot range. The response
 /// is compatible with the server's block serialization and adds a canonical
-/// `id` field to each transaction, which can be passed to [`get_transaction`].
+/// `id` field to each transaction as a 64-character hexadecimal string. Decode
+/// it into a 32-byte [`TxHash`] before passing it to [`get_transaction`].
 ///
 /// # Arguments
 ///

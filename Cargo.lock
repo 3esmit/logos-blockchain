@@ -3960,6 +3960,7 @@ dependencies = [
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-http-api-common",
  "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
  "logos-blockchain-log-targets",

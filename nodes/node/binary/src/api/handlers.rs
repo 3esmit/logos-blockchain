@@ -16,6 +16,7 @@ use lb_api_service::http::{
     consensus::{self, Cryptarchia},
     libp2p, mantle, mempool,
     storage::StorageAdapter,
+    time,
 };
 use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
@@ -31,7 +32,6 @@ use lb_core::{
     },
 };
 use lb_http_api_common::{
-    TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
@@ -55,7 +55,6 @@ use lb_sdp_service::{
 use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
-use lb_time_service::TimeServiceMessage;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -490,7 +489,7 @@ where
     get,
     path = paths::TIME_INFO,
     responses(
-        (status = 200, description = "Query time service information", body = TimeInfo),
+        (status = 200, description = "Query time service information", body = lb_http_api_common::TimeInfo),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
@@ -500,29 +499,7 @@ pub async fn time_info<RuntimeServiceId>(
 where
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
 {
-    let relay = match handle.relay::<TimeService>().await {
-        Ok(relay) => relay,
-        Err(error) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
-        }
-    };
-    let (sender, receiver) = oneshot::channel();
-    if let Err((error, _)) = relay.send(TimeServiceMessage::Info { sender }).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
-    }
-    match receiver.await {
-        Ok(Ok(service_info)) => {
-            let api_info = TimeInfo {
-                slot_duration_ms: service_info.slot_duration_ms,
-                genesis_time_unix_ms: service_info.genesis_time_unix_ms,
-                current_slot: u64::from(service_info.current_slot),
-                current_epoch: u32::from(service_info.current_epoch),
-            };
-            (StatusCode::OK, Json(api_info)).into_response()
-        }
-        Ok(Err(error)) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
-    }
+    make_request_and_return_response!(time::time_info::<TimeService, RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(

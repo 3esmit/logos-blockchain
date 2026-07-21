@@ -62,13 +62,16 @@ pub struct CryptarchiaInfo {
     // Appended to retain the offsets of existing fields. Callers that read
     // this field must use a matching C library that allocates it.
     pub genesis_id: HeaderId,
+    // Appended to retain the offsets of the version-one layout. Callers that
+    // read this field must use a matching C library that allocates it.
+    pub lib_slot: u64,
 }
 
 /// Version of the `CryptarchiaInfo` C ABI layout.
 ///
 /// Consumers must check this before dereferencing a value returned by
 /// [`get_cryptarchia_info`]. Increment it whenever that layout changes.
-pub const CRYPTARCHIA_INFO_ABI_VERSION: u32 = 1;
+pub const CRYPTARCHIA_INFO_ABI_VERSION: u32 = 2;
 
 /// Gets the version of the `CryptarchiaInfo` C ABI layout.
 ///
@@ -97,6 +100,7 @@ impl TryFrom<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
             height: value.cryptarchia_info.height,
             mode: State::from(value.mode),
             genesis_id: genesis_id.into(),
+            lib_slot: u64::from(value.cryptarchia_info.lib_slot),
         })
     }
 }
@@ -201,6 +205,7 @@ mod tests {
         let ffi = CryptarchiaInfo::try_from(info).expect("genesis identity should be present");
 
         assert_eq!(ffi.genesis_id, [1; 32]);
+        assert_eq!(ffi.lib_slot, 3);
     }
 
     #[test]

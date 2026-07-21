@@ -1,4 +1,5 @@
 pub mod blend;
+pub mod catalog;
 pub mod config;
 pub mod cryptarchia;
 pub mod keys;

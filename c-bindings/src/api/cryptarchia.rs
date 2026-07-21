@@ -75,7 +75,7 @@ pub const CRYPTARCHIA_INFO_ABI_VERSION: u32 = 1;
 /// Consumers use this to reject incompatible libraries before reading a
 /// `CryptarchiaInfo` allocation.
 #[unsafe(no_mangle)]
-pub extern "C" fn cryptarchia_info_abi_version() -> u32 {
+pub const extern "C" fn cryptarchia_info_abi_version() -> u32 {
     CRYPTARCHIA_INFO_ABI_VERSION
 }
 
@@ -98,61 +98,6 @@ impl TryFrom<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
             mode: State::from(value.mode),
             genesis_id: genesis_id.into(),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn conversion_preserves_genesis_identity() {
-        let genesis_id = lb_core::header::HeaderId::from([1; 32]);
-        let info = lb_chain_service::ChainServiceInfo {
-            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
-                genesis_id: Some(genesis_id),
-                lib: lb_core::header::HeaderId::from([2; 32]),
-                lib_slot: lb_chain_service::Slot::new(3),
-                tip: lb_core::header::HeaderId::from([4; 32]),
-                slot: lb_chain_service::Slot::new(5),
-                height: 6,
-            },
-            mode: lb_chain_service::ChainServiceMode::Started(lb_chain_service::State::Online),
-        };
-
-        let ffi = CryptarchiaInfo::try_from(info).expect("genesis identity should be present");
-
-        assert_eq!(ffi.genesis_id, [1; 32]);
-    }
-
-    #[test]
-    fn cryptarchia_info_abi_version_matches_the_current_layout() {
-        assert_eq!(cryptarchia_info_abi_version(), CRYPTARCHIA_INFO_ABI_VERSION);
-    }
-
-    #[test]
-    fn conversion_rejects_missing_genesis_identity() {
-        let info = lb_chain_service::ChainServiceInfo {
-            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
-                genesis_id: None,
-                lib: lb_core::header::HeaderId::from([2; 32]),
-                lib_slot: lb_chain_service::Slot::new(3),
-                tip: lb_core::header::HeaderId::from([4; 32]),
-                slot: lb_chain_service::Slot::new(5),
-                height: 6,
-            },
-            mode: lb_chain_service::ChainServiceMode::Started(lb_chain_service::State::Online),
-        };
-
-        let result = CryptarchiaInfo::try_from(info);
-
-        assert!(matches!(
-            result,
-            Err(OperationStatus {
-                code: OperationStatusCode::ValidationError,
-                ..
-            })
-        ));
     }
 }
 
@@ -232,4 +177,59 @@ pub unsafe extern "C" fn get_cryptarchia_info(
 #[unsafe(no_mangle)]
 pub extern "C" fn free_cryptarchia_info(pointer: *mut CryptarchiaInfo) -> OperationStatus {
     free::<CryptarchiaInfo>(pointer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversion_preserves_genesis_identity() {
+        let genesis_id = lb_core::header::HeaderId::from([1; 32]);
+        let info = lb_chain_service::ChainServiceInfo {
+            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
+                genesis_id: Some(genesis_id),
+                lib: lb_core::header::HeaderId::from([2; 32]),
+                lib_slot: lb_chain_service::Slot::new(3),
+                tip: lb_core::header::HeaderId::from([4; 32]),
+                slot: lb_chain_service::Slot::new(5),
+                height: 6,
+            },
+            mode: lb_chain_service::ChainServiceMode::Started(lb_chain_service::State::Online),
+        };
+
+        let ffi = CryptarchiaInfo::try_from(info).expect("genesis identity should be present");
+
+        assert_eq!(ffi.genesis_id, [1; 32]);
+    }
+
+    #[test]
+    fn cryptarchia_info_abi_version_matches_the_current_layout() {
+        assert_eq!(cryptarchia_info_abi_version(), CRYPTARCHIA_INFO_ABI_VERSION);
+    }
+
+    #[test]
+    fn conversion_rejects_missing_genesis_identity() {
+        let info = lb_chain_service::ChainServiceInfo {
+            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
+                genesis_id: None,
+                lib: lb_core::header::HeaderId::from([2; 32]),
+                lib_slot: lb_chain_service::Slot::new(3),
+                tip: lb_core::header::HeaderId::from([4; 32]),
+                slot: lb_chain_service::Slot::new(5),
+                height: 6,
+            },
+            mode: lb_chain_service::ChainServiceMode::Started(lb_chain_service::State::Online),
+        };
+
+        let result = CryptarchiaInfo::try_from(info);
+
+        assert!(matches!(
+            result,
+            Err(OperationStatus {
+                code: OperationStatusCode::ValidationError,
+                ..
+            })
+        ));
+    }
 }

@@ -419,7 +419,14 @@ where
                     Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api, &epoch_config).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &storage_adapter, &mut state).await;
+                    Self::handle_lib_update(
+                        &lib_update,
+                        &storage_adapter,
+                        &cryptarchia_api,
+                        &epoch_config,
+                        &mut state,
+                    )
+                    .await;
                 }
             }
         }
@@ -1333,9 +1340,40 @@ where
     async fn handle_lib_update(
         lib_update: &LibUpdate,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
         state: &mut ServiceState<'_>,
     ) {
         log_lib_update(lib_update);
+
+        if !state.wallet().has_processed_block(lib_update.new_lib) {
+            if let Err(err) = Self::backfill_missing_blocks(
+                lib_update.new_lib,
+                state,
+                storage_adapter,
+                cryptarchia_api,
+                epoch_config,
+            )
+            .await
+            {
+                error!(
+                    target: LOG_TARGET,
+                    new_lib = ?lib_update.new_lib,
+                    %err,
+                    "Failed to backfill wallet to LIB update; retaining previous wallet LIB"
+                );
+                return;
+            }
+        }
+
+        if !state.wallet().has_processed_block(lib_update.new_lib) {
+            error!(
+                target: LOG_TARGET,
+                new_lib = ?lib_update.new_lib,
+                "Wallet did not reach new LIB after backfill; retaining previous wallet LIB"
+            );
+            return;
+        }
 
         let claimed_nullifiers = Self::collect_claimed_nullifiers_from_blocks(
             lib_update.pruned_blocks.immutable_blocks.values(),
@@ -1348,12 +1386,19 @@ where
         }
 
         let new_immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len() as u64;
-        state.advance_lib(
+        if let Err(err) = state.advance_lib(
             lib_update.new_lib,
             lib_update.pruned_blocks.all(),
             new_immutable_blocks_count,
             claimed_nullifiers,
-        );
+        ) {
+            error!(
+                target: LOG_TARGET,
+                new_lib = ?lib_update.new_lib,
+                %err,
+                "Failed to advance wallet LIB after backfill"
+            );
+        }
     }
 
     async fn collect_claimed_nullifiers_from_blocks(

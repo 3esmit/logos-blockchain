@@ -216,13 +216,18 @@ impl<'u> ServiceState<'u> {
         pruned_blocks: impl IntoIterator<Item = HeaderId>,
         new_immutable_blocks_count: u64,
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
-    ) {
+    ) -> Result<(), WalletError> {
+        if !self.wallet.has_processed_block(new_lib) {
+            return Err(WalletError::UnknownBlock(new_lib));
+        }
+
         self.lib = new_lib;
         self.wallet.prune_states(pruned_blocks);
         self.wallet.prune_vouchers(pruned_nullifiers);
         self.pending_claims
             .evict_expired(new_immutable_blocks_count, self.security_param);
         self.update_state();
+        Ok(())
     }
 
     pub const fn wallet(&self) -> &Wallet {
@@ -279,7 +284,12 @@ impl<'u> ServiceState<'u> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use lb_mmr::MerkleMountainRange;
+    use rpds::{HashTrieMapSync, HashTrieSetSync};
+    use tokio::sync::watch;
 
     const EXPIRY_BLOCKS: u64 = 4;
 
@@ -305,5 +315,43 @@ mod tests {
 
         pending_claims.evict_expired(1, EXPIRY_BLOCKS);
         assert!(!pending_claims.is_reserved(&nullifier));
+    }
+
+    #[test]
+    fn advance_lib_rejects_an_unmaterialized_wallet_state() {
+        let current_lib = HeaderId::from([0; 32]);
+        let new_lib = HeaderId::from([1; 32]);
+        let wallet = Wallet::from_lib_wallet_state(
+            std::iter::empty(),
+            Vouchers::default(),
+            current_lib,
+            WalletState {
+                utxos: HashTrieMapSync::new_sync(),
+                pk_index: HashTrieMapSync::new_sync(),
+                locked_notes: HashTrieSetSync::new_sync(),
+                epoch: 0.into(),
+                vouchers: MerkleMountainRange::new(),
+                voucher_paths: HashTrieMapSync::new_sync(),
+                voucher_paths_snapshot: HashTrieMapSync::new_sync(),
+            },
+        );
+        let (state_tx, _state_rx) = watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(state_tx));
+        let mut state = ServiceState {
+            next_new_voucher_index: 0,
+            wallet,
+            lib: current_lib,
+            updater: &updater,
+            pending_claims: PendingClaims::default(),
+            security_param: 1,
+        };
+
+        assert_eq!(
+            state.advance_lib(new_lib, std::iter::empty(), 0, std::iter::empty()),
+            Err(WalletError::UnknownBlock(new_lib))
+        );
+        assert_eq!(state.lib(), current_lib);
+        assert!(state.wallet().has_processed_block(current_lib));
+        assert!(!state.wallet().has_processed_block(new_lib));
     }
 }

@@ -28,8 +28,15 @@ pub struct TxWithId {
     tx: SignedMantleTx,
 }
 
+impl TxWithId {
+    pub(crate) fn new(tx: SignedMantleTx) -> Self {
+        let id = tx.hash();
+        Self { id, tx }
+    }
+}
+
 impl Transaction for TxWithId {
-    const HASHER: TransactionHasher<Self> = |tx| <SignedMantleTx as Transaction>::HASHER(&tx.tx);
+    const HASHER: TransactionHasher<Self> = |tx| tx.id;
     type Hash = <SignedMantleTx as Transaction>::Hash;
 
     fn as_signing(&self) -> Vec<u8> {
@@ -96,19 +103,16 @@ pub fn subscribe_to_new_blocks_sync(
                             ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
                                 .await;
                         if let Ok(Some(block)) = res {
+                            let header = block.header().clone();
+                            let signature = *block.signature();
                             let txs_with_id: Vec<TxWithId> = block
-                                .transactions()
-                                .map(|tx| TxWithId {
-                                    id: tx.hash(),
-                                    tx: tx.clone(),
-                                })
+                                .into_transactions()
+                                .into_iter()
+                                .map(TxWithId::new)
                                 .collect();
-                            let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
-                                block.header().clone(),
-                                txs_with_id,
-                                *block.signature(),
-                            )
-                            .expect("Block should always build from valid block");
+                            let block: CoreBlock<TxWithId> =
+                                CoreBlock::reconstruct(header, txs_with_id, signature)
+                                    .expect("Block should always build from valid block");
                             callback_per_block(Block::from(block).as_ptr());
                         } else {
                             logging::error!(
@@ -179,5 +183,23 @@ mod tests {
 
             assert_eq!(recv_next_event(&mut receiver).await, Some(2));
         });
+    }
+
+    #[test]
+    fn transaction_with_id_hash_returns_the_stored_id() {
+        let transaction = serde_json::from_value::<SignedMantleTx>(serde_json::json!({
+            "mantle_tx": { "ops": [] },
+            "ops_proofs": []
+        }))
+        .expect("empty transaction should deserialize");
+        let expected_id = transaction.hash();
+        let transaction_with_id = TxWithId::new(transaction);
+
+        assert_eq!(transaction_with_id.hash(), transaction_with_id.id);
+        assert_eq!(
+            serde_json::to_value(&transaction_with_id)
+                .expect("transaction wrapper should serialize")["id"],
+            serde_json::to_value(expected_id).expect("transaction hash should serialize")
+        );
     }
 }

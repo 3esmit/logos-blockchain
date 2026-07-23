@@ -43,6 +43,23 @@ impl StorageSize for TxWithId {
     }
 }
 
+async fn recv_next_event<T: Clone>(
+    receiver: &mut tokio::sync::broadcast::Receiver<T>,
+) -> Option<T> {
+    loop {
+        match receiver.recv().await {
+            Ok(event) => return Some(event),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                logging::warning!(
+                    "subscribe_to_new_blocks_sync",
+                    "Block subscriber lagged by {skipped} event(s); resuming."
+                );
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
 #[must_use]
 pub fn subscribe_to_new_blocks_sync(
     node: &LogosBlockchainNode,
@@ -73,7 +90,7 @@ pub fn subscribe_to_new_blocks_sync(
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {
-                    while let Ok(event) = block_stream.recv().await {
+                    while let Some(event) = recv_next_event(&mut block_stream).await {
                         let relay = storage_relay.clone();
                         let res: Result<Option<CoreBlock<SignedMantleTx>>, _> =
                             ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
@@ -143,4 +160,24 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
     let node = unsafe { &*node };
     let callback_per_block = into_boxed_callback(callback_per_block);
     subscribe_to_new_blocks_sync(node, callback_per_block)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovers_from_lagged_receiver() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime should build");
+
+        runtime.block_on(async {
+            let (sender, mut receiver) = tokio::sync::broadcast::channel::<u8>(1);
+            assert!(sender.send(1).is_ok());
+            assert!(sender.send(2).is_ok());
+
+            assert_eq!(recv_next_event(&mut receiver).await, Some(2));
+        });
+    }
 }

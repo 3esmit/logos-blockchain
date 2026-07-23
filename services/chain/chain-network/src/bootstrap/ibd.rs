@@ -60,10 +60,7 @@ where
             &self.mempool_adapter,
         )
         .await
-        .map_err(|e| {
-            error!("Error processing block during IBD: {:?}", e);
-            Error::from(e)
-        })
+        .map_err(Error::from)
     }
 
     async fn has_processed_block(&self, block_id: HeaderId) -> Result<bool, Error> {
@@ -312,15 +309,21 @@ where
     {
         debug!("Handling a block received from {:?}", download.peer());
 
-        self.block_processor
-            .process_block(block)
-            .await
-            .inspect_err(|e| {
+        match self.block_processor.process_block(block).await {
+            Ok(()) => {}
+            Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                lb_chain_service::api::ApiError::AlreadyApplied(header_id),
+            ))) => {
+                debug!(?header_id, "Block already applied during IBD; continuing");
+            }
+            Err(error) => {
                 error!(
-                    "Failed to process block from peer {:?}: {e:?}",
+                    "Failed to process block from peer {:?}: {error:?}",
                     download.peer()
                 );
-            })?;
+                return Err(error);
+            }
+        }
         self.start_download(download, downloads);
         Ok(())
     }
@@ -494,6 +497,29 @@ mod tests {
 
         // All blocks from the peer should be in the local chain.
         assert!(peer.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
+    }
+
+    #[tokio::test]
+    async fn already_applied_block_does_not_drop_ibd_peer() {
+        let already_applied = Block::new(1, GENESIS_ID, 1, 1);
+        let target = Block::new(2, 1, 2, 2);
+        let peer = BlockProvider::new(
+            vec![Block::genesis(), already_applied.clone(), target.clone()],
+            Ok(target.clone()),
+            2,
+            false,
+        );
+        // Model another peer applying the overlapping block after this IBD
+        // download captured its initial chain snapshot.
+        let block_processor = InitialBlockDownload::new(
+            MockBlockProcessor::with_overlapping_already_applied(&already_applied),
+            MockNetworkAdapter::<()>::new(HashMap::from([(NodeId(0), peer)])),
+        )
+        .run(config([NodeId(0)].into()))
+        .await
+        .expect("an already-applied block should not abort IBD");
+
+        assert!(block_processor.cryptarchia.has_block(&target.id));
     }
 
     #[tokio::test]
@@ -862,22 +888,49 @@ mod tests {
 
     struct MockBlockProcessor {
         cryptarchia: lb_chain_service::Cryptarchia,
+        initial_info: Option<CryptarchiaInfo>,
+        already_applied_once: Option<HeaderId>,
     }
 
     impl MockBlockProcessor {
         fn new() -> Self {
             Self {
                 cryptarchia: new_cryptarchia(),
+                initial_info: None,
+                already_applied_once: None,
+            }
+        }
+
+        fn with_overlapping_already_applied(block: &Block) -> Self {
+            let mut cryptarchia = new_cryptarchia();
+            let initial_info = cryptarchia.info();
+            cryptarchia
+                .consensus
+                .receive_block(block.id, block.parent, block.slot)
+                .expect("the overlapping block should be applied before IBD receives it");
+            Self {
+                cryptarchia,
+                initial_info: Some(initial_info),
+                already_applied_once: Some(block.id),
             }
         }
     }
 
     impl IbdBlockProcessor<Block> for MockBlockProcessor {
         async fn info(&self) -> Result<CryptarchiaInfo, Error> {
-            Ok(self.cryptarchia.info())
+            Ok(self
+                .initial_info
+                .clone()
+                .unwrap_or_else(|| self.cryptarchia.info()))
         }
 
         async fn process_block(&mut self, block: Block) -> Result<(), Error> {
+            if self.already_applied_once == Some(block.id) {
+                self.already_applied_once = None;
+                return Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                    lb_chain_service::api::ApiError::AlreadyApplied(block.id),
+                )));
+            }
             // Add the block only to the consensus, not to the ledger state
             // because the mocked block doesn't have a proof.
             // It's enough because the tests doesn't check the ledger state.

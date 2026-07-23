@@ -25,7 +25,7 @@ overwatch                     = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 serde_json                    = { workspace = true }
 tempfile                      = { workspace = true }
-tokio                         = { features = ["rt-multi-thread"], workspace = true }
+tokio                         = { features = ["rt-multi-thread", "sync"], workspace = true }
 
 [dev-dependencies]
 serde_yaml = { workspace = true }

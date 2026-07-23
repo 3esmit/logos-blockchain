@@ -286,10 +286,11 @@ impl<'u> ServiceState<'u> {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
     use lb_mmr::MerkleMountainRange;
     use rpds::{HashTrieMapSync, HashTrieSetSync};
     use tokio::sync::watch;
+
+    use super::*;
 
     const EXPIRY_BLOCKS: u64 = 4;
 

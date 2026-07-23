@@ -300,6 +300,10 @@ where
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "service startup must initialize the dependent APIs in order"
+    )]
     async fn run(mut self) -> Result<(), DynError> {
         let Self {
             mut service_resources_handle,
@@ -1346,32 +1350,15 @@ where
     ) {
         log_lib_update(lib_update);
 
-        if !state.wallet().has_processed_block(lib_update.new_lib) {
-            if let Err(err) = Self::backfill_missing_blocks(
-                lib_update.new_lib,
-                state,
-                storage_adapter,
-                cryptarchia_api,
-                epoch_config,
-            )
-            .await
-            {
-                error!(
-                    target: LOG_TARGET,
-                    new_lib = ?lib_update.new_lib,
-                    %err,
-                    "Failed to backfill wallet to LIB update; retaining previous wallet LIB"
-                );
-                return;
-            }
-        }
-
-        if !state.wallet().has_processed_block(lib_update.new_lib) {
-            error!(
-                target: LOG_TARGET,
-                new_lib = ?lib_update.new_lib,
-                "Wallet did not reach new LIB after backfill; retaining previous wallet LIB"
-            );
+        if !Self::ensure_lib_wallet_state(
+            lib_update.new_lib,
+            state,
+            storage_adapter,
+            cryptarchia_api,
+            epoch_config,
+        )
+        .await
+        {
             return;
         }
 
@@ -1398,6 +1385,47 @@ where
                 %err,
                 "Failed to advance wallet LIB after backfill"
             );
+        }
+    }
+
+    async fn ensure_lib_wallet_state(
+        new_lib: HeaderId,
+        state: &mut ServiceState<'_>,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
+    ) -> bool {
+        if state.wallet().has_processed_block(new_lib) {
+            return true;
+        }
+
+        if let Err(err) = Self::backfill_missing_blocks(
+            new_lib,
+            state,
+            storage_adapter,
+            cryptarchia_api,
+            epoch_config,
+        )
+        .await
+        {
+            error!(
+                target: LOG_TARGET,
+                ?new_lib,
+                %err,
+                "Failed to backfill wallet to LIB update; retaining previous wallet LIB"
+            );
+            return false;
+        }
+
+        if state.wallet().has_processed_block(new_lib) {
+            true
+        } else {
+            error!(
+                target: LOG_TARGET,
+                ?new_lib,
+                "Wallet did not reach new LIB after backfill; retaining previous wallet LIB"
+            );
+            false
         }
     }
 

@@ -1,14 +1,32 @@
 use std::ffi::{CString, c_char};
 
+use lb_core::block::Block as CoreBlock;
 use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx};
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
-    api::cryptarchia::{HeaderId, TxHash, into_tx_hash},
+    api::{
+        cryptarchia::{HeaderId, TxHash, into_tx_hash},
+        subscriptions::TxWithId,
+    },
     errors::OperationStatusCode,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
+
+fn block_with_transaction_ids(
+    block: CoreBlock<SignedMantleTx>,
+) -> Result<CoreBlock<TxWithId>, lb_core::block::Error> {
+    let header = block.header().clone();
+    let signature = *block.signature();
+    let transactions = block
+        .into_transactions()
+        .into_iter()
+        .map(TxWithId::new)
+        .collect();
+
+    CoreBlock::reconstruct(header, transactions, signature)
+}
 
 /// Gets a block by its header ID as a JSON string.
 ///
@@ -25,7 +43,9 @@ use crate::{
 /// A `Result` containing a JSON string representation of `Block` on success,
 /// or an [`OperationStatus`] error on failure. Returns
 /// [`OperationStatusCode::NotFound`] if no block with the given header ID
-/// exists.
+/// exists. Each serialized transaction includes its canonical `id` as a
+/// 64-character hexadecimal string. Decode that string into a 32-byte
+/// [`TxHash`] before passing it to [`get_transaction`].
 pub(crate) fn get_block_sync(
     node: &LogosBlockchainNode,
     header_id: HeaderId,
@@ -54,6 +74,13 @@ pub(crate) fn get_block_sync(
                 format!("No block found for header id {header_id:?}"),
             )
         })?;
+
+    let block = block_with_transaction_ids(block).map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to attach transaction IDs to block: {error}"),
+        )
+    })?;
 
     let json = serde_json::to_string(&block).map_err(|e| {
         OperationStatus::error(
@@ -254,6 +281,17 @@ pub(crate) fn get_blocks_sync(
             )
         })?;
 
+    let blocks = blocks
+        .into_iter()
+        .map(block_with_transaction_ids)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to attach transaction IDs to blocks: {error}"),
+            )
+        })?;
+
     let json = serde_json::to_string(&blocks).map_err(|e| {
         OperationStatus::error(
             OperationStatusCode::RuntimeError,
@@ -275,8 +313,10 @@ pub type FfiGetBlocksResult = FfiStatusResult<*mut c_char>;
 
 /// Get blocks in a slot range as a JSON array string.
 ///
-/// Returns a JSON array of blocks for the specified slot range.
-/// The JSON format matches the server's block serialization.
+/// Returns a JSON array of blocks for the specified slot range. The response
+/// is compatible with the server's block serialization and adds a canonical
+/// `id` field to each transaction as a 64-character hexadecimal string. Decode
+/// it into a 32-byte [`TxHash`] before passing it to [`get_transaction`].
 ///
 /// # Arguments
 ///
@@ -323,4 +363,63 @@ pub unsafe extern "C" fn get_blocks(
     let node = unsafe { &*node };
     let json_cstring = unwrap_or_return_error!(get_blocks_sync(node, from_slot, to_slot));
     FfiGetBlocksResult::ok(json_cstring.into_raw())
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_chain_service::Slot;
+    use lb_core::{
+        block::Block, header::HeaderId, mantle::Transaction as _,
+        proofs::leader_proof::Groth16LeaderProof,
+    };
+    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_node::SignedMantleTx;
+
+    use super::block_with_transaction_ids;
+
+    #[test]
+    fn block_projection_serializes_canonical_transaction_ids() {
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let mut proof = serde_json::to_value(Groth16LeaderProof::genesis())
+            .expect("genesis leader proof should serialize");
+        proof["leader_key"] = serde_json::to_value(signing_key.public_key())
+            .expect("leader public key should serialize");
+        let proof = serde_json::from_value(proof).expect("leader proof should deserialize");
+        let transaction = serde_json::from_value::<SignedMantleTx>(serde_json::json!({
+            "mantle_tx": { "ops": [] },
+            "ops_proofs": []
+        }))
+        .expect("empty transaction should deserialize");
+        let expected_id = transaction.hash();
+        let original =
+            serde_json::to_value(&transaction).expect("signed transaction should serialize");
+        let block = Block::create(
+            HeaderId::from([0; 32]),
+            Slot::new(1),
+            proof,
+            vec![transaction],
+            &signing_key,
+        )
+        .expect("test block should be constructible");
+        let expected_header = block.header().clone();
+        let expected_signature = *block.signature();
+
+        let projected = block_with_transaction_ids(block)
+            .expect("transaction ID projection should preserve the block root");
+        assert_eq!(projected.header().id(), expected_header.id());
+        assert_eq!(
+            projected.header().block_root(),
+            expected_header.block_root()
+        );
+        assert_eq!(projected.signature(), &expected_signature);
+        let serialized = serde_json::to_value(projected).expect("projected block should serialize");
+        let transaction = &serialized["transactions"][0];
+        let expected_id =
+            serde_json::to_value(expected_id).expect("transaction hash should serialize");
+
+        assert_eq!(transaction["id"], expected_id);
+        assert!(transaction["id"].as_str().is_some_and(|id| id.len() == 64));
+        assert_eq!(transaction["mantle_tx"], original["mantle_tx"]);
+        assert_eq!(transaction["ops_proofs"], original["ops_proofs"]);
+    }
 }

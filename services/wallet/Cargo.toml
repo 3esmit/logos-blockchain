@@ -33,7 +33,7 @@ lb-wallet                        = { workspace = true }
 overwatch                        = { workspace = true }
 
 [dev-dependencies]
-rpds                             = { workspace = true }
+rpds = { workspace = true }
 
 [lints]
 workspace = true

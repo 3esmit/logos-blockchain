@@ -32,6 +32,9 @@ lb-storage-service               = { workspace = true }
 lb-wallet                        = { workspace = true }
 overwatch                        = { workspace = true }
 
+[dev-dependencies]
+rpds = { workspace = true }
+
 [lints]
 workspace = true
 

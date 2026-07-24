@@ -4,7 +4,10 @@ use lb_api_service::http::storage::StorageAdapter as _;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
-    mantle::{StorageSize, Transaction, TransactionHasher, TxHash},
+    mantle::{
+        traits::{Hashable, StorageSize, hashable},
+        transactions::{hash::TxHash, states::Unverified},
+    },
 };
 use lb_node::{
     ApiStorageAdapter, RuntimeServiceId, SignedMantleTx, StorageService,
@@ -26,19 +29,19 @@ use crate::{
 pub struct TxWithId {
     id: TxHash,
     #[serde(flatten)]
-    tx: SignedMantleTx,
+    tx: SignedMantleTx<Unverified>,
 }
 
 impl TxWithId {
-    pub(crate) fn new(tx: SignedMantleTx) -> Self {
+    pub(crate) fn new(tx: SignedMantleTx<Unverified>) -> Self {
         let id = tx.hash();
         Self { id, tx }
     }
 }
 
-impl Transaction for TxWithId {
-    const HASHER: TransactionHasher<Self> = |tx| tx.id;
-    type Hash = <SignedMantleTx as Transaction>::Hash;
+impl Hashable for TxWithId {
+    const HASHER: hashable::Hasher<Self> = |tx| tx.id;
+    type Hash = <SignedMantleTx<Unverified> as Hashable>::Hash;
 
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()
@@ -83,7 +86,7 @@ pub fn subscribe_to_new_blocks_sync(
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
                         let relay = storage_relay.clone();
-                        let res: Result<Option<CoreBlock<SignedMantleTx>>, _> =
+                        let res: Result<Option<CoreBlock<SignedMantleTx<Unverified>>>, _> =
                             ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
                                 .await;
                         if let Ok(Some(block)) = res {
@@ -156,13 +159,13 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::Transaction as _;
+    use lb_core::mantle::{traits::Hashable as _, transactions::states::Unverified};
 
     use super::{SignedMantleTx, TxHash, TxWithId};
 
     #[test]
     fn transaction_with_id_serializes_the_hash_accepted_by_get_transaction() {
-        let transaction = serde_json::from_value::<SignedMantleTx>(serde_json::json!({
+        let transaction = serde_json::from_value::<SignedMantleTx<Unverified>>(serde_json::json!({
             "mantle_tx": { "ops": [] },
             "ops_proofs": []
         }))
@@ -185,7 +188,7 @@ mod tests {
 
     #[test]
     fn transaction_with_id_hash_returns_the_stored_id() {
-        let transaction = serde_json::from_value::<SignedMantleTx>(serde_json::json!({
+        let transaction = serde_json::from_value::<SignedMantleTx<Unverified>>(serde_json::json!({
             "mantle_tx": { "ops": [] },
             "ops_proofs": []
         }))

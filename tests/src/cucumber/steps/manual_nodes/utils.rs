@@ -9,8 +9,8 @@ use std::{
 use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
-use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, State};
-use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
+use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag};
+use lb_core::mantle::{Utxo, ops::OpId as _, traits::GenesisTx as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
 use lb_node::config::{
@@ -1064,6 +1064,9 @@ fn prepare_config_patch(
         config.user.tracing.console = ConsoleLayer::Console(TokioConfig {
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: node.port,
+            recording_path: node
+                .record_raw
+                .then(|| PathBuf::from("tokio-console-raw.jsonl")),
         });
     }
 
@@ -1137,7 +1140,7 @@ async fn verify_online(
         let mut mode_online = false;
         match client.consensus_info().await {
             Ok(val) => {
-                if matches!(val.mode, ChainServiceMode::Started(State::Online)) {
+                if matches!(val.phase, PhaseTag::Following) {
                     mode_online = true;
                 }
             }
@@ -1829,7 +1832,7 @@ pub(crate) async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: 
         };
         match node_info.started_node.client.consensus_info().await {
             Ok(consensus) => {
-                let mode = if matches!(consensus.mode, ChainServiceMode::Started(State::Online)) {
+                let mode = if matches!(consensus.phase, PhaseTag::Following) {
                     "Online"
                 } else {
                     "Bootstrapping"

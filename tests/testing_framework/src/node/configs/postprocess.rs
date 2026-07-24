@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{GenesisTx as _, Note},
+    mantle::{Note, traits::GenesisTx as _},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::{Key, ZkKey};
@@ -73,7 +73,7 @@ pub fn apply_wallet_genesis_overrides(
     }
 
     let mut transfer_op = genesis_block
-        .transactions()
+        .transactions_iter()
         .next()
         .expect("Genesis block should have a genesis tx")
         .genesis_transfer()

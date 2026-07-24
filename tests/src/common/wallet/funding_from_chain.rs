@@ -2,10 +2,14 @@ use std::collections::{HashMap, HashSet};
 
 use lb_common_http_client::{ApiBlock, Error as HttpClientError};
 use lb_core::mantle::{
-    Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
+    Op, OpProof, SignedMantleTx, TxHash, Utxo,
     gas::MainnetGasConstants,
     ops::channel::{ChannelId, ChannelKeyIndex},
-    transactions::{GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext},
+    traits::Hashable as _,
+    transactions::{
+        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, OpsProofs,
+        states::Unverified,
+    },
 };
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
 use thiserror::Error;
@@ -56,7 +60,7 @@ pub async fn funded_signed_tx(
     transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     op: Op,
     op_proof: impl FnOnce(TxHash) -> OpProof,
-) -> (SignedMantleTx, u64) {
+) -> (SignedMantleTx<Unverified>, u64) {
     let funding_source =
         current_wallet_funding_source(node, genesis_utxos, funding_account.clone())
             .await
@@ -89,9 +93,7 @@ pub async fn funded_signed_tx(
         transfer_proofs_for_funded_wallet_tx(&mantle_tx, &funding_account.secret_key)
             .expect("transfer proofs should build"),
     );
-
-    let signed_tx =
-        SignedMantleTx::new(mantle_tx, proofs).expect("funded transaction should be valid");
+    let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::try_from(proofs).unwrap());
 
     (signed_tx, fee)
 }
@@ -155,7 +157,7 @@ where
     let mut transactions_hashes = HashSet::new();
     for block in tail_blocks {
         apply_block_transactions(&mut chain_state, &block);
-        transactions_hashes.extend(block.transactions.iter().map(lb_node::Transaction::hash));
+        transactions_hashes.extend(block.transactions.iter().map(lb_node::Hashable::hash));
     }
 
     Ok((

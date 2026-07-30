@@ -18,6 +18,7 @@ lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
+lb-tx-service                 = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-wallet-service             = { workspace = true }
 multiaddr                     = { workspace = true }

@@ -1,6 +1,7 @@
 pub mod blend;
 pub mod config;
 pub mod cryptarchia;
+pub mod diagnostics;
 pub mod keys;
 pub mod leader;
 pub mod lifecycle;

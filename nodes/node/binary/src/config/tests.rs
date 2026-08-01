@@ -1,9 +1,12 @@
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr},
     path::Path,
 };
 
+use bytes::Bytes;
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tracing::Level;
 
@@ -16,9 +19,8 @@ use crate::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
         },
-        cryptarchia::{
-            ServiceConfig as CryptarchiaServiceConfig,
-            serde::{Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues},
+        cryptarchia::serde::{
+            Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
@@ -41,12 +43,33 @@ use crate::{
     },
 };
 
+const BLEND_RECOVERY_MARKER: &[u8] = b"recovery/test/blend";
+const MEMPOOL_RECOVERY_MARKER: &[u8] = b"recovery/test/mempool";
+const SDP_RECOVERY_MARKER: &[u8] = b"recovery/test/sdp";
+const WALLET_RECOVERY_MARKER: &[u8] = b"recovery/test/wallet";
+
+fn recovery_data_fixture() -> RecoveryData {
+    RecoveryData::new(HashMap::from([
+        (BLEND_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"blend")),
+        (
+            MEMPOOL_RECOVERY_MARKER.to_vec(),
+            Bytes::from_static(b"mempool"),
+        ),
+        (SDP_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"sdp")),
+        (
+            WALLET_RECOVERY_MARKER.to_vec(),
+            Bytes::from_static(b"wallet"),
+        ),
+    ]))
+}
+
 #[test]
 fn tokio_console_config_defaults_to_loopback_default_console_port() {
     let config = TokioConfig::default();
 
     assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(config.port, 6_669);
+    assert_eq!(config.recording_path, None);
 }
 
 #[test]
@@ -66,6 +89,33 @@ fn tokio_console_config_deserializes() {
 
     assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(config.port, 6_669);
+    assert_eq!(config.recording_path, None);
+}
+
+#[test]
+fn tokio_console_config_deserializes_recording_path_and_converts() {
+    let layer: ConsoleLayer = serde_yaml::from_str(
+        "
+            !Console
+            bind_address: 127.0.0.1
+            port: 6669
+            recording_path: /tmp/node-tokio-console.jsonl
+        ",
+    )
+    .expect("tokio-console config should deserialize");
+
+    let ConsoleLayer::Console(config) = layer else {
+        panic!("expected console layer");
+    };
+    let tracing_config: lb_tracing_service::ConsoleLayerSettings =
+        ConsoleLayer::Console(config.clone()).into();
+    let lb_tracing_service::ConsoleLayerSettings::Console(tracing_config) = tracing_config else {
+        panic!("expected console layer");
+    };
+
+    assert_eq!(tracing_config.bind_address, "127.0.0.1");
+    assert_eq!(tracing_config.port, 6_669);
+    assert_eq!(tracing_config.recording_path, config.recording_path);
 }
 
 #[test]
@@ -79,8 +129,9 @@ fn parse_config_path() {
 }
 
 #[test]
-fn common_recovery_folder() {
+fn service_settings_receive_recovery_data() {
     const STATE_PATH: &str = "./state";
+    let recovery_data = recovery_data_fixture();
 
     let blend_config = BlendConfig::with_required_values(BlendRequiredValues {
         non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
@@ -114,69 +165,58 @@ fn common_recovery_folder() {
 
     let deployment_settings = DeploymentSettings::default();
 
-    let blend_rewards_params = deployment_settings.blend_reward_params();
-
     let (blend_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),
         deployment: deployment_settings.blend,
     }
     .into_blend_services_settings(
-        &user_config.state,
+        recovery_data.clone(),
         &deployment_settings.time,
         &deployment_settings.cryptarchia,
     );
-    assert!(
+    assert_eq!(
         blend_service_settings
             .common
-            .recovery_path_prefix
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("blend"))
-    );
-
-    let (chain_service_settings, _, _) = CryptarchiaServiceConfig {
-        user: user_config.cryptarchia.clone(),
-        deployment: deployment_settings.cryptarchia,
-    }
-    .into_cryptarchia_services_settings(blend_rewards_params, &user_config.state);
-    assert!(
-        chain_service_settings
-            .recovery_file
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("consensus"))
+            .recovery_data
+            .take(BLEND_RECOVERY_MARKER)
+            .unwrap(),
+        Some(Bytes::from_static(b"blend"))
     );
 
     let wallet_service_settings = WalletServiceConfig {
         user: user_config.wallet.clone(),
     }
-    .into_wallet_service_settings(&user_config.state);
-    assert!(
+    .into_wallet_service_settings(recovery_data.clone());
+    assert_eq!(
         wallet_service_settings
-            .recovery_path
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("wallet"))
+            .recovery_data
+            .take(WALLET_RECOVERY_MARKER)
+            .unwrap(),
+        Some(Bytes::from_static(b"wallet"))
     );
 
     let mempool_service_settings = MempoolServiceConfig {
         deployment: deployment_settings.mempool,
     }
-    .into_mempool_service_settings(&user_config.state);
-    assert!(
+    .into_mempool_service_settings(recovery_data.clone());
+    assert_eq!(
         mempool_service_settings
-            .recovery_path
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("mempool"))
+            .recovery_data
+            .take(MEMPOOL_RECOVERY_MARKER)
+            .unwrap(),
+        Some(Bytes::from_static(b"mempool"))
     );
 
-    // The SDP service must own its recovery file under `recovery/sdp`. If it
-    // shares a path with another service (e.g. the mempool), that service
-    // overwrites the persisted `declaration_id`, so a restarted blend core node
-    // loses its declaration and silently drops out of the blend network.
     let sdp_service_settings = SdpServiceConfig {
         user: user_config.sdp.clone(),
     }
-    .into_sdp_service_settings(&user_config.state);
-    assert!(
+    .into_sdp_service_settings(recovery_data);
+    assert_eq!(
         sdp_service_settings
-            .recovery_path
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("sdp")),
-        "SDP recovery path must live under recovery/sdp, but was {:?} (collides with another service's recovery file)",
-        sdp_service_settings.recovery_path
+            .recovery_data
+            .take(SDP_RECOVERY_MARKER)
+            .unwrap(),
+        Some(Bytes::from_static(b"sdp"))
     );
 
     let storage_service_settings = StorageServiceConfig {

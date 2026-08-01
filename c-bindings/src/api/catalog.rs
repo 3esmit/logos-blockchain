@@ -6,7 +6,11 @@ use std::{
 
 use lb_api_service::http::{mantle, time};
 use lb_chain_service::Slot;
-use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx, api::ApiProcessedBlockEvent};
+use lb_core::mantle::transactions::states::Preverified;
+use lb_node::{
+    RocksBackend, RuntimeServiceId, SignedMantleTx,
+    api::serializers::blocks::ApiProcessedBlockEventOwned,
+};
 use serde::Serialize;
 
 use crate::{
@@ -158,7 +162,7 @@ pub(crate) fn get_finalized_blocks_range_sync(
     let runtime_handle = node.get_runtime_handle();
     let blocks = runtime_handle
         .block_on(mantle::get_blocks_in_slot_range_with_snapshot::<
-            SignedMantleTx,
+            SignedMantleTx<Preverified>,
             RocksBackend,
             RuntimeServiceId,
         >(
@@ -176,9 +180,9 @@ pub(crate) fn get_finalized_blocks_range_sync(
                 format!("Failed to get finalized blocks range: {error}"),
             )
         })?;
-    let events: Vec<ApiProcessedBlockEvent> = blocks
+    let events: Vec<ApiProcessedBlockEventOwned<Preverified>> = blocks
         .into_iter()
-        .map(ApiProcessedBlockEvent::from)
+        .map(ApiProcessedBlockEventOwned::from)
         .collect();
 
     json_cstring(
@@ -247,6 +251,7 @@ pub unsafe extern "C" fn get_finalized_blocks_range(
 mod tests {
     use std::collections::BTreeSet;
 
+    use lb_api_service::http::mantle::BlockWithChainState;
     use lb_core::{
         block::{Block, BlockTransactions},
         header::HeaderId,
@@ -256,7 +261,7 @@ mod tests {
 
     use super::*;
 
-    fn api_block(slot: u64, parent: HeaderId) -> Block<SignedMantleTx> {
+    fn api_block(slot: u64, parent: HeaderId) -> Block<SignedMantleTx<Preverified>> {
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let mut proof = serde_json::to_value(Groth16LeaderProof::genesis())
             .expect("genesis leader proof should serialize");
@@ -264,7 +269,7 @@ mod tests {
             .expect("leader public key should serialize");
         let proof = serde_json::from_value(proof).expect("leader proof should serialize");
 
-        Block::<SignedMantleTx>::create(
+        Block::<SignedMantleTx<Preverified>>::create(
             parent,
             Slot::new(slot),
             proof,
@@ -353,20 +358,20 @@ mod tests {
         let first_block = api_block(40, HeaderId::from([0; 32]));
         let second_block = api_block(41, first_block.header().id());
         let events = vec![
-            ApiProcessedBlockEvent {
+            ApiProcessedBlockEventOwned::from(BlockWithChainState {
                 block: first_block,
                 tip,
                 tip_slot: Slot::new(42),
                 lib,
                 lib_slot: Slot::new(41),
-            },
-            ApiProcessedBlockEvent {
+            }),
+            ApiProcessedBlockEventOwned::from(BlockWithChainState {
                 block: second_block,
                 tip,
                 tip_slot: Slot::new(42),
                 lib,
                 lib_slot: Slot::new(41),
-            },
+            }),
         ];
 
         let json = json_cstring(

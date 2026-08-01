@@ -1,6 +1,9 @@
 use std::ffi::{CString, c_char};
 
-use lb_core::block::{Block as CoreBlock, BlockTransactions};
+use lb_core::{
+    block::{Block as CoreBlock, BlockTransactions},
+    mantle::transactions::states::Unverified,
+};
 use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx};
 
 use crate::{
@@ -15,14 +18,13 @@ use crate::{
 };
 
 fn block_with_transaction_ids(
-    block: CoreBlock<SignedMantleTx>,
+    block: &CoreBlock<SignedMantleTx<Unverified>>,
 ) -> Result<CoreBlock<TxWithId>, lb_core::block::Error> {
     let header = block.header().clone();
     let signature = *block.signature();
     let transactions = block
-        .into_transactions()
-        .into_iter()
-        .map(TxWithId::new)
+        .transactions_iter()
+        .map(|tx| TxWithId::new(tx.clone()))
         .collect::<Vec<_>>();
 
     CoreBlock::reconstruct(
@@ -59,7 +61,7 @@ pub(crate) fn get_block_sync(
 
     let block = runtime_handle
         .block_on(lb_api_service::http::mantle::get_block::<
-            SignedMantleTx,
+            SignedMantleTx<Unverified>,
             RocksBackend,
             RuntimeServiceId,
         >(
@@ -79,7 +81,7 @@ pub(crate) fn get_block_sync(
             )
         })?;
 
-    let block = block_with_transaction_ids(block).map_err(|error| {
+    let block = block_with_transaction_ids(&block).map_err(|error| {
         OperationStatus::error(
             OperationStatusCode::RuntimeError,
             format!("Failed to attach transaction IDs to block: {error}"),
@@ -171,7 +173,7 @@ pub(crate) fn get_transaction_sync(
 
     let tx = runtime_handle
         .block_on(lb_api_service::http::mantle::get_transaction::<
-            SignedMantleTx,
+            SignedMantleTx<Unverified>,
             RocksBackend,
             RuntimeServiceId,
         >(overwatch_handle, tx_hash))
@@ -274,7 +276,7 @@ pub(crate) fn get_blocks_sync(
 
     let blocks = runtime_handle
         .block_on(lb_api_service::http::mantle::get_immutable_blocks::<
-            SignedMantleTx,
+            SignedMantleTx<Unverified>,
             RocksBackend,
             RuntimeServiceId,
         >(overwatch_handle, from_slot, to_slot))
@@ -286,7 +288,7 @@ pub(crate) fn get_blocks_sync(
         })?;
 
     let blocks = blocks
-        .into_iter()
+        .iter()
         .map(block_with_transaction_ids)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {

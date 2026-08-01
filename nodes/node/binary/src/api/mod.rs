@@ -5,5 +5,5 @@ pub use serializers::blocks::ApiProcessedBlockEvent;
 mod openapi;
 mod queries;
 mod responses;
-mod serializers;
+pub mod serializers;
 mod tracing;

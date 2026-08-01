@@ -1,4 +1,4 @@
-use lb_core_macros::NomCodec;
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -6,16 +6,15 @@ use thiserror::Error;
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
         channel::Channels,
-        ledger::{self, Inputs, Operation, Outputs, Utxos},
-        nom::NomEncode as _,
+        ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos},
         ops::OpId,
+        transactions::hash::TxHashView,
     },
     sdp::locked_notes::LockedNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct TransferOp {
     pub inputs: Inputs,
     pub outputs: Outputs,
@@ -30,6 +29,15 @@ impl TransferOp {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.inputs.is_empty() && self.outputs.is_empty()
+    }
+
+    pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
+        self.outputs.utxos(self)
+    }
+
+    #[must_use]
+    pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
+        self.outputs.utxo_by_index(index, self)
     }
 
     pub fn balance(&self, utxos: &Utxos) -> Result<i128, TransferError> {
@@ -48,7 +56,7 @@ impl TransferOp {
 
 impl OpId for TransferOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 
@@ -70,39 +78,55 @@ pub struct TransferValidationContext<'a> {
     pub locked_notes: &'a LockedNotes,
     pub channels: &'a Channels,
     pub utxos: &'a Utxos,
-    pub tx_hash: &'a TxHash,
-    pub transfer_sig: &'a ZkSignature,
+    pub tx_hash_view: &'a TxHashView,
+    pub proof: &'a ZkSignature,
 }
 
 impl Operation<TransferValidationContext<'_>> for TransferOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = Utxos
     where
         Self: 'a;
-    type Error = TransferError;
+    type VerificationError = TransferError;
+    type ExecutionError = TransferError;
 
-    fn validate(&self, ctx: &TransferValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
         // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
             return Err(TransferError::NoInputTransfer);
         }
+
+        // Validate Outputs
+        self.outputs.validate()?;
+
+        Ok(())
+    }
+
+    fn verify(&self, ctx: &TransferValidationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Validate Inputs
         self.inputs
             .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
-        // Validate Outputs
-        self.outputs.validate()?;
+
         // Check the transfer Proof
         let pks = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.to_fr(), ctx.transfer_sig) {
+        if !ZkPublicKey::verify_multi(&pks, ctx.tx_hash_view.as_fr(), ctx.proof) {
             return Err(TransferError::InvalidProof);
         }
+
         Ok(())
     }
 
     fn execute(
         &self,
         mut utxos: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger
@@ -117,10 +141,10 @@ mod test {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::mantle::{Note, NoteId, Utxo};
+    use crate::mantle::{Note, NoteId};
 
     #[test]
-    fn test_utxo_by_index() {
+    fn test_utxos_and_utxo_by_index() {
         let pk0 = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
         let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
@@ -133,7 +157,7 @@ mod test {
             ]),
         };
         assert_eq!(
-            transfer.outputs.utxo_by_index(0, &transfer),
+            transfer.utxo_by_index(0),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 0,
@@ -141,7 +165,7 @@ mod test {
             })
         );
         assert_eq!(
-            transfer.outputs.utxo_by_index(1, &transfer),
+            transfer.utxo_by_index(1),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 1,
@@ -149,7 +173,7 @@ mod test {
             })
         );
         assert_eq!(
-            transfer.outputs.utxo_by_index(2, &transfer),
+            transfer.utxo_by_index(2),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 2,
@@ -157,6 +181,6 @@ mod test {
             })
         );
 
-        assert!(transfer.outputs.utxo_by_index(3, &transfer).is_none());
+        assert!(transfer.utxo_by_index(3).is_none());
     }
 }

@@ -59,7 +59,7 @@ fn cryptarchia_switch_to_online() {
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
         config,
-        lb_cryptarchia_engine::State::Bootstrapping,
+        State::Bootstrapping,
         Slot::new(0),
         0,
     );
@@ -169,7 +169,7 @@ async fn get_block_ids_from_memory_and_storage() {
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
         config,
-        lb_cryptarchia_engine::State::Online,
+        State::Online,
         Slot::genesis(),
         0,
     );
@@ -357,7 +357,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverifie
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
         config,
-        lb_cryptarchia_engine::State::Online,
+        State::Online,
         Slot::genesis(),
         0,
     );

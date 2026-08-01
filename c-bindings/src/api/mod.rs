@@ -1,5 +1,6 @@
 pub mod blend;
 pub mod catalog;
+pub mod channel;
 pub mod config;
 pub mod cryptarchia;
 pub mod diagnostics;
@@ -10,6 +11,7 @@ pub(crate) mod memory;
 pub mod peer;
 pub mod storage;
 pub mod subscriptions;
+pub mod time;
 pub(crate) mod types;
 pub mod wallet;
 

@@ -151,7 +151,6 @@ impl LocalDeployerEnv for LbcEnv {
         label: &str,
     ) -> Result<LaunchSpec, DynError> {
         let mut config = config.clone();
-        ensure_recovery_paths(dir).map_err(|source| -> DynError { source.into() })?;
 
         record_system_monitor_event(
             "node_runtime_prepared",
@@ -169,6 +168,24 @@ impl LocalDeployerEnv for LbcEnv {
 
         config.user.state.base_folder = dir.to_path_buf();
         "db".clone_into(&mut config.user.storage.backend.folder_name);
+
+        if let config::tracing::serde::console::Layer::Console(console) =
+            &mut config.user.tracing.console
+            && let Some(recording_path) = &mut console.recording_path
+        {
+            if recording_path.is_relative() {
+                let relative_path = recording_path.clone();
+                *recording_path = dir.join(relative_path);
+            }
+            if let Some(parent) = recording_path.parent() {
+                fs::create_dir_all(parent).map_err(|source| {
+                    io::Error::other(format!(
+                        "failed to prepare Tokio console recording path `{}`: {source}",
+                        recording_path.display()
+                    ))
+                })?;
+            }
+        }
 
         let user_yaml = serde_yaml::to_string(&config.user).map_err(io::Error::other)?;
         let deployment_yaml =
@@ -207,27 +224,6 @@ impl LocalDeployerEnv for LbcEnv {
     async fn wait_readiness_stable(nodes: &[Node<Self>]) -> Result<(), DynError> {
         super::readiness::wait_readiness_stable(nodes).await
     }
-}
-
-fn ensure_recovery_paths(base_dir: &Path) -> io::Result<()> {
-    let recovery_dir = base_dir.join("recovery");
-    fs::create_dir_all(&recovery_dir)?;
-
-    let mempool_path = recovery_dir.join("mempool.json");
-    if !mempool_path.exists() {
-        fs::write(&mempool_path, "{}")?;
-    }
-
-    let blend_core_path = recovery_dir.join("blend").join("core.json");
-    if let Some(parent) = blend_core_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    if !blend_core_path.exists() {
-        fs::write(&blend_core_path, "{}")?;
-    }
-
-    Ok(())
 }
 
 fn add_endpoint_ports(endpoints: &mut NodeEndpoints, config: &RunConfig) {
@@ -311,6 +307,16 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
         relative_path: PathBuf::from(relative_path),
         contents,
     }
+}
+
+/// Resolves (building if necessary) the node binary for `node_binary_profile`
+/// and populates the process-local binary cache.
+pub fn ensure_node_binary_built(
+    node_binary_profile: &NodeBinaryProfile,
+) -> Result<PathBuf, DynError> {
+    node_binary_provider(node_binary_profile)
+        .resolve()
+        .map_err(Into::into)
 }
 
 fn node_binary_provider(node_binary_profile: &NodeBinaryProfile) -> BinaryProviderRef {

@@ -205,6 +205,7 @@ pub enum MetricsLayerSettings {
 pub struct TokioConsoleConfig {
     pub bind_address: String,
     pub port: u16,
+    pub recording_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -285,6 +286,7 @@ impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for Tracing<RuntimeServiceI
 where
     RuntimeServiceId: AsServiceId<Self> + Display + Send,
 {
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
@@ -357,15 +359,31 @@ where
             ..
         } = logger_layers;
 
+        #[cfg(feature = "tokio-console")]
+        let console_layer = match &config.console {
+            ConsoleLayerSettings::Console(console_config) => {
+                console::create_console_layer::<LoggerSubscriber>(console_config)?
+            }
+            ConsoleLayerSettings::None => None,
+        };
+
         ONCE_INIT.call_once(move || {
             let mut layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
 
+            #[cfg(feature = "tokio-console")]
+            let mut display_tokio_console_msg = None;
             let level_filter = {
                 #[cfg(feature = "tokio-console")]
                 {
-                    if let ConsoleLayerSettings::Console(console_config) = &config.console
-                        && let Some(console_layer) = console::create_console_layer(console_config)
-                    {
+                    if let Some(console_layer) = console_layer {
+                        if let ConsoleLayerSettings::Console(console_config) = &config.console
+                            && let Some(recording_path) = &console_config.recording_path
+                        {
+                            display_tokio_console_msg = Some(format!(
+                                "Tokio console raw recording is enabled at `{}`",
+                                recording_path.display()
+                            ));
+                        }
                         layers.push(console_layer);
                         LevelFilter::TRACE
                     } else {
@@ -387,6 +405,11 @@ where
                 .with(level_filter)
                 .with(layers)
                 .init();
+
+            #[cfg(feature = "tokio-console")]
+            if let Some(msg) = display_tokio_console_msg {
+                tracing::info!(target: LOG_TARGET, "{msg}");
+            }
         });
 
         Ok(Self {

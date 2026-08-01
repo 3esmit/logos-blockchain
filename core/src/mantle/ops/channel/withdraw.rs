@@ -1,3 +1,4 @@
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -6,15 +7,18 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Utxos},
-        nom::{NomCodec, NomEncode as _},
-        ops::{OpId, channel::ChannelId},
+        ops::{
+            OpId,
+            channel::{ChannelId, verification::verify_channel_multi_sig},
+        },
+        transactions::{OperationVerificationHelper, hash::TxHashView},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
 };
 
 // ChannelWithdraw = ChannelId Inputs — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -22,7 +26,7 @@ pub struct ChannelWithdrawOp {
 
 impl OpId for ChannelWithdrawOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 
@@ -30,8 +34,10 @@ pub struct WithdrawValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
-    pub tx_hash: &'a TxHash,
-    pub withdraw_sigs: &'a ChannelMultiSigProof,
+    pub tx_hash_view: &'a TxHashView,
+    pub proof: &'a ChannelMultiSigProof,
+    pub op_index: usize,
+    pub helper: &'a dyn OperationVerificationHelper,
 }
 
 pub struct WithdrawExecutionContext {
@@ -40,18 +46,38 @@ pub struct WithdrawExecutionContext {
 }
 
 impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = WithdrawExecutionContext
     where
         Self: 'a;
-    type Error = Error;
+    type VerificationError = Error;
+    type ExecutionError = Error;
 
-    fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check that the channel exist
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        Ok(())
+    }
+
+    fn verify(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+        verify_channel_multi_sig(
+            &self.channel_id,
+            ctx.proof,
+            ctx.tx_hash_view.as_bytes(),
+            ctx.helper,
+            ctx.op_index,
+        )
+        .map_err(|_error| Error::InvalidSignature)?; // FIXME: Discards error details
+
+        // Check that the channel exists
         let channel =
             ctx.channels
-                .channels
-                .get(&self.channel_id)
+                .channel_state(&self.channel_id)
                 .ok_or(Error::ChannelNotFound {
                     channel_id: self.channel_id,
                 })?;
@@ -65,7 +91,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         )?;
 
         // Check there is enough signatures
-        let signatures = ctx.withdraw_sigs.signatures();
+        let signatures = ctx.proof.signatures();
         if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
@@ -80,7 +106,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
                 .accredited_keys
                 .get(sig.channel_key_index as usize)
                 .ok_or(Error::InvalidSignature)?
-                .verify(ctx.tx_hash.as_signing_bytes().as_ref(), &sig.signature)
+                .verify(ctx.tx_hash_view.as_bytes(), &sig.signature)
                 .is_err()
             {
                 return Err(Error::InvalidSignature);
@@ -93,7 +119,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         // Release the inputs from the channel. The notes keep their NoteId,
         // value and ZkPublicKey and stay in the ledger as regular notes.
         for note_id in self.inputs.iter() {

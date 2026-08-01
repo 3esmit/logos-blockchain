@@ -2,6 +2,8 @@ use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
+use lb_blake2btree::Blake2bTree;
+use lb_codec::BinaryCodec;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
@@ -16,7 +18,6 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::Channels,
-        nom::NomCodec,
         ops::{OpId, channel::ChannelId},
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -32,26 +33,39 @@ use crate::{
 // memory usage (e.g., 68GB allocation). As an example, if the network currently
 // limits maximum transaction size to 1MiB, for memory safety limits we can
 // allow 4MiB.
-const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
+pub const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
 const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
 pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
 pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
-pub trait Operation<ValidationContext> {
+// TODO: Specific proof type check?
+pub trait Operation<VerificationContext> {
+    type PreverificationContext<'a>
+    where
+        Self: 'a;
     type ExecutionContext<'a>
     where
         Self: 'a;
-    type Error;
-    fn validate(&self, ctx: &ValidationContext) -> Result<(), Self::Error>;
+
+    type VerificationError;
+    type ExecutionError;
+
+    fn preverify(
+        &self,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError>;
+
+    fn verify(&self, context: &VerificationContext) -> Result<(), Self::VerificationError>;
+
     fn execute(
         &self,
-        ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error>;
+        context: Self::ExecutionContext<'_>,
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError>;
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
-pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
+pub type Declarations = Blake2bTree<DeclarationId, Declaration>;
 
 pub type Value = u64;
 
@@ -91,7 +105,7 @@ pub enum LedgerError {
     Outputs(#[from] OutputsError),
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
@@ -210,7 +224,7 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct Inputs(BoundedInputs);
 
 impl Inputs {
@@ -393,7 +407,7 @@ impl<'input> IntoIterator for &'input Inputs {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, NomCodec,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, BinaryCodec,
 )]
 #[serde(transparent)]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
@@ -422,7 +436,7 @@ impl From<Fr> for NoteId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, NomCodec)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, BinaryCodec)]
 pub struct Note {
     pub value: Value,
     pub pk: ZkPublicKey,
@@ -464,7 +478,7 @@ impl Utxo {
     #[must_use]
     pub fn id(&self) -> NoteId {
         // constants and structure as defined in the Mantle spec:
-        // https://www.notion.so/nomos-tech/v1-4-Mantle-Specification-335261aa09df8065a38acff4b25aee82
+        // https://lip.logos.co/blockchain/raw/bedrock-v1.1-mantle-specification.html
 
         let op_id: Fr = Fr::from_le_bytes_mod_order(self.op_id.as_ref());
         let output_index =

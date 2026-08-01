@@ -170,36 +170,6 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
     subscribe_to_new_blocks_sync(node, callback_per_block)
 }
 
-#[cfg(test)]
-mod tests {
-    use lb_core::mantle::{traits::Hashable as _, transactions::states::Unverified};
-
-    use super::{SignedMantleTx, TxHash, TxWithId};
-
-    #[test]
-    fn transaction_with_id_serializes_the_hash_accepted_by_get_transaction() {
-        let transaction = serde_json::from_value::<SignedMantleTx<Unverified>>(serde_json::json!({
-            "mantle_tx": { "ops": [] },
-            "ops_proofs": []
-        }))
-        .expect("empty transaction should deserialize");
-        let expected_hash = transaction.hash();
-        let original =
-            serde_json::to_value(&transaction).expect("signed transaction should serialize");
-        let transaction_with_id = TxWithId::new(transaction);
-        let serialized = serde_json::to_value(&transaction_with_id)
-            .expect("transaction with id should serialize");
-        let emitted_id = serde_json::from_value::<TxHash>(serialized["id"].clone())
-            .expect("emitted id should deserialize as a transaction hash");
-
-        assert!(serialized["id"].as_str().is_some_and(|id| id.len() == 64));
-        assert_eq!(emitted_id, expected_hash);
-        assert_eq!(transaction_with_id.hash(), expected_hash);
-        assert_eq!(serialized["mantle_tx"], original["mantle_tx"]);
-        assert_eq!(serialized["ops_proofs"], original["ops_proofs"]);
-    }
-}
-
 /// Serializes `value` as JSON and invokes `on_event` with a pointer to the
 /// NUL-terminated string. The pointer is only valid for the duration of the
 /// callback invocation.
@@ -353,4 +323,34 @@ pub unsafe extern "C" fn subscribe_to_lib_blocks(
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
     subscribe_to_lib_blocks_sync(node, into_boxed_callback(callback_per_event))
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::{traits::Hashable as _, transactions::states::Unverified};
+
+    use super::{SignedMantleTx, TxHash, TxWithId};
+
+    #[test]
+    fn transaction_with_id_serializes_the_hash_accepted_by_get_transaction() {
+        let transaction = serde_json::from_value::<SignedMantleTx<Unverified>>(serde_json::json!({
+            "mantle_tx": { "ops": [] },
+            "ops_proofs": []
+        }))
+        .expect("empty transaction should deserialize");
+        let expected_hash = transaction.hash();
+        let original =
+            serde_json::to_value(&transaction).expect("signed transaction should serialize");
+        let transaction_with_id = TxWithId::new(transaction);
+        let serialized = serde_json::to_value(&transaction_with_id)
+            .expect("transaction with id should serialize");
+        let emitted_id = serde_json::from_value::<TxHash>(serialized["id"].clone())
+            .expect("emitted id should deserialize as a transaction hash");
+
+        assert!(serialized["id"].as_str().is_some_and(|id| id.len() == 64));
+        assert_eq!(emitted_id, expected_hash);
+        assert_eq!(transaction_with_id.hash(), expected_hash);
+        assert_eq!(serialized["mantle_tx"], original["mantle_tx"]);
+        assert_eq!(serialized["ops_proofs"], original["ops_proofs"]);
+    }
 }

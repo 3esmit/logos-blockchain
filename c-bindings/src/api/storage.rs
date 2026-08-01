@@ -18,7 +18,7 @@ use crate::{
 };
 
 fn block_with_transaction_ids(
-    block: CoreBlock<SignedMantleTx<Unverified>>,
+    block: &CoreBlock<SignedMantleTx<Unverified>>,
 ) -> Result<CoreBlock<TxWithId>, lb_core::block::Error> {
     let header = block.header().clone();
     let signature = *block.signature();
@@ -81,7 +81,7 @@ pub(crate) fn get_block_sync(
             )
         })?;
 
-    let block = block_with_transaction_ids(block).map_err(|error| {
+    let block = block_with_transaction_ids(&block).map_err(|error| {
         OperationStatus::error(
             OperationStatusCode::RuntimeError,
             format!("Failed to attach transaction IDs to block: {error}"),
@@ -288,7 +288,7 @@ pub(crate) fn get_blocks_sync(
         })?;
 
     let blocks = blocks
-        .into_iter()
+        .iter()
         .map(block_with_transaction_ids)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {

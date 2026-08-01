@@ -96,6 +96,7 @@ impl adapter::Node for MockNode {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
         Ok(ChainServiceInfo {
             cryptarchia_info: CryptarchiaInfo {
+                genesis_id: None,
                 lib: self.lib,
                 lib_slot: self.lib_slot,
                 tip: self.tip,

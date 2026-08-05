@@ -45,3 +45,6 @@ ignored = [
 
 [features]
 tokio-task-names = ["lb-utils/tokio-task-names"]
+
+[dev-dependencies]
+rpds = { features = ["serde"], workspace = true }

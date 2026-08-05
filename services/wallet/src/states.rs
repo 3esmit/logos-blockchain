@@ -313,6 +313,22 @@ impl<'u> ServiceState<'u> {
         new_immutable_blocks_count: u64,
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
     ) {
+        // LIB notifications and block subscriptions are independent streams.
+        // A notification can therefore arrive before the wallet has applied
+        // the corresponding block. Do not move the persisted LIB forward (or
+        // prune the previous state) until the announced state is materialized.
+        // The next LIB notification retries the advancement after the block
+        // stream catches up; importantly, this path never panics.
+        if self.wallet.wallet_state_at(new_lib).is_err() {
+            debug!(
+                target: wallet::SERVICE,
+                ?new_lib,
+                current_lib = ?self.lib,
+                "Deferring LIB advancement until wallet state is materialized"
+            );
+            return;
+        }
+
         self.lib = new_lib;
         self.wallet.prune_states(pruned_blocks);
         self.wallet.prune_vouchers(pruned_nullifiers);
@@ -408,7 +424,10 @@ impl<'u> ServiceState<'u> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+    use tokio::sync::watch;
 
     use super::*;
 
@@ -485,5 +504,43 @@ mod tests {
         pending_notes.release([note_id]);
 
         assert!(pending_notes.note_ids().is_empty());
+    }
+
+    #[test]
+    fn lib_update_is_deferred_until_wallet_state_exists() {
+        let current_lib = HeaderId::from([1; 32]);
+        let announced_lib = HeaderId::from([2; 32]);
+        let empty_state = WalletState {
+            utxos: rpds::HashTrieMapSync::new_sync(),
+            pk_index: rpds::HashTrieMapSync::new_sync(),
+            locked_notes: rpds::HashTrieSetSync::new_sync(),
+            channel_notes: rpds::HashTrieSetSync::new_sync(),
+            epoch: 0.into(),
+            vouchers: lb_mmr::MerkleMountainRange::new(),
+            voucher_paths: rpds::HashTrieMapSync::new_sync(),
+            voucher_paths_snapshot: rpds::HashTrieMapSync::new_sync(),
+        };
+        let wallet = Wallet::from_lib_wallet_state(
+            HashMap::<ZkPublicKey, String>::new(),
+            Vouchers::default(),
+            current_lib,
+            empty_state,
+        );
+        let (sender, _receiver) = watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = ServiceState {
+            next_new_voucher_index: 0,
+            wallet,
+            lib: current_lib,
+            updater: &updater,
+            pending_claims: PendingClaims::default(),
+            pending_notes: PendingNotes::default(),
+            pending_note_expiry_blocks: EXPIRY_BLOCKS,
+            security_param: EXPIRY_BLOCKS,
+        };
+
+        state.advance_lib(announced_lib, [], 1, []);
+
+        assert_eq!(state.lib(), current_lib);
     }
 }

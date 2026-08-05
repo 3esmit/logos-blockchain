@@ -201,6 +201,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           TESTS_RESULT: ${{ needs.tests.result }}
+          SKIP_SELF_HOSTED: ${{ contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE') }}
         run: |
           if [ "$EVENT_NAME" = "merge_group" ]; then
             echo "Nextest unit tests already passed before merge-queue admission"
@@ -208,6 +209,11 @@ jobs:
           fi
 
           if [ "$TESTS_RESULT" = "success" ]; then
+            exit 0
+          fi
+
+          if [ "$TESTS_RESULT" = "skipped" ] && [ "$SKIP_SELF_HOSTED" = "true" ]; then
+            echo "Self-hosted nextest lanes intentionally skipped for DO NOT MERGE pull request"
             exit 0
           fi
 

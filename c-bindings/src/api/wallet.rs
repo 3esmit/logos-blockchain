@@ -55,6 +55,27 @@ pub type FfiClaimableVouchersResult = FfiStatusResult<ClaimableVouchers>;
 
 type WalletService = NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
 
+// This future runs synchronously on the node-owned runtime and is never
+// spawned.
+#[expect(
+    clippy::future_not_send,
+    reason = "This future runs synchronously and is never spawned."
+)]
+async fn wallet_service_ready(node: &LogosBlockchainNode) -> Result<(), OperationStatus> {
+    node.get_overwatch_handle()
+        .status_watcher::<WalletService>()
+        .await
+        .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
+        .await
+        .map(|_| ())
+        .map_err(|status| {
+            OperationStatus::error(
+                OperationStatusCode::ServiceError,
+                format!("Wallet service is not ready: {status:?}"),
+            )
+        })
+}
+
 /// Resolved tip plus the `(note ID, value)` pairs for a wallet address.
 type WalletNotesData = (lb_core::header::HeaderId, Vec<(CoreNoteId, Value)>);
 
@@ -75,6 +96,7 @@ pub(crate) fn get_known_addresses_sync(
 ) -> StatusResult<Vec<ZkPublicKey>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
+        wallet_service_ready(node).await?;
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
             node.get_overwatch_handle(),
         )
@@ -267,19 +289,7 @@ pub(crate) fn get_claimable_vouchers_sync(
 ) -> StatusResult<TipResponse<Vec<ClaimableVoucherInfo>>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
-        if let Err(status) = node
-            .get_overwatch_handle()
-            .status_watcher::<WalletService>()
-            .await
-            .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
-            .await
-        {
-            return Err(OperationStatus::error(
-                OperationStatusCode::ServiceError,
-                format!("Wallet service is not ready: {status:?}"),
-            ));
-        }
-
+        wallet_service_ready(node).await?;
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
             node.get_overwatch_handle(),
         )
@@ -389,22 +399,22 @@ pub(crate) fn get_balance_sync(
     wallet_address: ZkPublicKey,
 ) -> StatusResult<Option<Value>> {
     let runtime_handle = node.get_runtime_handle();
-    runtime_handle
-        .block_on(async {
-            let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
-                node.get_overwatch_handle(),
-            )
-            .await;
-            api.get_balance(Some(tip), wallet_address)
-                .await
-                .map(|tip_response| tip_response.response.map(|balance| balance.balance))
-        })
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to get balance: {error}"),
-            )
-        })
+    runtime_handle.block_on(async {
+        wallet_service_ready(node).await?;
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
+            node.get_overwatch_handle(),
+        )
+        .await;
+        api.get_balance(Some(tip), wallet_address)
+            .await
+            .map(|tip_response| tip_response.response.map(|balance| balance.balance))
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to get balance: {error}"),
+                )
+            })
+    })
 }
 
 pub type FfiBalanceResult = FfiStatusResult<Value>;
@@ -490,27 +500,27 @@ pub(crate) fn get_wallet_notes_sync(
     wallet_address: ZkPublicKey,
 ) -> StatusResult<Option<WalletNotesData>> {
     let runtime_handle = node.get_runtime_handle();
-    runtime_handle
-        .block_on(async {
-            let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
-                node.get_overwatch_handle(),
-            )
-            .await;
-            api.get_balance(Some(tip), wallet_address)
-                .await
-                .map(|tip_response| {
-                    let resolved_tip = tip_response.tip;
-                    tip_response
-                        .response
-                        .map(|balance| (resolved_tip, balance.notes.into_iter().collect()))
-                })
-        })
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to get balance: {error}"),
-            )
-        })
+    runtime_handle.block_on(async {
+        wallet_service_ready(node).await?;
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
+            node.get_overwatch_handle(),
+        )
+        .await;
+        api.get_balance(Some(tip), wallet_address)
+            .await
+            .map(|tip_response| {
+                let resolved_tip = tip_response.tip;
+                tip_response
+                    .response
+                    .map(|balance| (resolved_tip, balance.notes.into_iter().collect()))
+            })
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to get balance: {error}"),
+                )
+            })
+    })
 }
 
 pub type FfiWalletNotesResult = FfiStatusResult<WalletNotes>;
@@ -694,6 +704,7 @@ pub(crate) fn transfer_funds_sync(
 ) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
+        wallet_service_ready(node).await?;
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
 
@@ -947,6 +958,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
 ) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
+        wallet_service_ready(node).await?;
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
 
@@ -1251,6 +1263,7 @@ pub(crate) fn channel_deposit_sync(
 ) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
+        wallet_service_ready(node).await?;
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
 

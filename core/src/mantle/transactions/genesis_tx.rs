@@ -1,7 +1,7 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
-use lb_groth16::Fr;
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError, take};
+use lb_groth16::{Fr, fr_from_bytes_unchecked};
 use lb_utils::bounded::{BoundedString, BoundedVec};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -138,11 +138,51 @@ fn valid_cryptarchia_inscription(
         ))));
     }
 
-    Ok(
-        CryptarchiaParameter::decode(inscription.inscription.as_ref(), &())
-            .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))?
-            .1,
-    )
+    decode_cryptarchia_parameter(inscription.inscription.as_ref())
+        .map(|(_, parameter)| parameter)
+        .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))
+}
+
+/// Decode the deployment inscription while preserving the field-element
+/// reduction used by published deployment ceremonies. New profiles remain
+/// canonical; only legacy deployment encodings accept historical
+/// non-canonical epoch nonce bytes.
+fn decode_cryptarchia_parameter(
+    input: &[u8],
+) -> Result<(&[u8], CryptarchiaParameter), DecodeError> {
+    let (input, chain_id, legacy_encoding) = decode_chain_id(input)?;
+    let (input, genesis_time) = GenesisTime::decode(input, &())?;
+    let (nonce_bytes, rest) = take::<Fr>(input, 32)?;
+    let epoch_nonce = match Fr::decode(nonce_bytes, &()) {
+        Ok((_, value)) => value,
+        Err(_error) if legacy_encoding => fr_from_bytes_unchecked(nonce_bytes),
+        Err(error) => return Err(error),
+    };
+    Ok((
+        rest,
+        CryptarchiaParameter {
+            chain_id,
+            genesis_time,
+            epoch_nonce,
+        },
+    ))
+}
+
+/// Decode both the current compact chain-id length prefix and the legacy
+/// eight-byte prefix used by published deployment profiles. The legacy form
+/// is recognized only when its high seven bytes are zero, which cannot be a
+/// valid compact UTF-8 chain ID prefix.
+fn decode_chain_id(input: &[u8]) -> Result<(&[u8], ChainId, bool), DecodeError> {
+    if input.len() >= 8 && input[1..8].iter().all(|byte| *byte == 0) && input[0] != 0 {
+        let legacy_length = usize::from(input[0]);
+        let (bytes, rest) = take::<ChainId>(&input[8..], legacy_length)?;
+        let chain_id = ChainId::try_from(bytes.to_vec())
+            .map_err(|_| DecodeError::invalid_value::<ChainId>("invalid chain id bytes"))?;
+        return Ok((rest, chain_id, true));
+    }
+
+    let (rest, chain_id) = ChainId::decode(input, &())?;
+    Ok((rest, chain_id, false))
 }
 
 impl Hashable for GenesisTx {
@@ -744,6 +784,37 @@ mod tests {
             CryptarchiaParameter::decode(&encoded, &()).unwrap_err(),
             DecodeError::InvalidValue { .. }
         ));
+    }
+
+    #[test]
+    fn legacy_deployment_encoding_is_accepted() {
+        let chain_id = ChainId::try_from(String::from("testnet-0.2.0")).unwrap();
+        let parameter = CryptarchiaParameter {
+            chain_id: chain_id.clone(),
+            genesis_time: GenesisTime::new(1000),
+            epoch_nonce: Fr::ZERO,
+        };
+        let compact = parameter.encode_to_vec();
+        let chain_id_length = u64::from(compact[0]);
+        let mut legacy = chain_id_length.to_le_bytes().to_vec();
+        legacy.extend_from_slice(&compact[1..]);
+
+        let (rest, decoded) = decode_cryptarchia_parameter(&legacy).unwrap();
+
+        assert!(rest.is_empty());
+        assert_eq!(decoded.chain_id, chain_id);
+        assert_eq!(decoded.genesis_time, parameter.genesis_time);
+        assert_eq!(decoded.epoch_nonce, parameter.epoch_nonce);
+    }
+
+    #[test]
+    fn compact_deployment_encoding_rejects_noncanonical_nonce() {
+        let chain_id = ChainId::try_from(String::from("testnet-0.2.0")).unwrap();
+        let mut encoded = chain_id.encode_to_vec();
+        GenesisTime::new(1000).encode_into(&mut encoded);
+        encoded.extend_from_slice(&[0xff; 32]);
+
+        assert!(decode_cryptarchia_parameter(&encoded).is_err());
     }
 
     #[test]

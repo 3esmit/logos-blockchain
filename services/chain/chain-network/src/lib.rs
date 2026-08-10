@@ -322,17 +322,12 @@ where
             }
             Err(e) => {
                 error!(
-                    "Initial Block Download failed: {e:?}. Initiating graceful shutdown. Retry with different bootstrap peers"
+                    "Initial Block Download failed: {e:?}. Chain network service will stop; retry with different bootstrap peers"
                 );
-                if let Err(shutdown_err) = self
-                    .service_resources_handle
-                    .overwatch_handle
-                    .shutdown()
-                    .await
-                {
-                    error!("Failed to shutdown overwatch: {shutdown_err:?}");
-                }
-
+                // The service runner observes this task's completion and performs
+                // service-local cleanup. Calling global Overwatch shutdown from
+                // this task races that cleanup and can double-panic while a node
+                // is unwinding an all-peer IBD failure.
                 return Err(DynError::from(format!(
                     "Initial Block Download failed: {e:?}"
                 )));

@@ -18,7 +18,7 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceData,
-        relay::{OutboundRelay, RelayError},
+        relay::{OutboundRelay, OutboundRelayError},
     },
 };
 use tokio::sync::oneshot::{self, error::RecvError};
@@ -30,24 +30,14 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletApiError {
-    #[error("Failed to relay message with wallet:{relay_error:?}, msg={msg:?}")]
-    RelaySend {
-        relay_error: RelayError,
-        msg: Box<WalletMsg>,
-    },
+    #[error("Failed to relay message with wallet: {0}")]
+    RelaySend(#[from] OutboundRelayError<WalletMsg>),
     #[error("Failed to recv message from wallet: {0}")]
     RelayRecv(#[from] RecvError),
     #[error(transparent)]
     Wallet(#[from] WalletServiceError),
     #[error(transparent)]
     TxBuilderError(#[from] TxBuilderError),
-}
-
-impl From<(RelayError, WalletMsg)> for WalletApiError {
-    fn from((relay_error, msg): (RelayError, WalletMsg)) -> Self {
-        let msg = Box::new(msg);
-        Self::RelaySend { relay_error, msg }
-    }
 }
 
 pub trait WalletServiceData:

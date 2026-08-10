@@ -506,8 +506,12 @@ where
         }
     };
     let (sender, receiver) = oneshot::channel();
-    if let Err((error, _)) = relay.send(TimeServiceMessage::Info { sender }).await {
-        return ApiError::internal(error).into_response();
+    if relay
+        .send(TimeServiceMessage::Info { sender })
+        .await
+        .is_err()
+    {
+        return ApiError::internal_message("time service relay is closed").into_response();
     }
     match receiver.await {
         Ok(Ok(service_info)) => {
@@ -899,7 +903,7 @@ where
             reply_channel: sender,
         })
         .await
-        .map_err(|(error, _)| error)?;
+        .map_err(|_| std::io::Error::other("mempool service relay is closed"))?;
 
     let txs = receiver.await?;
 

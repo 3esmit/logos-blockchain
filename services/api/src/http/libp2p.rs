@@ -27,7 +27,7 @@ where
             reply: sender,
         })))
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("network service relay is closed"))?;
 
     receiver
         .await
@@ -52,7 +52,7 @@ where
             result_sender: sender,
         }))))
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("network service relay is closed"))?;
 
     let dial_result = receiver
         .await

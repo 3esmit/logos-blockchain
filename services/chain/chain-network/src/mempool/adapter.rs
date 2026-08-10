@@ -34,7 +34,7 @@ where
                 reply_channel: reply_sender,
             })
             .await
-            .map_err(|(e, _)| format!("Could not add transactions to mempool: {e}"))?;
+            .map_err(|e| format!("Could not add transactions to mempool: {e}"))?;
         reply_receiver
             .await
             .map_err(|e| format!("Could not receive response: {e}"))?
@@ -46,7 +46,7 @@ where
         self.mempool_relay
             .send(MempoolMsg::Remove { ids: ids.to_vec() })
             .await
-            .map_err(|(e, _)| format!("Could not remove transactions from mempool: {e}"))?;
+            .map_err(|e| format!("Could not remove transactions from mempool: {e}"))?;
 
         Ok(())
     }
@@ -63,7 +63,7 @@ where
                 reply_channel: resp_tx,
             })
             .await
-            .map_err(|(e, _)| format!("Could not get transactions by hashes: {e}"))?;
+            .map_err(|e| format!("Could not get transactions by hashes: {e}"))?;
 
         let response = resp_rx
             .await

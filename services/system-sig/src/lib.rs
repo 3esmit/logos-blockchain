@@ -42,7 +42,7 @@ impl<RuntimeServiceId> ServiceData for SystemSig<RuntimeServiceId> {
 #[async_trait::async_trait]
 impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for SystemSig<RuntimeServiceId>
 where
-    RuntimeServiceId: Debug + Display + Sync + Send + Clone + AsServiceId<Self>,
+    RuntimeServiceId: Debug + Display + Sync + Send + Clone + AsServiceId<Self> + 'static,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -71,7 +71,11 @@ where
             () = ctrl_c => Self::ctrl_c_signal_received(&overwatch_handle).await,
             Some(SystemSigMessage::Shutdown) = inbound_relay.recv() => {
                 tracing::debug!(target: LOG_TARGET, "Shutdown requested by a service failure");
-                drop(overwatch_handle.shutdown().await);
+                tokio::spawn(async move {
+                    if let Err(error) = overwatch_handle.shutdown().await {
+                        tracing::error!(target: LOG_TARGET, "Failed to shut down Overwatch: {error:?}");
+                    }
+                });
             }
         }
 

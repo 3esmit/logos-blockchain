@@ -136,7 +136,7 @@ where
             reply_channel: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("mempool service relay is closed"))?;
 
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
@@ -172,7 +172,7 @@ where
             reply_channel: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("mempool service relay is closed"))?;
 
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
@@ -193,7 +193,7 @@ where
             result_sender: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("mempool service relay is closed"))?;
 
     let broadcast_receiver = receiver.await.map_err(|e| Box::new(e) as super::DynError)?;
     let stream = BroadcastStream::new(broadcast_receiver)
@@ -222,7 +222,7 @@ where
     relay
         .send(Query::NewBlockSubscribe { sender }.into())
         .await
-        .map_err(|(error, _)| error)?;
+        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
 
     let new_blocks_receiver = receiver
         .await
@@ -326,7 +326,7 @@ where
             request: StorageApiRequest::Chain(request),
         })
         .await
-        .map_err(|(error, _)| error)?;
+        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
 
     response_rx
         .await
@@ -703,7 +703,7 @@ where
             }),
         })
         .await
-        .map_err(|(error, _)| error)?;
+        .map_err(|_| std::io::Error::other("storage service relay is closed"))?;
 
     response_rx
         .await
@@ -900,7 +900,7 @@ where
             .into(),
         )
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
 
     Ok(receiver.await?)
 }
@@ -928,7 +928,7 @@ where
             .into(),
         )
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
 
     Ok(receiver.await?)
 }

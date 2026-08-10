@@ -220,6 +220,10 @@ pub enum PrivateInputsError {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "WalletApiError retains its structured service error context."
+)]
 pub enum BuildProofError {
     #[error("Wallet API error: {0}")]
     Wallet(#[from] WalletApiError),

@@ -70,7 +70,7 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
-        relay::{OutboundRelay, RelayError},
+        relay::{OutboundRelay, OutboundRelayError},
         state::StateUpdater,
     },
 };
@@ -1191,7 +1191,7 @@ async fn compute_and_submit_activity_proof(
 ) {
     if let Some(activity_proof) = blending_token_collector.compute_activity_proof() {
         if let Err(e) = submit_activity_proof(activity_proof, sdp_relay).await {
-            error!(target: LOG_TARGET, "Failed to submit activity proof for the old epoch: {e:?}");
+            error!(target: LOG_TARGET, "Failed to submit activity proof for the old epoch: {e}");
         }
     } else {
         debug!(target: LOG_TARGET, "No activity proof generated for the old epoch");
@@ -1984,12 +1984,11 @@ where
 async fn submit_activity_proof(
     proof: ActivityProof,
     sdp_relay: &OutboundRelay<SdpMessage>,
-) -> Result<(), RelayError> {
+) -> Result<(), OutboundRelayError<SdpMessage>> {
     debug!(target: LOG_TARGET, "Submitting activity proof for the old epoch");
     sdp_relay
         .send(SdpMessage::PostActivity {
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),
         })
         .await
-        .map_err(|(e, _)| e)
 }

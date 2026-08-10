@@ -37,7 +37,7 @@ where
         self.relay
             .send(LeaderMsg::Claim { sender: resp_tx })
             .await
-            .map_err(|(relay_err, _)| {
+            .map_err(|relay_err| {
                 ApiError::CommsFailure(format!("{relay_err} while sending Claim"))
             })?;
 

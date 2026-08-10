@@ -38,7 +38,7 @@ where
             .into(),
         )
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
 
     Ok(receiver.await?)
 }
@@ -66,7 +66,7 @@ where
             .into(),
         )
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
 
     let stream = receiver.await?;
     Ok(stream.take(HEADERS_LIMIT).try_collect().await?)
@@ -94,7 +94,7 @@ where
             .into(),
         )
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
 
     receiver
         .await?

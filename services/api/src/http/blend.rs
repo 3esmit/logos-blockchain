@@ -20,7 +20,7 @@ where
     relay
         .send(ServiceMessage::GetNetworkInfo { reply: sender }.into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("blend service relay is closed"))?;
 
     receiver
         .await
@@ -48,7 +48,7 @@ where
             reply: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("blend service relay is closed"))?;
 
     let result = receiver
         .await

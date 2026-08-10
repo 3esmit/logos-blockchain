@@ -62,13 +62,18 @@ macro_rules! wait_until_services_are_ready {
             // Iterate over each service type and create a future to wait for its readiness
             $(
                 let wait_for_future = async {
-                    if let Err(service_status) = overwatch_handle
-                        .status_watcher::<$service_type>()
-                        .await
+                    let service_id = <RuntimeServiceId as ::overwatch::services::AsServiceId<$service_type>>::SERVICE_ID;
+                    let Ok(mut watcher) = overwatch_handle.status_watcher::<$service_type>().await else {
+                        let service_status_entry = $crate::overwatch::status::ServiceStatusEntry::<RuntimeServiceId>::from_overwatch(
+                            service_id,
+                            ::overwatch::services::status::ServiceStatus::Stopped,
+                        );
+                        return Err(service_status_entry);
+                    };
+                    if let Err(service_status) = watcher
                         .wait_for(::overwatch::services::status::ServiceStatus::Ready, timeout)
                         .await
                     {
-                        let service_id = <RuntimeServiceId as ::overwatch::services::AsServiceId<$service_type>>::SERVICE_ID;
                         let service_status_entry = $crate::overwatch::status::ServiceStatusEntry::<RuntimeServiceId>::from_overwatch(service_id, service_status);
                         return Err(service_status_entry);
                     }
@@ -313,12 +318,16 @@ mod tests {
 
         // Wait until ServiceC is ready, which depends on ServiceA and ServiceB
         let dependent_service_status = overwatch_handle.runtime().block_on(async {
-            overwatch_handle
+            let Ok(mut watcher) = overwatch_handle
                 .status_watcher::<DependantService<
                     NestedGenericService<LightService, RuntimeServiceId>,
                     RuntimeServiceId,
                 >>()
                 .await
+            else {
+                return Err(ServiceStatus::Stopped);
+            };
+            watcher
                 .wait_for(ServiceStatus::Ready, Some(Duration::from_secs(5)))
                 .await
         });
@@ -348,12 +357,16 @@ mod tests {
 
         // Wait for a service that will not be ready, expecting a timeout error
         let dependent_service_status = overwatch_handle.runtime().block_on(async {
-            overwatch_handle
+            let Ok(mut watcher) = overwatch_handle
                 .status_watcher::<DependantService<
                     NestedGenericService<LightService, RuntimeServiceId>,
                     RuntimeServiceId,
                 >>()
                 .await
+            else {
+                return Err(ServiceStatus::Stopped);
+            };
+            watcher
                 .wait_for(ServiceStatus::Ready, Some(Duration::from_secs(1)))
                 .await
         });

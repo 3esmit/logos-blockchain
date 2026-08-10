@@ -57,4 +57,4 @@ unknown-git = "deny"
 unknown-registry = "deny"
 
 [sources.allow-org]
-github = ["logos-co"]
+github = ["3esmit", "logos-co"]

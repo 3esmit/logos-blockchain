@@ -313,9 +313,7 @@ where
                 error!(
                     "Initial Block Download failed: {e:?}. Chain network service will stop; retry with different bootstrap peers"
                 );
-                if let Err((error, SystemSigMessage::Shutdown)) =
-                    system_sig_relay.send(SystemSigMessage::Shutdown).await
-                {
+                if let Err(error) = system_sig_relay.send(SystemSigMessage::Shutdown).await {
                     error!("Failed to request top-level shutdown after IBD failure: {error:?}");
                 }
                 return Err(DynError::from(format!(
@@ -347,9 +345,7 @@ where
                 .time_relay()
                 .send(TimeServiceMessage::Subscribe { sender })
                 .await
-                .map_err(|(e, _)| {
-                    DynError::from(format!("failed to subscribe to slot ticks: {e}"))
-                })?;
+                .map_err(|e| DynError::from(format!("failed to subscribe to slot ticks: {e}")))?;
             receiver
                 .await
                 .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?

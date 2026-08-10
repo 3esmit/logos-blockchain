@@ -848,6 +848,24 @@ mod tests {
     }
 
     #[test]
+    fn published_testnet_legacy_deployment_is_accepted() {
+        let encoded = hex::decode(
+            "0d00000000000000746573746e65742d302e322e30887e436a000000002d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a",
+        )
+        .unwrap();
+
+        let (rest, decoded) = decode_cryptarchia_parameter(&encoded).unwrap();
+
+        assert!(rest.is_empty());
+        assert_eq!(decoded.chain_id.to_string(), "testnet-0.2.0");
+        assert_eq!(decoded.genesis_time, GenesisTime::new(1_782_808_200));
+        assert_eq!(
+            decoded.epoch_nonce,
+            fr_from_bytes_unchecked(&encoded[29..61]),
+        );
+    }
+
+    #[test]
     fn compact_encoding_takes_precedence_for_nul_chain_id() {
         let chain_id = ChainId::try_from("\0\0\0\0\0\0\0".to_owned()).unwrap();
         let parameter = CryptarchiaParameter {

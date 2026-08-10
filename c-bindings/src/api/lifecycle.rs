@@ -172,6 +172,21 @@ pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> Operat
     node.shutdown()
 }
 
+/// Compatibility alias for callers built against the previous C-binding name.
+///
+/// New callers should use [`shutdown_node`]. Both functions consume the node
+/// handle and wait for all services to finish before returning.
+///
+/// # Safety
+///
+/// The caller must uphold the same requirements as [`shutdown_node`]: `node`
+/// must be a valid handle created by this library and must not be used after
+/// this function returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
+    unsafe { shutdown_node(node) }
+}
+
 #[cfg(test)]
 mod test {
     use std::{ffi::CString, net::Ipv4Addr, path::PathBuf, sync::LazyLock};

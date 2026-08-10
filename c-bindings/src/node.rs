@@ -26,13 +26,13 @@ pub struct LogosBlockchainNode {
 impl LogosBlockchainNode {
     pub fn new(overwatch: LogosBlockchainOverwatch, runtime: Runtime) -> Self {
         Self {
-            // Box the complex types and convert to opaque pointers
+            // Box the complex types and convert to opaque pointers.
             overwatch: Box::into_raw(Box::new(overwatch)).cast::<c_void>(),
             runtime: Box::into_raw(Box::new(runtime)).cast::<c_void>(),
         }
     }
 
-    // Helper methods to safely access the inner types
+    // Helper methods to safely access the inner types.
     #[must_use]
     pub(crate) const fn get_overwatch_handle(&self) -> &OverwatchHandle<RuntimeServiceId> {
         unsafe {
@@ -85,7 +85,8 @@ impl LogosBlockchainNode {
     }
 }
 
-// Implement Drop to prevent memory leaks
+// Implement Drop to prevent memory leaks when callers destroy a node without
+// going through the consuming shutdown entry point.
 impl Drop for LogosBlockchainNode {
     fn drop(&mut self) {
         if self.overwatch.is_null() {
@@ -100,7 +101,11 @@ impl Drop for LogosBlockchainNode {
                 "Attempted to drop a null tokio runtime pointer. This is a bug"
             );
         }
-        drop(unsafe { Box::from_raw(self.overwatch.cast::<LogosBlockchainOverwatch>()) });
-        drop(unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) });
+        if !self.overwatch.is_null() {
+            drop(unsafe { Box::from_raw(self.overwatch.cast::<LogosBlockchainOverwatch>()) });
+        }
+        if !self.runtime.is_null() {
+            drop(unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) });
+        }
     }
 }

@@ -17,4 +17,5 @@ async-ctrlc    = { workspace = true }
 async-trait    = { workspace = true }
 lb-log-targets = { workspace = true }
 overwatch      = { workspace = true }
+tokio          = { workspace = true }
 tracing        = { workspace = true }

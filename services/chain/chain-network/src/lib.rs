@@ -29,6 +29,7 @@ pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
+use lb_system_sig_service::{SystemSig, SystemSigMessage};
 use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
@@ -230,6 +231,7 @@ where
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
+    RuntimeServiceId: AsServiceId<SystemSig<RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -252,6 +254,11 @@ where
             &self.service_resources_handle,
         )
         .await;
+        let system_sig_relay = self
+            .service_resources_handle
+            .overwatch_handle
+            .relay::<SystemSig<RuntimeServiceId>>()
+            .await?;
 
         let ChainNetworkSettings {
             network: network_config,
@@ -304,17 +311,13 @@ where
             }
             Err(e) => {
                 error!(
-                    "Initial Block Download failed: {e:?}. Initiating graceful shutdown. Retry with different bootstrap peers"
+                    "Initial Block Download failed: {e:?}. Chain network service will stop; retry with different bootstrap peers"
                 );
-                if let Err(shutdown_err) = self
-                    .service_resources_handle
-                    .overwatch_handle
-                    .shutdown()
-                    .await
+                if let Err((error, SystemSigMessage::Shutdown)) =
+                    system_sig_relay.send(SystemSigMessage::Shutdown).await
                 {
-                    error!("Failed to shutdown overwatch: {shutdown_err:?}");
+                    error!("Failed to request top-level shutdown after IBD failure: {error:?}");
                 }
-
                 return Err(DynError::from(format!(
                     "Initial Block Download failed: {e:?}"
                 )));

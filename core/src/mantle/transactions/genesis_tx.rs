@@ -835,8 +835,8 @@ mod tests {
         let compact = parameter.encode_to_vec();
         let chain_id_length = u64::from(compact[0]);
         let mut legacy = chain_id_length.to_le_bytes().to_vec();
-        legacy.extend_from_slice(&compact[1..1 + usize::from(compact[0])]);
-        u64::from(1_782_808_200_u32).encode_into(&mut legacy);
+        legacy.extend_from_slice(&compact[1..=usize::from(compact[0])]);
+        u64::from(1_782_808_200u32).encode_into(&mut legacy);
         legacy.extend_from_slice(&compact[1 + usize::from(compact[0]) + 4..]);
 
         let (rest, decoded) = decode_cryptarchia_parameter(&legacy).unwrap();

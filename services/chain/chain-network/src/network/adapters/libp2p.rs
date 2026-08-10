@@ -114,7 +114,7 @@ where
     }
 
     async fn subscribe(relay: &Relay<Libp2p, RuntimeServiceId>, topic: &str) {
-        if let Err((e, _)) = relay
+        if let Err(e) = relay
             .send(NetworkMsg::Process(Command::PubSub(Subscribe(
                 topic.into(),
             ))))
@@ -128,7 +128,7 @@ where
         relay: &Relay<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = relay
+        if let Err(e) = relay
             .send(NetworkMsg::Process(Command::Network(
                 NetworkCommand::ConnectedPeers {
                     reply: reply_sender,
@@ -147,7 +147,7 @@ where
         relay: &Relay<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = relay
+        if let Err(e) = relay
             .send(NetworkMsg::Process(Command::Discovery(
                 DiscoveryCommand::GetDiscoveredPeers {
                     reply: reply_sender,
@@ -196,7 +196,7 @@ where
 
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
         let (sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .network_relay
             .send(NetworkMsg::SubscribeToPubSub { sender })
             .await
@@ -228,7 +228,7 @@ where
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError> {
         let (sender, receiver) = oneshot::channel();
 
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .network_relay
             .send(NetworkMsg::SubscribeToChainSync { sender })
             .await
@@ -248,7 +248,7 @@ where
         let started_at = Instant::now();
         tracing::debug!("Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .network_relay
             .send(NetworkMsg::Process(Command::ChainSync(
                 ChainSyncCommand::RequestTip { peer, reply_sender },
@@ -292,7 +292,7 @@ where
             ),
             async |(peer, relay)| {
                 let (reply_sender, receiver) = oneshot::channel();
-                if let Err((e, _)) = relay
+                if let Err(e) = relay
                     .send(NetworkMsg::Process(Command::ChainSync(
                         ChainSyncCommand::RequestTip { peer, reply_sender },
                     )))
@@ -330,7 +330,7 @@ where
             "Requesting blocks from peer {peer:?} for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?} and {additional_blocks_len} additional blocks"
         );
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .network_relay
             .send(NetworkMsg::Process(Command::ChainSync(
                 ChainSyncCommand::DownloadBlocks {

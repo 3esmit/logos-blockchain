@@ -56,7 +56,7 @@ where
     BlendService::BroadcastSettings: Clone + Sync,
 {
     pub async fn publish_proposal(&self, proposal: Proposal) {
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .relay
             .send(
                 ServiceMessage::Blend(NetworkMessage {
@@ -71,7 +71,7 @@ where
             )
             .await
         {
-            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {e:?}");
+            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {e}");
         }
     }
 }

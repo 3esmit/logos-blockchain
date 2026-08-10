@@ -32,7 +32,7 @@ where
     relay
         .send(TimeServiceMessage::Info { sender })
         .await
-        .map_err(|(error, _)| error)?;
+        .map_err(|_| std::io::Error::other("time service relay is closed"))?;
     let service_info = receiver.await?.map_err(std::io::Error::other)?;
 
     Ok(map_time_info(&service_info))

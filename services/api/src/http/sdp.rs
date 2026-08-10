@@ -37,7 +37,7 @@ where
             reply_channel,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("SDP service relay is closed"))?;
 
     reply_rx.await?
 }
@@ -70,7 +70,7 @@ where
     relay
         .send(lb_sdp_service::SdpMessage::PostActivity { metadata })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("SDP service relay is closed"))?;
 
     Ok(())
 }
@@ -103,7 +103,7 @@ where
     relay
         .send(lb_sdp_service::SdpMessage::PostWithdrawal { declaration_id })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("SDP service relay is closed"))?;
 
     Ok(())
 }
@@ -140,7 +140,7 @@ where
             reply_channel,
         })
         .await
-        .map_err(|(e, _)| Box::new(e) as DynError)?;
+        .map_err(|_| std::io::Error::other("SDP service relay is closed"))?;
 
     reply_rx.await?.map_err(|e| Box::new(e) as DynError)?;
 

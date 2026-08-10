@@ -45,7 +45,10 @@ where
     {
         let key: [u8; 32] = id.into();
         let (msg, receiver) = StorageMsg::new_load_message(Bytes::copy_from_slice(&key));
-        storage_relay.send(msg).await.map_err(|(e, _)| e)?;
+        storage_relay
+            .send(msg)
+            .await
+            .map_err(|_| std::io::Error::other("storage service relay is closed"))?;
 
         receiver
             .recv()
@@ -67,7 +70,7 @@ where
         storage_relay
             .send(message)
             .await
-            .map_err(|(error, _)| error)?;
+            .map_err(|_| std::io::Error::other("storage service relay is closed"))?;
 
         let bytes_stream = receiver
             .await

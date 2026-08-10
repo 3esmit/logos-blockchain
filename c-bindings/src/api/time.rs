@@ -47,7 +47,7 @@ pub(crate) fn get_time_info_sync(node: &LogosBlockchainNode) -> StatusResult<Tim
         relay
             .send(TimeServiceMessage::Info { sender })
             .await
-            .map_err(|(e, _)| {
+            .map_err(|e| {
                 OperationStatus::error(
                     OperationStatusCode::ChannelSendError,
                     format!("Failed to send time info request: {e}"),

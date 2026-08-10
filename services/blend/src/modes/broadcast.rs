@@ -42,7 +42,10 @@ where
             NetworkService
         )
         .await?;
-        let relay = overwatch_handle.relay::<NetworkService>().await?;
+        let relay = overwatch_handle
+            .relay::<NetworkService>()
+            .await
+            .map_err(Error::Overwatch)?;
         let adapter = Adapter::new(relay);
         Ok(Self {
             adapter,

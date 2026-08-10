@@ -38,7 +38,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for Libp2pAdapter<Runtim
     /// Broadcast an unencrypted message to the network by publishing the
     /// message under the configured gossipsub topic.
     async fn broadcast(&self, message: Vec<u8>, broadcast_settings: Self::BroadcastSettings) {
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .network_relay
             .send(NetworkMsg::Process(Command::PubSub(
                 PubSubCommand::Broadcast {

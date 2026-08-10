@@ -83,7 +83,11 @@ where
                 reply_channel,
             })
             .await
-            .map_err(|(e, _)| MempoolAdapterError::Other(Box::new(e)))?;
+            .map_err(|_| {
+                MempoolAdapterError::Other(Box::new(std::io::Error::other(
+                    "mempool service relay is closed",
+                )))
+            })?;
 
         receiver
             .await?

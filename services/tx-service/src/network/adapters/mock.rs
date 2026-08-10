@@ -45,11 +45,11 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         {
             panic!(
                 "Couldn't send boot producer message to the network service: {:?}",
-                e.0
+                e
             );
         }
 
-        if let Err((e, _)) = network_relay
+        if let Err(e) = network_relay
             .send(NetworkMsg::Process(MockBackendMessage::RelaySubscribe {
                 topic: MOCK_PUB_SUB_TOPIC.to_owned(),
             }))
@@ -64,7 +64,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         &self,
     ) -> Box<dyn Stream<Item = (Self::Key, Self::Payload)> + Unpin + Send> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        if let Err((_, e)) = self
+        if let Err(e) = self
             .network_relay
             .send(NetworkMsg::SubscribeToPubSub { sender })
             .await
@@ -86,7 +86,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
     }
 
     async fn send(&self, msg: Self::Payload) {
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .network_relay
             .send(NetworkMsg::Process(MockBackendMessage::Broadcast {
                 topic: MOCK_PUB_SUB_TOPIC.into(),

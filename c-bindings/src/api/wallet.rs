@@ -62,9 +62,17 @@ type WalletService = NodeWalletService<CryptarchiaService<RuntimeServiceId>, Run
     reason = "This future runs synchronously and is never spawned."
 )]
 async fn wallet_service_ready(node: &LogosBlockchainNode) -> Result<(), OperationStatus> {
-    node.get_overwatch_handle()
+    let mut watcher = node
+        .get_overwatch_handle()
         .status_watcher::<WalletService>()
         .await
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::ServiceError,
+                format!("Wallet service status unavailable: {error}"),
+            )
+        })?;
+    watcher
         .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
         .await
         .map(|_| ())

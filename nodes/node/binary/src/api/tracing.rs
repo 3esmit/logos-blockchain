@@ -60,7 +60,7 @@ where
             reply_channel: reply_tx,
         })
         .await
-        .map_err(|(err, _)| err)?;
+        .map_err(|_| std::io::Error::other("tracing service relay is closed"))?;
 
     reply_rx
         .await

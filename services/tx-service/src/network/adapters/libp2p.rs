@@ -85,7 +85,7 @@ where
             .to_bytes()
             .expect("Item should be able to be serialized");
         {
-            if let Err((e, _)) = self
+            if let Err(e) = self
                 .network_relay
                 .send(NetworkMsg::Process(Command::PubSub(
                     PubSubCommand::Broadcast {

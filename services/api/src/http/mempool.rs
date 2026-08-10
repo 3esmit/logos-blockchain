@@ -67,7 +67,7 @@ where
             reply_channel: sender,
         })
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|_| std::io::Error::other("mempool service relay is closed"))?;
 
     receiver
         .await

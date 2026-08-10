@@ -491,7 +491,7 @@ where
                 tx,
             ))
             .await
-            .map_err(|(e, _)| GetBlocksError::SendError(e.to_string()))?;
+            .map_err(|e| GetBlocksError::SendError(e.to_string()))?;
 
         match rx.await.map_err(|_| GetBlocksError::ChannelDropped)? {
             Some(immutable_id) if immutable_id == id => Ok(Some(block)),
@@ -509,7 +509,7 @@ where
         storage
             .send(StorageMsg::get_block_request(id, tx))
             .await
-            .map_err(|(e, _)| GetBlocksError::SendError(e.to_string()))?;
+            .map_err(|e| GetBlocksError::SendError(e.to_string()))?;
 
         let response = rx.await.map_err(|_| GetBlocksError::ChannelDropped)?;
 
@@ -533,7 +533,7 @@ where
         storage
             .send(StorageMsg::get_block_request(id, tx))
             .await
-            .map_err(|(e, _)| GetBlocksError::SendError(e.to_string()))?;
+            .map_err(|e| GetBlocksError::SendError(e.to_string()))?;
 
         let response = rx.await.map_err(|_| GetBlocksError::ChannelDropped)?;
 
@@ -556,7 +556,7 @@ where
                 slot_range, limit, tx,
             ))
             .await
-            .map_err(|(e, _)| GetBlocksError::SendError(e.to_string()))?;
+            .map_err(|e| GetBlocksError::SendError(e.to_string()))?;
 
         rx.await.map_err(|_| GetBlocksError::ChannelDropped)
     }

@@ -35,7 +35,7 @@ where
         overwatch_handle
             .start_service::<Service>()
             .await
-            .map_err(|e| Error::Overwatch(Box::new(e)))?;
+            .map_err(Error::Overwatch)?;
 
         info!(
             target = LOG_TARGET,
@@ -54,7 +54,7 @@ where
             Ok(relay) => relay,
             Err(e) => {
                 kill_service(&overwatch_handle).await;
-                return Err(e.into());
+                return Err(Error::Overwatch(e));
             }
         };
 
@@ -65,7 +65,10 @@ where
     }
 
     pub async fn handle_inbound_message(&self, message: Service::Message) -> Result<(), Error> {
-        self.relay.send(message).await.map_err(|(e, _)| e.into())
+        self.relay
+            .send(message)
+            .await
+            .map_err(|error| Error::RelaySend(error.to_string()))
     }
 
     /// Wait until the service is stopped itself within the given timeout.
@@ -81,7 +84,9 @@ where
     }
 
     async fn wait_until_stopped(&self, timeout: Duration) -> Result<(), ServiceStatus> {
-        let mut watcher = self.overwatch_handle.status_watcher().await;
+        let Ok(mut watcher) = self.overwatch_handle.status_watcher().await else {
+            return Err(ServiceStatus::Stopped);
+        };
         watcher
             .wait_for(ServiceStatus::Stopped, Some(timeout))
             .await

@@ -176,6 +176,12 @@ pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> Operat
 ///
 /// New callers should use [`shutdown_node`]. Both functions consume the node
 /// handle and wait for all services to finish before returning.
+///
+/// # Safety
+///
+/// The caller must uphold the same requirements as [`shutdown_node`]: `node`
+/// must be a valid handle created by this library and must not be used after
+/// this function returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
     unsafe { shutdown_node(node) }

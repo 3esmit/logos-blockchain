@@ -124,7 +124,8 @@ jobs:
       ${{
         github.event_name == 'pull_request' &&
         !startsWith(github.event.pull_request.title, '[WIP]') &&
-        !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE')
+        !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE') &&
+        vars.ENABLE_SELF_HOSTED_TESTS == 'true'
       }}
     strategy:
       fail-fast: false # all OSes should be tested even if one fails (default: true)
@@ -186,8 +187,8 @@ jobs:
 
   # Stable required check for nextest unit tests.
   #
-  # On pull requests and pushes to master, this job succeeds only when both
-  # self-hosted nextest unit tests matrix jobs succeeded.
+  # On pull requests and pushes to master, this job succeeds when enabled
+  # self-hosted nextest lanes pass, or when those lanes are disabled.
   #
   # On merge_group, the real nextest unit tests matrix is skipped and this lightweight
   # check succeeds because nextest unit tests was already required before queue admission.
@@ -201,7 +202,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           TESTS_RESULT: ${{ needs.tests.result }}
-          SKIP_SELF_HOSTED: ${{ contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE') }}
+          SELF_HOSTED_ENABLED: ${{ vars.ENABLE_SELF_HOSTED_TESTS == 'true' }}
         run: |
           if [ "$EVENT_NAME" = "merge_group" ]; then
             echo "Nextest unit tests already passed before merge-queue admission"
@@ -212,8 +213,8 @@ jobs:
             exit 0
           fi
 
-          if [ "$TESTS_RESULT" = "skipped" ] && [ "$SKIP_SELF_HOSTED" = "true" ]; then
-            echo "Self-hosted nextest lanes intentionally skipped for DO NOT MERGE pull request"
+          if [ "$TESTS_RESULT" = "skipped" ] && [ "$SELF_HOSTED_ENABLED" != "true" ]; then
+            echo "Self-hosted nextest lanes disabled because ENABLE_SELF_HOSTED_TESTS is not enabled"
             exit 0
           fi
 

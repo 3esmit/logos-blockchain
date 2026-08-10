@@ -16,6 +16,11 @@ pub struct SystemSig<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
 
+#[derive(Debug)]
+pub enum SystemSigMessage {
+    Shutdown,
+}
+
 impl<RuntimeServiceId> SystemSig<RuntimeServiceId>
 where
     RuntimeServiceId: Debug + Display + Sync,
@@ -31,13 +36,13 @@ impl<RuntimeServiceId> ServiceData for SystemSig<RuntimeServiceId> {
     type Settings = ();
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ();
+    type Message = SystemSigMessage;
 }
 
 #[async_trait::async_trait]
 impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for SystemSig<RuntimeServiceId>
 where
-    RuntimeServiceId: Debug + Display + Sync + Send + AsServiceId<Self>,
+    RuntimeServiceId: Debug + Display + Sync + Send + Clone + AsServiceId<Self>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -49,21 +54,26 @@ where
     }
 
     async fn run(self) -> Result<(), DynError> {
-        let Self {
-            service_resources_handle,
-        } = self;
+        let service_resources_handle = self.service_resources_handle;
+        let overwatch_handle = service_resources_handle.overwatch_handle.clone();
+        let status_updater = service_resources_handle.status_updater;
+        let mut inbound_relay = service_resources_handle.inbound_relay;
         let ctrl_c = async_ctrlc::CtrlC::new()?;
 
-        service_resources_handle.status_updater.notify_ready();
+        status_updater.notify_ready();
         tracing::info!(
             target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        // Wait for the Ctrl-C signal
-        ctrl_c.await;
-        Self::ctrl_c_signal_received(&service_resources_handle.overwatch_handle).await;
+        tokio::select! {
+            () = ctrl_c => Self::ctrl_c_signal_received(&overwatch_handle).await,
+            Some(SystemSigMessage::Shutdown) = inbound_relay.recv() => {
+                tracing::debug!(target: LOG_TARGET, "Shutdown requested by a service failure");
+                drop(overwatch_handle.shutdown().await);
+            }
+        }
 
         Ok(())
     }

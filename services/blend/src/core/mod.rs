@@ -1991,5 +1991,4 @@ async fn submit_activity_proof(
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),
         })
         .await
-        .map_err(|e| e)
 }

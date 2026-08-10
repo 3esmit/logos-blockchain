@@ -43,10 +43,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
             }))
             .await
         {
-            panic!(
-                "Couldn't send boot producer message to the network service: {:?}",
-                e
-            );
+            panic!("Couldn't send boot producer message to the network service: {e}");
         }
 
         if let Err(e) = network_relay

@@ -1827,6 +1827,26 @@ impl CucumberWorld {
             .collect::<Vec<_>>()
     }
 
+    /// Resolve the node key configured to fund node service transactions.
+    pub fn funding_wallet(&self, node_name: &str) -> Result<WalletInfo, StepError> {
+        let mut wallets = self
+            .wallet_info
+            .values()
+            .filter(|wallet| wallet.node_name == node_name && wallet.is_funding_wallet())
+            .cloned()
+            .collect::<Vec<_>>();
+        wallets.sort_by(|left, right| left.wallet_name.cmp(&right.wallet_name));
+        match wallets.as_slice() {
+            [wallet] => Ok(wallet.clone()),
+            [] => Err(StepError::LogicalError {
+                message: format!("Node `{node_name}` has no funding wallet"),
+            }),
+            _ => Err(StepError::LogicalError {
+                message: format!("Node `{node_name}` has multiple funding wallets"),
+            }),
+        }
+    }
+
     /// Helper to resolve a wallet name to the actual wallet information.
     pub fn resolve_wallet(&self, wallet_name: &str) -> Result<WalletInfo, StepError> {
         self.resolve_wallets(&[wallet_name.to_owned()])?
@@ -1837,6 +1857,20 @@ impl CucumberWorld {
 
     pub fn remember_submitted_transaction(&mut self, alias: String, tx_hash: TxHash) {
         self.submitted_transactions.insert(alias, tx_hash);
+    }
+
+    /// All remembered submitted transactions whose alias starts with `prefix`,
+    /// sorted by alias for deterministic reporting.
+    #[must_use]
+    pub fn submitted_transactions_with_prefix(&self, prefix: &str) -> Vec<(String, TxHash)> {
+        let mut txs: Vec<_> = self
+            .submitted_transactions
+            .iter()
+            .filter(|(alias, _)| alias.starts_with(prefix))
+            .map(|(alias, tx_hash)| (alias.clone(), *tx_hash))
+            .collect();
+        txs.sort();
+        txs
     }
 
     #[must_use]

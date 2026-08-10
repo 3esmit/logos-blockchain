@@ -1,4 +1,7 @@
-use std::ffi::{CString, c_char};
+use std::{
+    ffi::{CString, c_char},
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_node::{RuntimeServiceId, generic_services::CryptarchiaService};
@@ -130,16 +133,23 @@ pub(crate) fn get_cryptarchia_info_sync(
 ) -> StatusResult<lb_chain_service::ChainServiceInfo> {
     let runtime_handle = node.get_runtime_handle();
 
-    let Ok(info) = runtime_handle.block_on(lb_api_service::http::consensus::cryptarchia_info(
-        node.get_overwatch_handle(),
-    )) else {
-        return Err(OperationStatus::error(
-            OperationStatusCode::RelayError,
-            "Failed to get cryptarchia info.",
-        ));
-    };
+    let query = catch_unwind(AssertUnwindSafe(|| {
+        runtime_handle.block_on(lb_api_service::http::consensus::cryptarchia_info(
+            node.get_overwatch_handle(),
+        ))
+    }));
 
-    Ok(info)
+    match query {
+        Ok(Ok(info)) => Ok(info),
+        Ok(Err(error)) => Err(OperationStatus::error(
+            OperationStatusCode::RelayError,
+            format!("Failed to get cryptarchia info: {error}"),
+        )),
+        Err(_) => Err(OperationStatus::error(
+            OperationStatusCode::RelayError,
+            "Failed to get cryptarchia info: the node runtime is shutting down.",
+        )),
+    }
 }
 
 pub type FfiCryptarchiaInfoResult = FfiStatusResult<*mut CryptarchiaInfo>;

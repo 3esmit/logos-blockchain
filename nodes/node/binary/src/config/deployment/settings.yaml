@@ -2,7 +2,7 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
-    protocol_name: /logos-blockchain-testnet-0.2.0/blend/1.0.0
+    protocol_name: /logos-blockchain-testnet-0.2.1/blend/1.0.0
     data_replication_factor: 1
   core:
     scheduler:
@@ -14,9 +14,9 @@ blend:
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
-  kademlia_protocol_name: /logos-blockchain-testnet-0.2.0/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-testnet-0.2.0/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-testnet-0.2.0/chainsync/1.0.0
+  kademlia_protocol_name: /logos-blockchain-testnet-0.2.1/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-testnet-0.2.1/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-testnet-0.2.1/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
@@ -35,7 +35,7 @@ cryptarchia:
     min_stake:
       threshold: 1
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain-testnet-0.2.0/cryptarchia/1.0.0
+  gossipsub_protocol: /logos-blockchain-testnet-0.2.1/cryptarchia/1.0.0
   genesis_block:
     header:
       version: Bedrock
@@ -161,4 +161,4 @@ cryptarchia:
 time:
   slot_duration: '1.000000000'
 mempool:
-  pubsub_topic: /logos-blockchain-testnet-0.2.0/mempool/1.0.0
+  pubsub_topic: /logos-blockchain-testnet-0.2.1/mempool/1.0.0

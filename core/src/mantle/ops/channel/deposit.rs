@@ -87,6 +87,9 @@ impl PreverifiableOperation<verification_mode::StandardMode> for DepositOp {
         _proof: &Self::Proof,
         _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
+        // Ensure the inputs is non-empty
+        self.inputs.preverify()?;
+
         Ok(())
     }
 }
@@ -173,5 +176,27 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
 {
     fn gas_multiplier(&self) -> Value {
         1
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use lb_groth16::CompressedGroth16Proof;
+
+    use super::*;
+
+    #[test]
+    fn test_preverify_rejects_empty_inputs() {
+        let deposit = DepositOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: Inputs::empty(),
+            metadata: Metadata::empty(),
+        };
+        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+
+        assert_eq!(
+            deposit.preverify(&proof, &()),
+            Err(Error::Inputs(InputsError::EmptyInputs))
+        );
     }
 }

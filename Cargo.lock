@@ -4507,6 +4507,7 @@ dependencies = [
  "multiaddr",
  "num-bigint",
  "rand 0.8.6",
+ "rpds",
  "serde",
  "serde_json",
  "strum",

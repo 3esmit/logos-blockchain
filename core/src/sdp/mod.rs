@@ -11,7 +11,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,11 @@ use strum::EnumIter;
 use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
-    mantle::{NoteId, ops::channel::Ed25519PublicKey},
+    mantle::{
+        NoteId,
+        ops::{channel::Ed25519PublicKey, sdp::SdpError},
+        transactions::hash::TxHashView,
+    },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -475,12 +479,27 @@ impl DeclarationMessage {
         // declaration_id = Hash(service||provider_id||zk_id||locators)
         hasher.update(service.as_bytes());
         hasher.update(self.provider_id.0);
-        hasher.update(fr_to_bytes(self.zk_id.as_fr()));
+        for number in self.zk_id.as_fr().0.0 {
+            hasher.update(number.to_le_bytes());
+        }
         for locator in &self.locators {
             hasher.update(locator.0.as_ref());
         }
 
         DeclarationId(hasher.finalize().into())
+    }
+
+    pub fn preverify(
+        &self,
+        tx_hash_view: &TxHashView,
+        proof_eddsa_signature: &Ed25519Signature,
+    ) -> Result<(), SdpError> {
+        self.provider_id
+            .0
+            .verify(tx_hash_view.as_bytes(), proof_eddsa_signature)
+            .map_err(|_| SdpError::InvalidEddsaSignature)?;
+
+        Ok(())
     }
 }
 

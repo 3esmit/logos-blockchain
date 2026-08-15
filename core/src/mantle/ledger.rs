@@ -478,7 +478,7 @@ impl Utxo {
     #[must_use]
     pub fn id(&self) -> NoteId {
         // constants and structure as defined in the Mantle spec:
-        // https://lip.logos.co/blockchain/raw/bedrock-v1.1-mantle-specification.html
+        // https://www.notion.so/nomos-tech/v1-4-Mantle-Specification-335261aa09df8065a38acff4b25aee82
 
         let op_id: Fr = Fr::from_le_bytes_mod_order(self.op_id.as_ref());
         let output_index =

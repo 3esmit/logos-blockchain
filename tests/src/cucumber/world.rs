@@ -15,7 +15,7 @@ use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Utxo, Value,
+        GenesisTime, SignedMantleTx, Utxo, Value,
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -841,6 +841,9 @@ pub struct CucumberWorld {
     pub deployer: Option<DeployerKind>,
     /// A unique per-scenario context string used to isolate runtime resources.
     pub test_context: Option<String>,
+    /// Resolved genesis time for this Cucumber scenario attempt. It is set in
+    /// the scenario hook and reused by every deployment build or rebuild.
+    pub genesis_time: Option<GenesisTime>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
     /// Automated: Scenario specification
@@ -1049,6 +1052,7 @@ impl Debug for CucumberWorld {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
             .field("test_context", &format!("{:?}", self.test_context))
+            .field("genesis_time", &self.genesis_time)
             .field("scenario_base_dir", &self.scenario_base_dir)
             .field("spec", &format!("{:?}", self.spec))
             .field("run", &format!("{:?}", self.run))
@@ -1415,6 +1419,10 @@ impl CucumberWorld {
         self.test_context = Some(test_context);
     }
 
+    pub const fn set_genesis_time(&mut self, genesis_time: GenesisTime) {
+        self.genesis_time = Some(genesis_time);
+    }
+
     /// Remove all scenario artifacts from the scenario base directory. This is
     /// useful for ensuring a clean state before starting a new scenario.
     pub fn clear_scenario_artifacts(&self) -> StepResult {
@@ -1691,7 +1699,7 @@ impl CucumberWorld {
             .ok_or(StepError::MissingRunDuration)?
             .get();
 
-        let mut builder: ScenarioBuilderWith = make_builder(&topology);
+        let mut builder: ScenarioBuilderWith = make_builder(&topology, self.genesis_time);
 
         builder = builder.with_run_duration(Duration::from_secs(duration_secs));
         if let Some(wallets) = self.spec.wallets {

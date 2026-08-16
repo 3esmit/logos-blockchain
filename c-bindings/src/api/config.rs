@@ -151,6 +151,17 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
     }
 }
 
+/// Generates a user config with an optional embedded-caller bootstrap-period
+/// override while preserving the existing `GenerateConfigArgs` ABI.
+#[must_use]
+pub fn generate_config_sync_with_bootstrap_period(
+    mut args: EmbeddedInitArgs,
+    prolonged_bootstrap_period_secs: Option<u64>,
+) -> OperationStatus {
+    args.prolonged_bootstrap_period_secs = prolonged_bootstrap_period_secs;
+    generate_config_sync(args)
+}
+
 /// Generates the user config file.
 ///
 /// # Arguments
@@ -171,6 +182,25 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
 pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
     let init_args = EmbeddedInitArgs::from(args);
     generate_config_sync(init_args)
+}
+
+/// Generates a user config with an optional prolonged bootstrap period.
+///
+/// This entry point keeps the existing [`GenerateConfigArgs`] C ABI intact;
+/// callers that do not need an override should continue using
+/// [`generate_user_config`].
+///
+/// # Safety
+///
+/// `period_secs`, when non-null, must point to a valid `u64`.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn generate_user_config_with_bootstrap_period(
+    args: GenerateConfigArgs,
+    period_secs: *const u64,
+) -> OperationStatus {
+    let period = (!period_secs.is_null()).then(|| unsafe { *period_secs });
+    generate_config_sync_with_bootstrap_period(EmbeddedInitArgs::from(args), period)
 }
 
 /// Updates an existing user config file with keys from a keystore file,
@@ -471,5 +501,35 @@ mod test {
         let status = unsafe { migrate_user_config(migrated_c.as_ptr(), keystore_c.as_ptr()) };
         assert!(status.is_ok(), "Failed to migrate config: {status:?}");
         assert!(migrated_path.exists());
+    }
+
+    #[test]
+    fn embedded_bootstrap_period_override_is_written_to_user_config() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("user_config.yaml");
+        let keystore_path = temp_dir.path().join("keystore.yaml");
+
+        let status = generate_config_sync_with_bootstrap_period(
+            EmbeddedInitArgs {
+                output: config_path.clone(),
+                kms_file: Some(keystore_path),
+                ..Default::default()
+            },
+            Some(5),
+        );
+        assert!(status.is_ok(), "Failed to generate config: {status:?}");
+
+        let yaml =
+            std::fs::read_to_string(config_path).expect("Generated config should be readable");
+        let config: lb_node::config::UserConfig =
+            serde_yaml::from_str(&yaml).expect("Generated config should parse");
+        assert_eq!(
+            config
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period,
+            std::time::Duration::from_secs(5)
+        );
     }
 }

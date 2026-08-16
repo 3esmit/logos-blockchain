@@ -2,7 +2,7 @@ use std::ffi::{CString, c_char};
 
 use lb_core::{
     header::HeaderId as CoreHeaderId,
-    mantle::{SignedMantleTx, Transaction},
+    mantle::{SignedMantleTx, traits::Hashable, transactions::states::Preverified},
 };
 use lb_node::RuntimeServiceId;
 use lb_tx_service::storage::adapters::RocksStorageAdapter;
@@ -86,7 +86,10 @@ fn get_mantle_metrics_sync(node: &LogosBlockchainNode) -> StatusResult<CString> 
     let runtime_handle = node.get_runtime_handle();
     let metrics = runtime_handle
         .block_on(lb_api_service::http::mantle::mantle_mempool_metrics::<
-            RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+            RocksStorageAdapter<
+                SignedMantleTx<Preverified>,
+                <SignedMantleTx<Preverified> as Hashable>::Hash,
+            >,
             RuntimeServiceId,
         >(node.get_overwatch_handle()))
         .map_err(|error| {

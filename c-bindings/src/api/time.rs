@@ -102,7 +102,9 @@ pub type FfiTimeInfoResult = FfiStatusResult<*mut TimeInfo>;
 /// This function allocates memory for the output [`TimeInfo`] struct. The
 /// caller must free this memory using the [`free_time_info`] function.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn get_time_info(node: *const LogosBlockchainNode) -> FfiTimeInfoResult {
+pub unsafe extern "C" fn get_time_info_struct(
+    node: *const LogosBlockchainNode,
+) -> FfiTimeInfoResult {
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
     let time_info = unwrap_or_return_error!(get_time_info_sync(node));

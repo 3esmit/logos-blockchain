@@ -205,6 +205,15 @@ where
                         debug!(?header_id, "block already applied; continuing");
                         downloader.confirm_active_download();
                     }
+                    Err(Error::BlockProcessing(err))
+                        if is_foreign_chain_parent_missing(&err) =>
+                    {
+                        warn!(
+                            ?err,
+                            "discarding block download from a peer on a different chain"
+                        );
+                        downloader.cancel_active_download();
+                    }
                     Err(Error::BlockProcessing(err)) if crate::is_recoverable_apply_error(&err) => {
                         warn!(
                             ?err,
@@ -256,6 +265,27 @@ where
         .flatten()
         .collect())
     }
+}
+
+/// A peer can remain connected across a Testnet redeployment and answer the
+/// chainsync protocol with blocks from the previous genesis. At a fresh local
+/// genesis, a missing parent that is neither the local genesis nor an unknown
+/// ancestor is conclusive evidence of that foreign chain. Do not retry that
+/// stream as a transient orphan; the next IBD round can select another peer.
+fn is_foreign_chain_parent_missing(err: &ChainError) -> bool {
+    let ChainError::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing {
+        parent,
+        info,
+    }) = err
+    else {
+        return false;
+    };
+
+    let Some(genesis_id) = info.genesis_id else {
+        return false;
+    };
+
+    info.height == 0 && info.tip == genesis_id && info.lib == genesis_id && *parent != genesis_id
 }
 
 /// Calls [`fetch_tips`] with exponential backoff to not overload the configured
@@ -387,6 +417,57 @@ mod tests {
 
     use super::*;
     use crate::network::BoxedStream;
+
+    fn parent_missing_error(
+        genesis_id: Option<HeaderId>,
+        parent: HeaderId,
+        height: u64,
+    ) -> ChainError {
+        ChainError::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing {
+            parent,
+            info: Box::new(CryptarchiaInfo {
+                genesis_id,
+                lib: HeaderId::from([1; 32]),
+                lib_slot: Slot::from(0),
+                tip: HeaderId::from([1; 32]),
+                slot: Slot::from(0),
+                height,
+                state: lb_chain_service::State::Bootstrapping,
+            }),
+        })
+    }
+
+    #[test]
+    fn foreign_chain_parent_missing_is_terminal_for_current_download() {
+        let genesis = HeaderId::from([1; 32]);
+        let foreign_parent = HeaderId::from([2; 32]);
+
+        assert!(is_foreign_chain_parent_missing(&parent_missing_error(
+            Some(genesis),
+            foreign_parent,
+            0,
+        )));
+    }
+
+    #[test]
+    fn local_genesis_parent_missing_remains_retryable() {
+        let genesis = HeaderId::from([1; 32]);
+
+        assert!(!is_foreign_chain_parent_missing(&parent_missing_error(
+            Some(genesis),
+            genesis,
+            0,
+        )));
+    }
+
+    #[test]
+    fn legacy_chain_identity_does_not_trigger_foreign_chain_rejection() {
+        assert!(!is_foreign_chain_parent_missing(&parent_missing_error(
+            None,
+            HeaderId::from([2; 32]),
+            0,
+        )));
+    }
 
     #[tokio::test]
     async fn no_peers_configured() {

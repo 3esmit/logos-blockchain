@@ -57,4 +57,22 @@ mod tests {
         let as_str = serde_yaml::to_string(&settings).unwrap();
         let _recovered: DeploymentSettings = serde_yaml::from_str(&as_str).unwrap();
     }
+
+    #[test]
+    fn default_uses_deployed_testnet_protocols() {
+        let settings = DeploymentSettings::default();
+
+        assert_eq!(
+            settings.network.chain_sync_protocol_name.to_string(),
+            "/logos-blockchain-testnet-0.2.1/chainsync/1.0.0"
+        );
+        assert_eq!(
+            settings.network.kademlia_protocol_name.to_string(),
+            "/logos-blockchain-testnet-0.2.1/kad/1.0.0"
+        );
+        assert_eq!(
+            settings.network.identify_protocol_name.to_string(),
+            "/logos-blockchain-testnet-0.2.1/identify/1.0.0"
+        );
+    }
 }

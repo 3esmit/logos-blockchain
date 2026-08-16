@@ -198,11 +198,19 @@ where
         while downloader.should_poll() {
             match tokio::time::timeout(Duration::from_secs(1), downloader.next()).await {
                 Ok(Some(block)) => match self.block_processor.process_block(block).await {
-                    Ok(()) => {}
+                    Ok(()) => downloader.confirm_active_download(),
                     Err(Error::BlockProcessing(ChainError::Cryptarchia(
                         lb_chain_service::api::ApiError::AlreadyApplied(header_id),
                     ))) => {
                         debug!(?header_id, "block already applied; continuing");
+                        downloader.confirm_active_download();
+                    }
+                    Err(Error::BlockProcessing(err)) if crate::is_recoverable_apply_error(&err) => {
+                        warn!(
+                            ?err,
+                            "transient block-application failure; retrying the download"
+                        );
+                        downloader.retry_active_download();
                     }
                     Err(err) => {
                         warn!(?err, "failed to process block; cancelling the download");
@@ -350,7 +358,7 @@ mod tests {
         num::{NonZero, NonZeroU64},
         sync::{
             Arc,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
 
@@ -531,6 +539,37 @@ mod tests {
         );
     }
 
+    /// A transient parent-missing response must preserve the active orphan so
+    /// the downloader retries it without waiting for another tip poll.
+    #[tokio::test]
+    async fn recoverable_block_apply_error_retries_active_download() {
+        let chain = vec![Block::genesis(), Block::new(1, GENESIS_ID, 1, 1)];
+        let peer = BlockProvider::new(chain.clone(), Ok(chain[1].clone()));
+        let processor = MockBlockProcessor::with_parent_missing_once();
+        let failures = Arc::clone(&processor.parent_missing_failures);
+        let network = MockNetworkAdapter::<()>::new(vec![(NodeId(0), peer)]);
+        let mut ibd = InitialBlockDownload::new(processor, network.clone());
+        let mut downloader = OrphanBlocksDownloader::new(
+            network,
+            10.try_into().expect("orphan cache size must be non-zero"),
+            0,
+        );
+        downloader
+            .enqueue_orphan(chain[1].id, None, [10u8; 32].into(), [11u8; 32].into())
+            .expect("test orphan should enqueue");
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            ibd.drain_downloader(&mut downloader),
+        )
+        .await
+        .expect("recoverable IBD retry timed out");
+
+        assert_eq!(failures.load(Ordering::SeqCst), 1);
+        assert!(ibd.block_processor.cryptarchia.has_block(&chain[1].id));
+        assert!(!downloader.should_poll());
+    }
+
     /// Multi-round flow: round 1 syncs the peer's first reported tip, round 2
     /// picks up the peer's advanced tip, round 3 sees the tip in local tree
     /// and completes IBD.
@@ -647,6 +686,8 @@ mod tests {
     struct MockBlockProcessor {
         cryptarchia: lb_chain_service::Cryptarchia,
         process_block_failures: Arc<AtomicUsize>,
+        parent_missing_failures: Arc<AtomicUsize>,
+        parent_missing_once: Arc<AtomicBool>,
     }
 
     impl MockBlockProcessor {
@@ -654,7 +695,15 @@ mod tests {
             Self {
                 cryptarchia: new_cryptarchia(),
                 process_block_failures: Arc::new(AtomicUsize::new(0)),
+                parent_missing_failures: Arc::new(AtomicUsize::new(0)),
+                parent_missing_once: Arc::new(AtomicBool::new(false)),
             }
+        }
+
+        fn with_parent_missing_once() -> Self {
+            let processor = Self::new();
+            processor.parent_missing_once.store(true, Ordering::SeqCst);
+            processor
         }
     }
 
@@ -667,6 +716,16 @@ mod tests {
             if self.cryptarchia.has_block(&block.id) {
                 return Err(Error::BlockProcessing(ChainError::Cryptarchia(
                     lb_chain_service::api::ApiError::AlreadyApplied(block.id),
+                )));
+            }
+
+            if self.parent_missing_once.swap(false, Ordering::SeqCst) {
+                self.parent_missing_failures.fetch_add(1, Ordering::SeqCst);
+                return Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                    lb_chain_service::api::ApiError::ParentMissing {
+                        parent: block.parent,
+                        info: Box::new(self.cryptarchia.info()),
+                    },
                 )));
             }
 

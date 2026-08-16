@@ -410,14 +410,18 @@ where
                             block.header().id(),
                             block.header().slot(),
                         )
-                        .await
+                            .await
                         {
                             Ok(()) => {}
                             Err(DoNotProcessBlock::OlderThanLib) => {
                                 orphan_downloader.insert_rejected_block(header_id);
+                                orphan_downloader.confirm_active_download();
                                 continue;
                             }
-                            Err(DoNotProcessBlock::AlreadyApplied) => continue,
+                            Err(DoNotProcessBlock::AlreadyApplied) => {
+                                orphan_downloader.confirm_active_download();
+                                continue;
+                            }
                         }
 
                         Self::log_received_block(&block);
@@ -426,14 +430,17 @@ where
                             .await
                         {
                             Ok(()) => {
+                                orphan_downloader.confirm_active_download();
                                 trace!(counter.consensus_processed_blocks = 1);
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
-                                if !is_recoverable_apply_error(&e) {
+                                if is_recoverable_apply_error(&e) {
+                                    orphan_downloader.retry_active_download();
+                                } else {
                                     orphan_downloader.insert_rejected_block(header_id);
+                                    orphan_downloader.cancel_active_download();
                                 }
-                                orphan_downloader.cancel_active_download();
                             }
                         }
                     }
@@ -846,7 +853,7 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
-const fn is_recoverable_apply_error(err: &Error) -> bool {
+pub(crate) const fn is_recoverable_apply_error(err: &Error) -> bool {
     matches!(
         err,
         Error::Cryptarchia(

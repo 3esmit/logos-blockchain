@@ -267,6 +267,11 @@ pub struct CryptarchiaArgs {
     /// empty, regardless of any peers passed via `--net-initial-peers`/`-p`.
     #[clap(long = "skip-ibd", default_value_t = false)]
     pub skip_ibd: bool,
+
+    /// Override the prolonged bootstrap period for embedded configuration
+    /// generation. CLI callers keep the node default when omitted.
+    #[clap(skip)]
+    pub prolonged_bootstrap_period_secs: Option<u64>,
 }
 
 #[derive(Parser, Debug, Default, Clone, Copy)]
@@ -496,11 +501,16 @@ pub const fn update_cryptarchia(
 ) {
     let CryptarchiaArgs {
         cryptarchia_funding_pk: funding_pk,
+        prolonged_bootstrap_period_secs,
         ..
     } = cryptarchia_args;
 
     if let Some(pk) = funding_pk {
         cryptarchia.set_funding_pk(pk);
+    }
+
+    if let Some(period_secs) = prolonged_bootstrap_period_secs {
+        cryptarchia.service.bootstrap.prolonged_bootstrap_period = Duration::from_secs(period_secs);
     }
 }
 

@@ -111,58 +111,6 @@ impl TryFrom<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn conversion_preserves_genesis_identity() {
-        let genesis_id = lb_core::header::HeaderId::from([1; 32]);
-        let info = lb_chain_service::ChainServiceInfo {
-            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
-                genesis_id: Some(genesis_id),
-                lib: lb_core::header::HeaderId::from([2; 32]),
-                lib_slot: lb_chain_service::Slot::new(3),
-                tip: lb_core::header::HeaderId::from([4; 32]),
-                slot: lb_chain_service::Slot::new(5),
-                height: 6,
-                state: lb_chain_service::State::Online,
-            },
-            phase: lb_chain_service::PhaseTag::Following,
-        };
-
-        let ffi = CryptarchiaInfo::try_from(info).expect("genesis identity should be present");
-
-        assert_eq!(ffi.genesis_id, [1; 32]);
-    }
-
-    #[test]
-    fn conversion_rejects_missing_genesis_identity() {
-        let info = lb_chain_service::ChainServiceInfo {
-            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
-                genesis_id: None,
-                lib: lb_core::header::HeaderId::from([2; 32]),
-                lib_slot: lb_chain_service::Slot::new(3),
-                tip: lb_core::header::HeaderId::from([4; 32]),
-                slot: lb_chain_service::Slot::new(5),
-                height: 6,
-                state: lb_chain_service::State::Online,
-            },
-            phase: lb_chain_service::PhaseTag::Following,
-        };
-
-        let result = CryptarchiaInfo::try_from(info);
-
-        assert!(matches!(
-            result,
-            Err(OperationStatus {
-                code: OperationStatusCode::ValidationError,
-                ..
-            })
-        ));
-    }
-}
-
 /// Gets the current Cryptarchia info.
 ///
 /// This is a synchronous wrapper around the asynchronous
@@ -298,6 +246,11 @@ pub(crate) fn get_block_events_sync(
 pub type FfiGetBlockEventsResult = FfiStatusResult<*mut c_char>;
 
 /// Get a block's events as a JSON string.
+///
+/// # Safety
+///
+/// `node` and `header_id` must be non-null pointers to valid values. The
+/// pointed-to node must remain alive for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_block_events(
     node: *const LogosBlockchainNode,
@@ -310,4 +263,56 @@ pub unsafe extern "C" fn get_block_events(
     let node = unsafe { &*node };
     let json_cstring = unwrap_or_return_error!(get_block_events_sync(node, header_id));
     FfiGetBlockEventsResult::ok(json_cstring.into_raw())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversion_preserves_genesis_identity() {
+        let genesis_id = lb_core::header::HeaderId::from([1; 32]);
+        let info = lb_chain_service::ChainServiceInfo {
+            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
+                genesis_id: Some(genesis_id),
+                lib: lb_core::header::HeaderId::from([2; 32]),
+                lib_slot: lb_chain_service::Slot::new(3),
+                tip: lb_core::header::HeaderId::from([4; 32]),
+                slot: lb_chain_service::Slot::new(5),
+                height: 6,
+                state: lb_chain_service::State::Online,
+            },
+            phase: lb_chain_service::PhaseTag::Following,
+        };
+
+        let ffi = CryptarchiaInfo::try_from(info).expect("genesis identity should be present");
+
+        assert_eq!(ffi.genesis_id, [1; 32]);
+    }
+
+    #[test]
+    fn conversion_rejects_missing_genesis_identity() {
+        let info = lb_chain_service::ChainServiceInfo {
+            cryptarchia_info: lb_chain_service::CryptarchiaInfo {
+                genesis_id: None,
+                lib: lb_core::header::HeaderId::from([2; 32]),
+                lib_slot: lb_chain_service::Slot::new(3),
+                tip: lb_core::header::HeaderId::from([4; 32]),
+                slot: lb_chain_service::Slot::new(5),
+                height: 6,
+                state: lb_chain_service::State::Online,
+            },
+            phase: lb_chain_service::PhaseTag::Following,
+        };
+
+        let result = CryptarchiaInfo::try_from(info);
+
+        assert!(matches!(
+            result,
+            Err(OperationStatus {
+                code: OperationStatusCode::ValidationError,
+                ..
+            })
+        ));
+    }
 }

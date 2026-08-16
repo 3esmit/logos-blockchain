@@ -2048,6 +2048,7 @@ mod tests {
 
     fn chain_info() -> CryptarchiaInfo {
         CryptarchiaInfo {
+            genesis_id: None,
             lib: HeaderId::from([2; 32]),
             slot: Slot::new(TIP_SLOT),
             lib_slot: Slot::new(LIB_SLOT),
@@ -2059,6 +2060,7 @@ mod tests {
 
     fn small_chain() -> CryptarchiaInfo {
         CryptarchiaInfo {
+            genesis_id: None,
             lib: HeaderId::from([2; 32]),
             slot: Slot::new(100),
             lib_slot: Slot::new(0),

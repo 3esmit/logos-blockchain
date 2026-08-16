@@ -211,6 +211,11 @@ where
                             "transient block-application failure; retrying the download"
                         );
                         downloader.retry_active_download();
+                        // Leave the retry queued for the next IBD round.  A
+                        // peer can return the same incomplete range; retrying
+                        // in this drain loop would replay the whole prefix in
+                        // a tight loop and can exhaust the chain service.
+                        break;
                     }
                     Err(err) => {
                         warn!(?err, "failed to process block; cancelling the download");
@@ -566,6 +571,15 @@ mod tests {
         .expect("recoverable IBD retry timed out");
 
         assert_eq!(failures.load(Ordering::SeqCst), 1);
+        assert!(downloader.should_poll());
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            ibd.drain_downloader(&mut downloader),
+        )
+        .await
+        .expect("queued IBD retry timed out");
+
         assert!(ibd.block_processor.cryptarchia.has_block(&chain[1].id));
         assert!(!downloader.should_poll());
     }

@@ -435,12 +435,8 @@ where
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
-                                if is_recoverable_apply_error(&e) {
-                                    orphan_downloader.retry_active_download();
-                                } else {
-                                    orphan_downloader.insert_rejected_block(header_id);
-                                    orphan_downloader.cancel_active_download();
-                                }
+                                orphan_downloader.insert_rejected_block(header_id);
+                                orphan_downloader.cancel_active_download();
                             }
                         }
                     }

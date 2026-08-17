@@ -140,16 +140,30 @@ fn update_cryptarchia_config(
         .expect("Cryptarchia funding key set by default");
     cryptarchia_config.set_funding_pk(cryptarchia_funding_key.to_public_key());
 
+    if cryptarchia_args.skip_ibd {
+        cryptarchia_config
+            .network
+            .bootstrap
+            .ibd
+            .discover_connected_peers = false;
+    }
+
     if !cryptarchia_args.skip_ibd
         && let Some(initial_peers) = initial_peers
     {
-        cryptarchia_config.network.bootstrap.ibd.peers = initial_peers
+        let ibd_peers = initial_peers
             .iter()
             .filter_map(|addr| match addr.iter().last() {
                 Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
                 _ => None,
             })
-            .collect();
+            .collect::<std::collections::HashSet<_>>();
+        cryptarchia_config
+            .network
+            .bootstrap
+            .ibd
+            .discover_connected_peers = !initial_peers.is_empty() && ibd_peers.is_empty();
+        cryptarchia_config.network.bootstrap.ibd.peers = ibd_peers;
     }
 
     update_cryptarchia(cryptarchia_config, cryptarchia_args);

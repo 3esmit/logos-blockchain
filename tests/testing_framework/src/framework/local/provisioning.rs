@@ -707,6 +707,7 @@ fn build_cryptarchia_user_config(
             bootstrap: network::BootstrapConfig {
                 ibd: network::IbdConfig {
                     peers: HashSet::new(),
+                    discover_connected_peers: false,
                     delay_before_new_download: Duration::from_secs(10),
                     tips_fetch_max_attempts: 3,
                     tips_fetch_min_delay: Duration::from_millis(250),

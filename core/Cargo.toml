@@ -35,6 +35,7 @@ lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }
 multiaddr                     = { workspace = true }
 num-bigint                    = { workspace = true }
+rpds                          = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 strum                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }

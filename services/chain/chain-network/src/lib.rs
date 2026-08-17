@@ -29,7 +29,6 @@ pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
-use lb_system_sig_service::{SystemSig, SystemSigMessage};
 use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
@@ -231,7 +230,6 @@ where
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
-    RuntimeServiceId: AsServiceId<SystemSig<RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -254,12 +252,6 @@ where
             &self.service_resources_handle,
         )
         .await;
-        let system_sig_relay = self
-            .service_resources_handle
-            .overwatch_handle
-            .relay::<SystemSig<RuntimeServiceId>>()
-            .await?;
-
         let ChainNetworkSettings {
             network: network_config,
             bootstrap: bootstrap_config,
@@ -313,9 +305,9 @@ where
                 error!(
                     "Initial Block Download failed: {e:?}. Chain network service will stop; retry with different bootstrap peers"
                 );
-                if let Err(error) = system_sig_relay.send(SystemSigMessage::Shutdown).await {
-                    error!("Failed to request top-level shutdown after IBD failure: {error:?}");
-                }
+                // Let the service runner perform local cleanup. Sending a
+                // top-level shutdown from this task races that cleanup and
+                // can double-panic while the node is unwinding an IBD error.
                 return Err(DynError::from(format!(
                     "Initial Block Download failed: {e:?}"
                 )));
@@ -416,14 +408,18 @@ where
                             block.header().id(),
                             block.header().slot(),
                         )
-                        .await
+                            .await
                         {
                             Ok(()) => {}
                             Err(DoNotProcessBlock::OlderThanLib) => {
                                 orphan_downloader.insert_rejected_block(header_id);
+                                orphan_downloader.confirm_active_download();
                                 continue;
                             }
-                            Err(DoNotProcessBlock::AlreadyApplied) => continue,
+                            Err(DoNotProcessBlock::AlreadyApplied) => {
+                                orphan_downloader.confirm_active_download();
+                                continue;
+                            }
                         }
 
                         Self::log_received_block(&block);
@@ -432,13 +428,12 @@ where
                             .await
                         {
                             Ok(()) => {
+                                orphan_downloader.confirm_active_download();
                                 trace!(counter.consensus_processed_blocks = 1);
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
-                                if !is_recoverable_apply_error(&e) {
-                                    orphan_downloader.insert_rejected_block(header_id);
-                                }
+                                orphan_downloader.insert_rejected_block(header_id);
                                 orphan_downloader.cancel_active_download();
                             }
                         }
@@ -852,7 +847,7 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
-const fn is_recoverable_apply_error(err: &Error) -> bool {
+pub(crate) const fn is_recoverable_apply_error(err: &Error) -> bool {
     matches!(
         err,
         Error::Cryptarchia(

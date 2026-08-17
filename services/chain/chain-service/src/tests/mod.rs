@@ -42,7 +42,7 @@ use tokio::{
 };
 
 use crate::{
-    Cryptarchia, CryptarchiaConsensus, Error,
+    ChainServiceInfo, Cryptarchia, CryptarchiaConsensus, CryptarchiaInfo, Error, PhaseTag, State,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -59,7 +59,7 @@ fn cryptarchia_switch_to_online() {
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
         config,
-        lb_cryptarchia_engine::State::Bootstrapping,
+        State::Bootstrapping,
         Slot::new(0),
         0,
     );
@@ -109,41 +109,10 @@ fn cryptarchia_switch_to_online() {
 }
 
 #[test]
-fn cryptarchia_info_deserializes_legacy_http_response_without_genesis_identity() {
-    let expected_genesis_id = HeaderId::from([1; 32]);
-    let mut response = serde_json::to_value(ChainServiceInfo {
-        cryptarchia_info: CryptarchiaInfo {
-            genesis_id: Some(expected_genesis_id),
-            lib: HeaderId::from([2; 32]),
-            lib_slot: Slot::new(3),
-            tip: HeaderId::from([4; 32]),
-            slot: Slot::new(5),
-            height: 6,
-            state: State::Online,
-        },
-        phase: PhaseTag::Following,
-    })
-    .unwrap();
-    let current = serde_json::from_value::<ChainServiceInfo>(response.clone()).unwrap();
-    assert_eq!(
-        current.cryptarchia_info.genesis_id,
-        Some(expected_genesis_id)
-    );
-    response["cryptarchia_info"]
-        .as_object_mut()
-        .unwrap()
-        .remove("genesis_id");
-
-    let parsed = serde_json::from_value::<ChainServiceInfo>(response).unwrap();
-
-    assert_eq!(parsed.cryptarchia_info.genesis_id, None);
-}
-
-#[test]
 fn cryptarchia_info_deserializes_legacy_mode_wire() {
     let mut response = serde_json::to_value(ChainServiceInfo {
         cryptarchia_info: CryptarchiaInfo {
-            genesis_id: Some(HeaderId::from([1; 32])),
+            genesis_id: None,
             lib: HeaderId::from([2; 32]),
             lib_slot: Slot::new(3),
             tip: HeaderId::from([4; 32]),
@@ -164,10 +133,6 @@ fn cryptarchia_info_deserializes_legacy_mode_wire() {
     let parsed = serde_json::from_value::<ChainServiceInfo>(response).unwrap();
 
     assert_eq!(parsed.cryptarchia_info.state, State::Online);
-    assert_eq!(
-        parsed.cryptarchia_info.genesis_id,
-        Some(HeaderId::from([1; 32]))
-    );
     assert_eq!(parsed.phase, PhaseTag::Following);
 }
 
@@ -201,7 +166,7 @@ async fn get_block_ids_from_memory_and_storage() {
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
         config,
-        lb_cryptarchia_engine::State::Online,
+        State::Online,
         Slot::genesis(),
         0,
     );
@@ -389,7 +354,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverifie
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
         config,
-        lb_cryptarchia_engine::State::Online,
+        State::Online,
         Slot::genesis(),
         0,
     );

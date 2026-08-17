@@ -184,7 +184,8 @@ pub struct InitArgs {
 pub struct EmbeddedInitArgs {
     /// Trusted peers to bootstrap from (multiaddr format).
     /// If `--skip-ibd` is not set, peers whose multiaddrs include a `PeerId`
-    /// are also used as IBD peers.
+    /// are queried directly during IBD; peer-less addresses enable discovery
+    /// of their connected tips after the network handshake.
     pub initial_peers: Vec<Multiaddr>,
 
     /// Output file path for the generated config
@@ -210,6 +211,13 @@ pub struct EmbeddedInitArgs {
     /// Disable Initial Block Download (IBD) by leaving the IBD peer list
     /// empty, regardless of any peers passed via `--initial-peers`/`-p`.
     pub skip_ibd: bool,
+
+    /// Optional prolonged bootstrap period override, in seconds.
+    ///
+    /// This is used by embedded callers that need a bounded transition from
+    /// IBD completion to the online state. Omitting it preserves the normal
+    /// one-hour node default.
+    pub prolonged_bootstrap_period_secs: Option<u64>,
 
     /// Log filter directives to write into the generated config, e.g.
     /// `warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error`.
@@ -240,6 +248,8 @@ impl From<EmbeddedInitArgs> for InitArgs {
             Some(BlendCoreConfig::default_listening_address(args.blend_port));
 
         init_args.cryptarchia.skip_ibd = args.skip_ibd;
+        init_args.cryptarchia.prolonged_bootstrap_period_secs =
+            args.prolonged_bootstrap_period_secs;
         init_args.api.addr = Some(args.http_addr);
         init_args.state.path.clone_from(&args.state_path);
         init_args.storage_path.clone_from(&args.storage_path);
@@ -264,6 +274,7 @@ impl Default for EmbeddedInitArgs {
             storage_path: None,
             logs_path: None,
             skip_ibd: false,
+            prolonged_bootstrap_period_secs: None,
             log_filter: None,
             kms_file: None,
         }

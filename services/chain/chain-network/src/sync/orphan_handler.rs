@@ -42,6 +42,8 @@ where
     network_adapter: NetAdapter,
     /// Current state of the downloader with associated data
     state: DownloaderState<NetAdapter::Block>,
+    /// Target metadata retained until the consumer confirms the yielded block.
+    completed_download: Option<OrphanInfo>,
     /// Maximum number of orphans to queue
     max_pending_orphans: NonZeroUsize,
     /// Negative cache of block IDs the orphan pipeline should skip
@@ -131,6 +133,7 @@ where
             pending_orphans_queue: HashMap::new(),
             network_adapter,
             state: DownloaderState::Idle,
+            completed_download: None,
             max_pending_orphans,
             rejected_blocks: RejectedBlocks::new(max_rejected_cache_size),
             waker: None,
@@ -295,6 +298,7 @@ where
     }
 
     pub fn cancel_active_download(&mut self) {
+        self.completed_download = None;
         if let DownloaderState::Downloading(download) = &mut self.state {
             let orphan_id = download.orphan_block_id();
             self.remove_orphan(&orphan_id);
@@ -305,6 +309,45 @@ where
         if let Some(waker) = &self.waker {
             waker.wake_by_ref();
         }
+    }
+
+    /// Re-queue the active orphan after a transient block-application error.
+    ///
+    /// A block can arrive before its parent when a peer response is incomplete
+    /// or out of order. The target is removed as soon as it is yielded, so
+    /// cancelling the stream would otherwise lose the orphan until a later
+    /// tip poll. Preserve the request for the next downloader poll instead.
+    pub fn retry_active_download(&mut self) {
+        let Some(orphan_info) = (match &self.state {
+            DownloaderState::Downloading(download) => Some(download.orphan_info.clone()),
+            DownloaderState::Idle => self.completed_download.take(),
+            DownloaderState::Requesting(_) => None,
+        }) else {
+            return;
+        };
+
+        self.state = DownloaderState::Idle;
+
+        if !self
+            .rejected_blocks
+            .contains_block_or_parent(&orphan_info.orphan_id, orphan_info.parent_id.as_ref())
+            && !self
+                .pending_orphans_queue
+                .contains_key(&orphan_info.orphan_id)
+        {
+            self.pending_orphans_queue
+                .insert(orphan_info.orphan_id, orphan_info);
+            metrics::orphan_blocks_pending(self.pending_orphans_queue.len());
+        }
+
+        if let Some(waker) = &self.waker {
+            waker.wake_by_ref();
+        }
+    }
+
+    /// Confirms the most recently yielded target block was applied.
+    pub const fn confirm_active_download(&mut self) {
+        self.completed_download = None;
     }
 
     pub fn should_poll(&self) -> bool {
@@ -408,6 +451,7 @@ where
                             metrics::orphan_observe_parent_fetch_ok(
                                 download.download_started_at.elapsed(),
                             );
+                            self.completed_download = Some(download.orphan_info.clone());
                             self.state = DownloaderState::Idle;
                         }
 

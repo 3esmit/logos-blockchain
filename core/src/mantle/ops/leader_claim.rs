@@ -45,6 +45,9 @@ pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 
+/// Nullifiers of vouchers claimed since genesis.
+pub type VoucherNullifiers = rpds::HashTrieSetSync<VoucherNullifier>;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, BinaryCodec)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
@@ -169,13 +172,13 @@ pub struct LeaderClaimPreverificationContext<'a> {
 }
 
 pub struct LeaderClaimVerificationContext<'a> {
-    pub nullifiers: &'a rpds::HashTrieSetSync<VoucherNullifier>,
+    pub nullifiers: &'a VoucherNullifiers,
     pub claimable_vouchers_root: &'a RewardsRoot,
     pub tx_hash_view: &'a TxHashView,
 }
 
 pub struct LeaderClaimExecutionContext {
-    pub nullifiers: rpds::HashTrieSetSync<VoucherNullifier>,
+    pub nullifiers: VoucherNullifiers,
     pub reward_amount: Value,
     pub claimable_rewards: Value,
     pub utxos: Utxos,

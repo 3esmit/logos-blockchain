@@ -104,8 +104,8 @@ pub fn subscribe_to_new_blocks_sync(
                                 .map(|tx| TxWithId::new(tx.clone()))
                                 .collect();
                             let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
-                            header,
-                            block.uncle_headers().clone(),
+                                header,
+                                block.uncle_headers().clone(),
                                 BlockTransactions::try_from(txs_with_id)
                                     .expect("Block should always build from valid block"),
                                 signature,

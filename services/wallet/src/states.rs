@@ -425,7 +425,7 @@ impl<'u> ServiceState<'u> {
 mod tests {
     use std::sync::Arc;
 
-    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+    use lb_groth16::{Field as _, Fr};
     use tokio::sync::watch;
 
     use super::*;

@@ -109,11 +109,10 @@ fn cryptarchia_switch_to_online() {
 }
 
 #[test]
-fn cryptarchia_info_deserializes_legacy_http_response_without_genesis_identity() {
-    let expected_genesis_id = HeaderId::from([1; 32]);
+fn cryptarchia_info_deserializes_legacy_mode_wire() {
     let mut response = serde_json::to_value(ChainServiceInfo {
         cryptarchia_info: CryptarchiaInfo {
-            genesis_id: Some(expected_genesis_id),
+            genesis_id: None,
             lib: HeaderId::from([2; 32]),
             lib_slot: Slot::new(3),
             tip: HeaderId::from([4; 32]),
@@ -124,19 +123,17 @@ fn cryptarchia_info_deserializes_legacy_http_response_without_genesis_identity()
         phase: PhaseTag::Following,
     })
     .unwrap();
-    let current = serde_json::from_value::<ChainServiceInfo>(response.clone()).unwrap();
-    assert_eq!(
-        current.cryptarchia_info.genesis_id,
-        Some(expected_genesis_id)
-    );
     response["cryptarchia_info"]
         .as_object_mut()
         .unwrap()
-        .remove("genesis_id");
+        .remove("state");
+    response.as_object_mut().unwrap().remove("phase");
+    response["mode"] = serde_json::json!({"Started": "Online"});
 
     let parsed = serde_json::from_value::<ChainServiceInfo>(response).unwrap();
 
-    assert_eq!(parsed.cryptarchia_info.genesis_id, None);
+    assert_eq!(parsed.cryptarchia_info.state, State::Online);
+    assert_eq!(parsed.phase, PhaseTag::Following);
 }
 
 #[tokio::test(flavor = "multi_thread")]

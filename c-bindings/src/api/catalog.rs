@@ -253,7 +253,7 @@ mod tests {
 
     use lb_api_service::http::mantle::BlockWithChainState;
     use lb_core::{
-        block::{Block, BlockTransactions},
+        block::{Block, BlockTransactions, UncleHeaders},
         header::HeaderId,
         proofs::leader_proof::Groth16LeaderProof,
     };
@@ -272,6 +272,7 @@ mod tests {
         Block::<SignedMantleTx<Preverified>>::create(
             parent,
             Slot::new(slot),
+            UncleHeaders::empty(),
             proof,
             BlockTransactions::empty(),
             &signing_key,

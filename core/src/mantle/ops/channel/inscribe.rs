@@ -12,10 +12,15 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
+        Value,
         channel::{ChannelState, Channels, Error},
-        ledger::Operation,
-        ops::channel::config::Keys,
-        transactions::hash::TxHashView,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        ledger::{
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode, verification_mode::VerificationMode,
+        },
+        ops::{SignedOp, channel::config::Keys},
+        transactions::{hash::TxHashView, states::VerificationState},
     },
 };
 
@@ -25,11 +30,33 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
+mod serde_inscription {
+    use serde::{Deserializer, Serializer};
+
+    use super::{Inscription, MAX_BYTES};
+
+    pub fn serialize<S>(inscription: &Inscription, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        lb_utils::serde::serde_bytes_slice::serialize(inscription, serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Inscription, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        lb_utils::serde::serde_bytes_slice::deserialize_bounded::<Inscription, MAX_BYTES, D>(
+            deserializer,
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
-    #[serde(with = "lb_utils::serde::serde_bytes_slice")]
+    #[serde(with = "serde_inscription")]
     pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
@@ -47,7 +74,6 @@ impl InscriptionOp {
 
 pub struct InscriptionPreverificationContext<'a> {
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a Ed25519Signature,
 }
 
 pub struct InscriptionValidationContext<'a> {
@@ -60,34 +86,40 @@ pub struct InscriptionExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
-    type PreverificationContext<'a>
-        = InscriptionPreverificationContext<'a>
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = InscriptionExecutionContext
-    where
-        Self: 'a;
-    type VerificationError = Error;
-    type ExecutionError = Error;
+impl ProvableOperation for InscriptionOp {
+    type Proof = Ed25519Signature;
+}
+
+impl OperationGas<MainnetGasProfile> for InscriptionOp {
+    const GAS_COST: Gas = Gas::new(56);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for InscriptionOp {
+    type Context<'a> = InscriptionPreverificationContext<'a>;
+    type Error = Error;
 
     fn preverify(
         &self,
-        context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<(), Self::Error> {
         // Check the signature
         self.signer
-            .verify(context.tx_hash_view.as_bytes(), context.proof)
+            .verify(context.tx_hash_view.as_bytes(), proof)
             .map_err(|_error| Error::InvalidSignature)?;
 
         Ok(())
     }
+}
 
-    fn verify(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
+    type Context<'a> = InscriptionValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
-        if let Some(channel) = ctx.channels.channel_state(&self.channel_id) {
+        if let Some(channel) = context.channels.channels.get(&self.channel_id).cloned() {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
                 return Err(Error::InvalidParent {
@@ -99,7 +131,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
             // Check that the signer is the authorized one
             if self.signer
-                != channel.accredited_keys[channel.round_robin(ctx.block_slot).0 as usize]
+                != channel.accredited_keys[channel.round_robin(context.block_slot).0 as usize]
             {
                 return Err(Error::UnauthorizedSigner {
                     channel_id: self.channel_id,
@@ -117,23 +149,29 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
         Ok(())
     }
+}
 
-    fn execute(
+impl ExecutableOperation for InscriptionOp {
+    type Context<'a> = InscriptionExecutionContext;
+    type Error = Error;
+
+    fn execute<'a>(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it
-        let channel = ctx
+        let channel = context
             .channels
-            .channel_state(&self.channel_id)
+            .channels
+            .get(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
                 accredited_keys: Keys::from(self.signer).into(),
                 configuration_threshold: 1,
                 tip_message: MsgId::root(),
-                tip_slot: ctx.block_slot,
+                tip_slot: context.block_slot,
                 tip_sequencer: 0,
-                tip_sequencer_starting_slot: ctx.block_slot,
+                tip_sequencer_starting_slot: context.block_slot,
                 posting_timeframe: 0.into(),
                 transfer_threshold: crate::mantle::channel::DEFAULT_TRANSFER_THRESHOLD,
                 posting_timeout: 0.into(),
@@ -141,17 +179,27 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
         // Update the channel sequencer, its starting slot, the tip message and the tip
         // slot
-        let (new_sequencer, new_starting_slot) = channel.round_robin(ctx.block_slot);
-        let updated = ChannelState {
-            tip_message: self.id(),
-            accredited_keys: Arc::clone(&channel.accredited_keys),
-            tip_sequencer: new_sequencer,
-            tip_sequencer_starting_slot: new_starting_slot,
-            tip_slot: ctx.block_slot,
-            ..channel
-        };
-        ctx.channels = ctx.channels.set_channel_state(&self.channel_id, updated);
-        Ok((ctx, Vec::new()))
+        let (new_sequencer, new_starting_slot) = channel.round_robin(context.block_slot);
+        context.channels.channels = context.channels.channels.insert(
+            self.channel_id,
+            ChannelState {
+                tip_message: self.id(),
+                accredited_keys: Arc::clone(&channel.accredited_keys),
+                tip_sequencer: new_sequencer,
+                tip_sequencer_starting_slot: new_starting_slot,
+                tip_slot: context.block_slot,
+                ..channel
+            },
+        );
+        Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<InscriptionOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 

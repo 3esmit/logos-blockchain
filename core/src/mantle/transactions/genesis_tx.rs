@@ -10,7 +10,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         OpProof, SignedMantleTx,
-        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
+        gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -19,7 +19,11 @@ use crate::{
             transfer::TransferOp,
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
-        transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
+        transactions::{
+            hash::TxHash,
+            mantle_tx::{MantleTx as _, RawMantleTx},
+            states::Preverified,
+        },
     },
 };
 
@@ -234,10 +238,10 @@ impl Hashable for GenesisTx {
     }
 }
 
-impl GasCalculator for GenesisTx {
+impl TxGasCalculator for GenesisTx {
     type Context = ();
 
-    fn total_gas_cost<Constants: GasConstants>(
+    fn total_gas_cost<Profile: GasProfile>(
         &self,
         _context: &Self::Context,
     ) -> Result<GasCost, GasOverflow> {
@@ -250,7 +254,7 @@ impl GasCalculator for GenesisTx {
         Ok(0.into())
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(
+    fn execution_gas_consumption<Profile: GasProfile>(
         &self,
         _context: &Self::Context,
     ) -> Result<Gas, GasOverflow> {
@@ -295,7 +299,7 @@ impl GenesisTxTrait for GenesisTx {
         })
     }
 
-    fn mantle_tx(&self) -> &MantleTx {
+    fn mantle_tx(&self) -> &RawMantleTx {
         self.tx.mantle_tx()
     }
 }
@@ -476,7 +480,10 @@ mod tests {
     use crate::{
         mantle::{
             ledger::{Inputs, Note, Outputs, Utxo, Value},
-            ops::channel::{Ed25519PublicKey, inscribe::Inscription},
+            ops::{
+                ZkAndEd25519Proof,
+                channel::{Ed25519PublicKey, inscribe::Inscription},
+            },
             transactions::{Ops, OpsProofs},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -530,10 +537,13 @@ mod tests {
             Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
                 CompressedGroth16Proof::from_bytes(&[0u8; 128]),
             )),
-            Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
-                zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                ed25519_sig: Ed25519Signature::zero(),
-            },
+            Op::SDPDeclare(_) => {
+                let proof = ZkAndEd25519Proof {
+                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                    ed25519_sig: Ed25519Signature::zero(),
+                };
+                OpProof::ZkAndEd25519Sigs(proof)
+            }
             other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
         }
     }
@@ -547,7 +557,7 @@ mod tests {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
-        let mantle_tx = MantleTx(Ops::new_unchecked(new_ops));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(new_ops));
         let ops_proofs = OpsProofs::try_from(ops_proofs).unwrap();
         let mut new_op_proofs = OpsProofs::from(OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),

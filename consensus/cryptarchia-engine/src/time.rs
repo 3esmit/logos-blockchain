@@ -4,7 +4,7 @@ use core::{
 };
 use std::{num::NonZero, time::Duration};
 
-use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
 #[cfg(feature = "tokio")]
@@ -22,6 +22,7 @@ use tokio::time::{Interval, MissedTickBehavior};
     Ord,
     serde::Serialize,
     serde::Deserialize,
+    BinaryCodec,
 )]
 pub struct Slot(u64);
 
@@ -180,6 +181,11 @@ impl Slot {
     #[must_use]
     pub const fn saturating_sub(self, rhs: Self) -> Self {
         Self(self.0.saturating_sub(rhs.0))
+    }
+
+    #[must_use]
+    pub fn checked_sub(self, rhs: Self) -> Option<Self> {
+        self.0.checked_sub(rhs.0).map(Self)
     }
 }
 

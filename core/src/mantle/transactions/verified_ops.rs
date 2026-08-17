@@ -1,7 +1,10 @@
 use crate::mantle::{
     Op, OpProof, SignedMantleTx, VerificationError,
     traits::Hashable as _,
-    transactions::{OperationVerificationHelper, hash::TxHashView, states::Preverified},
+    transactions::{
+        OperationVerificationHelper, hash::TxHashView, mantle_tx::MantleTx as _,
+        states::Preverified,
+    },
 };
 
 pub struct VerifiedOps<'tx> {
@@ -110,10 +113,10 @@ mod tests {
         let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], Some(withdraw_inputs));
 
         let channels = {
-            let channels = Channels::new();
+            let mut channels = Channels::new();
             let channel_state = make_channel_state(2, Some(keys));
+            channels.channels.insert_mut(channel_id, channel_state);
             channels
-                .set_channel_state(&channel_id, channel_state)
                 .register_channel_note(&note_id, &channel_id)
                 .expect("Note should be registered.")
         };

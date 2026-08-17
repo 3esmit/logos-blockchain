@@ -9,7 +9,7 @@ use lb_core::{
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         traits::Hashable as _,
-        transactions::{hash::TxHash, states::Unverified},
+        transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Unverified},
     },
 };
 use rpds::HashTrieSetSync;
@@ -43,15 +43,24 @@ struct PendingOtherTx {
     signed_tx: SignedMantleTx<Unverified>,
     first_parent: Option<MsgId>,
     last_msg: Option<MsgId>,
+    /// True when the tx bundles an inscription with its other ops (an atomic
+    /// bundle): it is part of the message chain, so publishes must chain
+    /// after it. A pure config cut carries no inscription and is not chained
+    /// — it orphans whatever it cuts off when it lands.
+    is_atomic_bundle: bool,
+    /// Submission order, for picking the newest chain restart among
+    /// config-led atomic bundles (see [`TxState::publish_parent`]).
+    seq: u64,
 }
 
 fn opaque_lineage(
     tx: &SignedMantleTx<Unverified>,
     channel_id: ChannelId,
-) -> (Option<MsgId>, Option<MsgId>) {
+) -> (Option<MsgId>, Option<MsgId>, bool) {
     let mut first_parent = None;
     let mut first_seen = false;
     let mut last_msg = None;
+    let mut is_atomic_bundle = false;
     for op in tx.mantle_tx().ops() {
         match op {
             Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
@@ -60,6 +69,7 @@ fn opaque_lineage(
                     first_parent = Some(inscribe.parent);
                 }
                 last_msg = Some(inscribe.id());
+                is_atomic_bundle = true;
             }
             Op::ChannelConfig(config) if config.channel == channel_id => {
                 first_seen = true;
@@ -68,7 +78,7 @@ fn opaque_lineage(
             _ => {}
         }
     }
-    (first_parent, last_msg)
+    (first_parent, last_msg, is_atomic_bundle)
 }
 
 /// Local pending inscription with lineage metadata.
@@ -110,6 +120,14 @@ pub struct TxState {
     block_txs: HashMap<HeaderId, Vec<BlockChannelTx>>,
     /// Last finalized channel tip — used as parent when pending is empty.
     finalized_msg: MsgId,
+    /// Monotonic submission counter for [`Self::pending_other`] entries.
+    next_other_seq: u64,
+    /// Lineage-parent of the entry behind [`Self::finalized_msg`]. Config ids
+    /// are payload-only hashes, so an id alone does not identify a lineage
+    /// position — the pair does. `None` when the finalized entry is unknown
+    /// (fresh state or checkpoint restore); the finalized-prefix search then
+    /// matches nothing (see [`Self::finalized_prefix_ids`]).
+    finalized_parent_msg: Option<MsgId>,
 }
 
 /// A channel-touching tx's tip-advancing content, classified once at block
@@ -142,9 +160,9 @@ impl BlockChannelTx {
         }
     }
 
-    /// The channel tip after this tx (its last tip-advancing op).
-    fn tip_msg(&self) -> Option<MsgId> {
-        self.infos().last().map(|i| i.this_msg)
+    /// The entry this tx leaves the channel at (its last tip-advancing op).
+    fn tip_entry(&self) -> Option<&InscriptionInfo> {
+        self.infos().last()
     }
 
     #[must_use]
@@ -168,12 +186,18 @@ impl TxState {
             current_lib: lib,
             block_txs: HashMap::new(),
             finalized_msg,
+            finalized_parent_msg: None,
+            next_other_seq: 0,
         }
     }
 
     /// Update the finalized channel tip from backfilled finalized history.
-    pub const fn set_finalized_msg(&mut self, msg: MsgId) {
+    /// `parent` is the entry's lineage-parent; pass `None` only when it is
+    /// genuinely unknown (disables the finalized-prefix mask until the next
+    /// boundary move records a parent).
+    pub const fn set_finalized_msg(&mut self, msg: MsgId, parent: Option<MsgId>) {
         self.finalized_msg = msg;
+        self.finalized_parent_msg = parent;
     }
 
     /// Submit an inscription tx for tracking with lineage metadata. Use
@@ -285,18 +309,29 @@ impl TxState {
             .collect()
     }
 
-    pub fn submit_other(&mut self, signed_tx: SignedMantleTx<Unverified>, channel_id: ChannelId) {
+    /// Returns the channel tip the tx leaves behind once mined (its last
+    /// tip-advancing op), or `None` when it carries none for this channel.
+    pub fn submit_other(
+        &mut self,
+        signed_tx: SignedMantleTx<Unverified>,
+        channel_id: ChannelId,
+    ) -> Option<MsgId> {
         let tx_hash = signed_tx.mantle_tx().hash();
-        let (first_parent, last_msg) = opaque_lineage(&signed_tx, channel_id);
+        let (first_parent, last_msg, is_atomic_bundle) = opaque_lineage(&signed_tx, channel_id);
         self.track_local_tx(tx_hash);
+        let seq = self.next_other_seq;
+        self.next_other_seq += 1;
         self.pending_other.insert(
             tx_hash,
             PendingOtherTx {
                 signed_tx,
                 first_parent,
                 last_msg,
+                is_atomic_bundle,
+                seq,
             },
         );
+        last_msg
     }
 
     fn track_local_tx(&mut self, tx_hash: TxHash) {
@@ -361,7 +396,15 @@ impl TxState {
         if lib != self.current_lib {
             // Compute finalized_msg BEFORE pruning — walk from new LIB
             // backwards to find the latest inscription in the finalized range.
-            self.finalized_msg = self.channel_tip_at(lib);
+            // Keep its lineage-parent too: the (id, parent) pair is what
+            // identifies the finalized position in `finalized_prefix_ids`.
+            if let Some((msg, parent)) = self
+                .channel_tip_entry_at(lib)
+                .map(|entry| (entry.this_msg, entry.parent_msg))
+            {
+                self.finalized_msg = msg;
+                self.finalized_parent_msg = Some(parent);
+            }
 
             // Prune ancestors of new lib (but not lib itself)
             let mut prune_cursor = self.parent_map.get(&lib).copied();
@@ -425,10 +468,11 @@ impl TxState {
     /// Pending txs eligible for resubmission: not yet safe at tip AND
     /// part of the local suffix reachable from canonical channel tip.
     ///
-    /// Returned in parent-before-child order (BFS from channel tip via
-    /// `pending_by_parent`) so the node's mempool sees the parent before
-    /// any child — matters on checkpoint resume, where `HashMap`
-    /// iteration order is arbitrary.
+    /// Returned in parent-before-child order so the node's mempool sees the
+    /// parent before any child: inscriptions via BFS from channel tip
+    /// (`pending_by_parent`), opaque txs by submission order (`seq`) — a
+    /// locally chained bundle can only be built after the bundle that
+    /// establishes its parent tip, so submission order is dependency order.
     pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx<Unverified>)> {
         let safe = self
             .block_states
@@ -446,12 +490,19 @@ impl TxState {
                     .get(&info.tx_hash)
                     .map(|p| (info.tx_hash, p.signed_tx.clone()))
             });
-        let others = self
+        let mut others: Vec<_> = self
             .pending_other
             .iter()
             .filter(|(hash, _)| !safe.contains(hash))
-            .map(|(hash, entry)| (*hash, entry.signed_tx.clone()));
-        inscriptions.chain(others).collect()
+            .collect();
+        others.sort_unstable_by_key(|(_, entry)| entry.seq);
+        inscriptions
+            .chain(
+                others
+                    .into_iter()
+                    .map(|(hash, entry)| (*hash, entry.signed_tx.clone())),
+            )
+            .collect()
     }
 
     /// Number of pending transactions (all types).
@@ -680,11 +731,15 @@ impl TxState {
             .pending
             .iter()
             .map(|(hash, p)| (*hash, p.signed_tx.clone()));
-        let others = self
-            .pending_other
-            .iter()
-            .map(|(hash, entry)| (*hash, entry.signed_tx.clone()));
-        inscriptions.chain(others).collect()
+        let mut others: Vec<_> = self.pending_other.iter().collect();
+        others.sort_unstable_by_key(|(_, entry)| entry.seq);
+        inscriptions
+            .chain(
+                others
+                    .into_iter()
+                    .map(|(hash, entry)| (*hash, entry.signed_tx.clone())),
+            )
+            .collect()
     }
 
     /// Remove a pending inscription and return its signed tx.
@@ -712,8 +767,23 @@ impl TxState {
     #[must_use]
     pub fn publish_parent(&self, tip: HeaderId) -> MsgId {
         let channel_tip = self.channel_tip_at(tip);
-        let tail = self.pending_publish_tail(channel_tip);
-        tail.unwrap_or(channel_tip)
+        // A pending config-led atomic bundle (`first_parent == None` but
+        // carrying an inscription) is part of the message chain even though
+        // nothing anchors it — the config resets the tip wherever it lands —
+        // so it acts as a chain restart: the walk starts from the newest
+        // one's last tip-advancing op instead of the mined channel tip. A
+        // pure config cut (no inscription) is deliberately NOT chained: it
+        // lands whenever it lands and orphans what it cut off, which is the
+        // shed/republish recovery contract.
+        let restart = self
+            .pending_other
+            .values()
+            .filter(|other| other.first_parent.is_none() && other.is_atomic_bundle)
+            .max_by_key(|other| other.seq)
+            .and_then(|other| other.last_msg);
+        let start = restart.unwrap_or(channel_tip);
+        let tail = self.pending_publish_tail(start);
+        tail.unwrap_or(start)
     }
 
     /// Walk local pending lineage from `from_msg` to find the tail,
@@ -723,19 +793,52 @@ impl TxState {
         let mut current = from_msg;
         let mut found_any = false;
 
-        loop {
-            let Some(children) = self.pending_by_parent.get(&current) else {
+        // Bounded by the pending population: a longer walk would mean a
+        // cycle in (possibly inconsistent) pending lineage data.
+        for _ in 0..=(self.pending.len() + self.pending_other.len()) {
+            let Some(next) = self.single_pending_child(current) else {
                 return found_any.then_some(current);
             };
-            if children.len() != 1 {
-                return found_any.then_some(current);
-            }
-            let Some(pending) = self.pending.get(&children[0]) else {
-                return found_any.then_some(current);
-            };
-            current = pending.this_msg;
+            current = next;
             found_any = true;
         }
+        found_any.then_some(current)
+    }
+
+    /// The unique pending link chaining off `current`, considering both plain
+    /// pending inscriptions and opaque pending txs (`submit_signed_tx`
+    /// bundles), which enter the chain at their first inscription's parent
+    /// and leave it at their last tip-advancing op. A contested position
+    /// (multiple candidates) yields `None` so the caller stops before it.
+    fn single_pending_child(&self, current: MsgId) -> Option<MsgId> {
+        let mut candidate: Option<MsgId> = None;
+        let mut push = |msg: MsgId| -> bool {
+            if candidate.is_some() && candidate != Some(msg) {
+                return false;
+            }
+            candidate = Some(msg);
+            true
+        };
+
+        if let Some(children) = self.pending_by_parent.get(&current) {
+            for tx_hash in children {
+                if let Some(pending) = self.pending.get(tx_hash)
+                    && !push(pending.this_msg)
+                {
+                    return None;
+                }
+            }
+        }
+        for other in self.pending_other.values() {
+            if other.first_parent == Some(current)
+                && let Some(last_msg) = other.last_msg
+                && last_msg != current
+                && !push(last_msg)
+            {
+                return None;
+            }
+        }
+        candidate
     }
 
     /// Derive the channel tip `MsgId` at a given L1 block by walking backwards
@@ -744,21 +847,29 @@ impl TxState {
     /// unfinalized window.
     #[must_use]
     pub fn channel_tip_at(&self, block_id: HeaderId) -> MsgId {
+        self.channel_tip_entry_at(block_id)
+            .map_or(self.finalized_msg, |entry| entry.this_msg)
+    }
+
+    /// Like [`Self::channel_tip_at`], but returns the tip-advancing entry
+    /// itself so callers can also learn its lineage-parent. `None` when no
+    /// entry exists in the walked window (the finalized boundary applies).
+    fn channel_tip_entry_at(&self, block_id: HeaderId) -> Option<&InscriptionInfo> {
         let mut current = block_id;
         loop {
             if let Some(txs) = self.block_txs.get(&current)
-                && let Some(tip) = txs.iter().rev().find_map(BlockChannelTx::tip_msg)
+                && let Some(entry) = txs.iter().rev().find_map(BlockChannelTx::tip_entry)
             {
-                return tip;
+                return Some(entry);
             }
 
             if current == self.current_lib {
-                return self.finalized_msg;
+                return None;
             }
 
             match self.parent_map.get(&current) {
                 Some(&parent) => current = parent,
-                None => return self.finalized_msg,
+                None => return None,
             }
         }
     }
@@ -773,7 +884,13 @@ impl TxState {
     /// - `orphaned`: txs that left it (replaced by a conflict). A bare un-mine
     ///   is a no-op — the link stays in the lineage via its held block.
     ///
-    /// Returns `None` if no channel state change.
+    /// Content at or below the finalized boundary is excluded from both
+    /// sides: it is immutable on every branch and surfaces via `finalized`.
+    ///
+    /// Returns `None` only when the channel did not change at all. A change
+    /// made purely of non-reportable entries (a config landing alone) yields
+    /// `Some` with empty `adopted`/`orphaned` — the tip still moved, and
+    /// callers must run their shed pass on every reported update.
     #[must_use]
     pub fn detect_channel_update(
         &self,
@@ -786,27 +903,68 @@ impl TxState {
         let old_ids: HashSet<MsgId> = old_lineage.iter().map(|i| i.this_msg).collect();
         let new_ids: HashSet<MsgId> = new_lineage.iter().map(|i| i.this_msg).collect();
 
-        let adopted = self.update_txs_from_infos(
-            new_lineage
-                .iter()
-                .filter(|i| !old_ids.contains(&i.this_msg)),
-        );
+        // Each lineage stops at the LIB of its capture time, so a LIB
+        // advance between the captures shifts the diff's lower boundary.
+        // Mask the finalized prefix on both sides so the shifted floor
+        // doesn't read as adopted/orphaned content.
+        let mut finalized = self.finalized_prefix_ids(old_lineage);
+        finalized.extend(self.finalized_prefix_ids(&new_lineage));
 
-        let orphaned = self.update_txs_from_infos(
-            old_lineage
-                .iter()
-                .filter(|i| !new_ids.contains(&i.this_msg)),
-        );
+        let adopted_infos: Vec<&InscriptionInfo> = new_lineage
+            .iter()
+            .filter(|i| !old_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg))
+            .collect();
 
-        if orphaned.is_empty() && adopted.is_empty() {
+        let orphaned_infos: Vec<&InscriptionInfo> = old_lineage
+            .iter()
+            .filter(|i| !new_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg))
+            .collect();
+
+        // Decide on the raw diff, before reportability filtering: a
+        // config-only change maps to no reportable entries but still moves
+        // the tip, and callers must run their shed pass on it.
+        if adopted_infos.is_empty() && orphaned_infos.is_empty() {
             return None;
         }
+
+        let adopted = self.update_txs_from_infos(adopted_infos.into_iter());
+        let orphaned = self.update_txs_from_infos(orphaned_infos.into_iter());
 
         Some(ChannelUpdateInfo {
             orphaned,
             adopted,
             new_channel_tip,
         })
+    }
+
+    /// Msg-ids of `lineage`'s prefix up to and including the finalized entry;
+    /// empty when the finalized boundary lies below the lineage's start.
+    ///
+    /// The entry is matched as a `(this_msg, parent_msg)` pair, not by id
+    /// alone: config ids are payload-only hashes, so a byte-identical config
+    /// replayed on a competing branch repeats the id under a different
+    /// lineage-parent — an id-only search would find it in the dead branch's
+    /// lineage and mask that branch's genuinely orphaned prefix (see
+    /// `replayed_config_on_competing_branch_does_not_hide_orphans`). The
+    /// last occurrence is taken because same-block config replay can repeat
+    /// the pair.
+    ///
+    /// An unknown parent (fresh state or checkpoint restore) matches
+    /// nothing: every boundary move records the parent, so until one happens
+    /// the boundary entry sits at-or-below the LIB and cannot appear in a
+    /// lineage — any id hit in that window is a recurrence false positive.
+    fn finalized_prefix_ids(&self, lineage: &[InscriptionInfo]) -> HashSet<MsgId> {
+        lineage
+            .iter()
+            .rposition(|i| {
+                i.this_msg == self.finalized_msg
+                    && self
+                        .finalized_parent_msg
+                        .is_some_and(|parent| i.parent_msg == parent)
+            })
+            .map_or_else(HashSet::new, |pos| {
+                lineage[..=pos].iter().map(|i| i.this_msg).collect()
+            })
     }
 
     /// One update entry per tx: a multi-op custom tx contributes several
@@ -974,7 +1132,7 @@ impl TxState {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, Op::ChannelInscribe, ops::channel::inscribe::InscriptionOp,
+        Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
         traits::Hashable as _, transactions::OpsProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
@@ -983,7 +1141,7 @@ mod tests {
     use crate::test_support::header_id;
 
     fn make_dummy_tx(data: u8) -> SignedMantleTx<Unverified> {
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             [ChannelInscribe(InscriptionOp {
                 channel_id: [0u8; 32].into(),
                 inscription: [data].into(),
@@ -1103,6 +1261,214 @@ mod tests {
         assert!(state.pending_txs(b2).iter().any(|(h, _)| *h == hash));
     }
 
+    /// Build an `[inscribe(parent), config]` bundle tx for the zero channel.
+    fn bundle_tx(parent: MsgId, data: u8) -> (SignedMantleTx<Unverified>, MsgId, MsgId) {
+        use lb_core::mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ops::channel::config::{ChannelConfigOp, Keys},
+        };
+        let inscribe = InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: [data].into(),
+            parent,
+            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        };
+        let config = ChannelConfigOp {
+            channel: [0u8; 32].into(),
+            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let inscribe_msg = inscribe.id();
+        let config_msg = config.id();
+        let tx = SignedMantleTx::new(
+            RawMantleTx([ChannelInscribe(inscribe), Op::ChannelConfig(config)].into()),
+            OpsProofs::empty(),
+        );
+        (tx, inscribe_msg, config_msg)
+    }
+
+    /// A pending `submit_signed_tx` bundle must participate in publish-parent
+    /// chaining: the next publish chains off the bundle's *last* tip-advancing
+    /// op (the config), not the pre-bundle tip — otherwise the two txs race
+    /// for the same channel position and one is permanently invalidated.
+    #[test]
+    fn publish_parent_chains_through_pending_bundle() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        let (bundle, _inscribe_msg, config_msg) = bundle_tx(MsgId::root(), 1);
+        let derived = state.submit_other(bundle, channel_id);
+        assert_eq!(derived, Some(config_msg), "bundle tip is its config op");
+
+        assert_eq!(
+            state.publish_parent(tip),
+            config_msg,
+            "next publish must chain after the pending bundle"
+        );
+    }
+
+    #[test]
+    fn pending_txs_orders_chained_bundles_parent_before_child() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        let mut parent = MsgId::root();
+        let mut hashes = Vec::new();
+        for data in 1..=6u8 {
+            let (bundle, _inscribe_msg, config_msg) = bundle_tx(parent, data);
+            hashes.push(bundle.mantle_tx().hash());
+            state.submit_other(bundle, channel_id);
+            parent = config_msg;
+        }
+
+        let resubmit: Vec<TxHash> = state.pending_txs(tip).iter().map(|(h, _)| *h).collect();
+        assert_eq!(
+            resubmit, hashes,
+            "resubmission must return chained bundles parent-before-child"
+        );
+        let checkpoint: Vec<TxHash> = state.all_pending_txs().iter().map(|(h, _)| *h).collect();
+        assert_eq!(
+            checkpoint, hashes,
+            "checkpoint serialization must preserve bundle submission order"
+        );
+    }
+
+    /// The chain walk composes across kinds: pending inscription, then a
+    /// bundle chained on it, then another pending inscription on the bundle's
+    /// config tip.
+    #[test]
+    fn publish_parent_walks_mixed_pending_chain() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        state.submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into());
+        let (bundle, _i, config_msg) = bundle_tx(msg_id(10), 2);
+        state.submit_other(bundle, channel_id);
+        state.submit_inscription(make_dummy_tx(3), config_msg, msg_id(30), [3].into());
+
+        assert_eq!(state.publish_parent(tip), msg_id(30));
+    }
+
+    /// A contested position (pending inscription and bundle both claiming the
+    /// same parent) stops the walk before the conflict, as for competing
+    /// inscriptions.
+    #[test]
+    fn publish_parent_stops_at_contested_bundle_position() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        state.submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into());
+        let (bundle, _i, _c) = bundle_tx(MsgId::root(), 2);
+        state.submit_other(bundle, channel_id);
+
+        assert_eq!(
+            state.publish_parent(tip),
+            MsgId::root(),
+            "walk must stop before a contested position"
+        );
+    }
+
+    /// A pending config-led tx (`[config, inscribe]`, nothing anchoring it to
+    /// the chain) acts as a chain restart: the next publish chains on its
+    /// last tip-advancing op, and anchored pending links continue from there.
+    #[test]
+    fn publish_parent_restarts_at_pending_config_led_tx() {
+        use lb_core::mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ops::channel::config::{ChannelConfigOp, Keys},
+        };
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        let config = ChannelConfigOp {
+            channel: [0u8; 32].into(),
+            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let inscribe = InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: [7].into(),
+            parent: config.id(),
+            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        };
+        let inscribe_msg = inscribe.id();
+        let tx = SignedMantleTx::new(
+            RawMantleTx([Op::ChannelConfig(config), ChannelInscribe(inscribe)].into()),
+            OpsProofs::empty(),
+        );
+
+        let derived = state.submit_other(tx, channel_id);
+        assert_eq!(derived, Some(inscribe_msg), "tip is the tx's last op");
+        assert_eq!(
+            state.publish_parent(tip),
+            inscribe_msg,
+            "walk restarts at the pending config-led tx's last op"
+        );
+
+        // Anchored pending links continue from the restart point.
+        state.submit_inscription(make_dummy_tx(9), inscribe_msg, msg_id(90), [9].into());
+        assert_eq!(state.publish_parent(tip), msg_id(90));
+    }
+
+    /// A pure config cut (no inscription in the tx) is NOT chained: it lands
+    /// whenever it lands and orphans what it cut off — publishes keep
+    /// chaining on the existing pending chain meanwhile.
+    #[test]
+    fn publish_parent_ignores_pending_pure_config_cut() {
+        use lb_core::mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ops::channel::config::{ChannelConfigOp, Keys},
+        };
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        state.submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into());
+
+        let config = ChannelConfigOp {
+            channel: [0u8; 32].into(),
+            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let cut = SignedMantleTx::new(
+            RawMantleTx([Op::ChannelConfig(config)].into()),
+            OpsProofs::empty(),
+        );
+        state.submit_other(cut, channel_id);
+
+        assert_eq!(
+            state.publish_parent(tip),
+            msg_id(10),
+            "a pure config cut must not divert the publish chain"
+        );
+    }
+
     #[test]
     fn lib_advance_prunes_ancestors_and_orphans() {
         // Chain: genesis <- a1 <- a2 <- a3 (lib) <- a4 <- a5 <- a6
@@ -1188,6 +1554,252 @@ mod tests {
         let hash = tx.mantle_tx().hash();
         state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
+    }
+
+    /// A config landing ALONE resets the channel tip, cutting off pending
+    /// inscriptions anchored at the previous tip. Configs are non-reportable
+    /// (`to_update_tx` maps them to `None`), so with the change-detection
+    /// keyed on the filtered lists the update collapsed to `None`, the
+    /// caller's shed pass never ran, and the cut-off pending was neither
+    /// surfaced as orphaned nor cleaned up. The raw diff must decide instead:
+    /// the update reports (with empty lists), and shed rescues the pending.
+    #[test]
+    fn config_landing_alone_reports_update_so_stale_pending_is_shed() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let b2 = header_id(2);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        // Mined inscription M establishes channel tip m.
+        let m_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(1).mantle_tx().hash(),
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(1),
+            payload: [1].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Inscription(m_info)],
+        );
+
+        // Local pending inscription P chained on m (published, not mined).
+        let p_hash = submit_fake_inscription(&mut state, 2, msg_id(1), msg_id(2));
+
+        let old_lineage = state.channel_lineage(b1);
+
+        // Config C lands alone; the tip resets to c.
+        let c_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            parent_msg: msg_id(1),
+            this_msg: msg_id(3),
+            payload: [3].into(),
+        };
+        state.process_block(
+            b2,
+            b1,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Config(c_info)],
+        );
+
+        let update = state
+            .detect_channel_update(&old_lineage, b2)
+            .expect("a config-only landing changes the channel and must report");
+        assert_eq!(update.new_channel_tip, msg_id(3));
+        assert!(
+            update.adopted.is_empty() && update.orphaned.is_empty(),
+            "configs are non-reportable; the update carries the tip change only"
+        );
+
+        // P no longer reaches the tip: excluded from resubmission and
+        // rescued by the shed pass the reported update triggers.
+        assert!(state.pending_txs(b2).iter().all(|(h, _)| *h != p_hash));
+        let shed = state.shed_off_branch_pending(b2);
+        assert!(
+            shed.iter().any(|p| p.tx_hash() == p_hash),
+            "the cut-off pending inscription must be shed for republish"
+        );
+    }
+
+    /// After a checkpoint restore the finalized entry's parent is unknown
+    /// (`finalized_parent_msg = None`). A replayed config above the restored
+    /// LIB then repeats the boundary id inside the live lineage — an id-only
+    /// fallback would mask its prefix and hide the orphan (the restore-window
+    /// variant of the recurrence bug). An unknown parent must match nothing.
+    #[test]
+    fn restored_state_with_unknown_parent_does_not_mask_replayed_boundary_id() {
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let b1 = header_id(2);
+        // Restored boundary: finalized_msg = X, parent unknown.
+        let x_msg = msg_id(30);
+        let mut state = TxState::new(genesis, x_msg);
+
+        // Old branch replays a config with the boundary id above the LIB:
+        // a1: [Inscribe U(root→u), Config X(u→x)].
+        let u_tx = make_dummy_tx(1);
+        let u_hash = u_tx.mantle_tx().hash();
+        let u_info = InscriptionInfo {
+            tx_hash: u_hash,
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(10),
+            payload: [1].into(),
+        };
+        let x_old = InscriptionInfo {
+            tx_hash: make_dummy_tx(2).mantle_tx().hash(),
+            parent_msg: msg_id(10),
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            a1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(u_info),
+                BlockChannelTx::Config(x_old),
+            ],
+        );
+        let old_lineage = state.channel_lineage(a1);
+
+        // Competing branch b1: [Inscribe V(root→v), Config X(v→x)].
+        let v_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(20),
+            payload: [3].into(),
+        };
+        let x_new = InscriptionInfo {
+            tx_hash: make_dummy_tx(4).mantle_tx().hash(),
+            parent_msg: msg_id(20),
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(v_info),
+                BlockChannelTx::Config(x_new),
+            ],
+        );
+
+        let update = state
+            .detect_channel_update(&old_lineage, b1)
+            .expect("branch switch must report");
+        assert!(
+            update.orphaned.iter().any(|tx| matches!(
+                tx,
+                ChannelUpdateTx::Inscription(info) if info.tx_hash == u_hash
+            )),
+            "U must be reported orphaned despite the unknown finalized parent; got {:?}",
+            update.orphaned
+        );
+    }
+
+    /// A byte-identical `ChannelConfig` replayed on a competing branch
+    /// repeats its msg id (config ids are payload-only hashes). When the LIB
+    /// jumps onto the new branch in the same event, an id-only
+    /// finalized-boundary search finds the replayed id in the OLD lineage and
+    /// masks its whole prefix — hiding the genuinely orphaned inscription
+    /// beneath it. Matching the boundary as a `(this_msg, parent_msg)` pair
+    /// keeps it positional: the two configs share an id but not a
+    /// lineage-parent.
+    #[test]
+    fn replayed_config_on_competing_branch_does_not_hide_orphans() {
+        // genesis ─ a1: [Inscribe U(root→u), Config X(u→x)]   (old canonical)
+        //        └─ b1: [Inscribe V(root→v), Config X(v→x)]   (new canonical)
+        //           b2: child of b1; LIB jumps to b1 in the same event
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let b1 = header_id(2);
+        let b2 = header_id(3);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        let u_msg = msg_id(10);
+        let v_msg = msg_id(20);
+        // Same config payload on both branches ⇒ same id.
+        let x_msg = msg_id(30);
+
+        let u_tx = make_dummy_tx(1);
+        let u_hash = u_tx.mantle_tx().hash();
+        let u_info = InscriptionInfo {
+            tx_hash: u_hash,
+            parent_msg: MsgId::root(),
+            this_msg: u_msg,
+            payload: [1].into(),
+        };
+        let x_old = InscriptionInfo {
+            tx_hash: make_dummy_tx(2).mantle_tx().hash(),
+            parent_msg: u_msg,
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            a1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(u_info),
+                BlockChannelTx::Config(x_old),
+            ],
+        );
+
+        // Captured at the old tip before the competing branch arrives,
+        // mirroring the real caller.
+        let old_lineage = state.channel_lineage(a1);
+        assert_eq!(old_lineage.len(), 2, "old lineage: U then Config X");
+
+        let v_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            parent_msg: MsgId::root(),
+            this_msg: v_msg,
+            payload: [3].into(),
+        };
+        let x_new = InscriptionInfo {
+            tx_hash: make_dummy_tx(4).mantle_tx().hash(),
+            parent_msg: v_msg,
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(v_info),
+                BlockChannelTx::Config(x_new),
+            ],
+        );
+        // The event that switches branches also advances the LIB past the
+        // replayed config: the finalized boundary becomes (x, parent = v).
+        state.process_block(b2, b1, b1, vec![], vec![]);
+
+        let update = state
+            .detect_channel_update(&old_lineage, b2)
+            .expect("branch switch with an orphaned inscription must report");
+        assert!(
+            update.orphaned.iter().any(|tx| matches!(
+                tx,
+                ChannelUpdateTx::Inscription(info) if info.tx_hash == u_hash
+            )),
+            "U fell off the canonical channel and must be reported orphaned; got {:?}",
+            update.orphaned
+        );
+        // V is finalized — it surfaces via the finalized path, not `adopted`.
+        assert!(
+            update.adopted.is_empty(),
+            "finalized content must not be reported adopted; got {:?}",
+            update.adopted
+        );
     }
 
     #[test]

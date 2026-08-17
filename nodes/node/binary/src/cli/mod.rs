@@ -184,7 +184,8 @@ pub struct InitArgs {
 pub struct EmbeddedInitArgs {
     /// Trusted peers to bootstrap from (multiaddr format).
     /// If `--skip-ibd` is not set, peers whose multiaddrs include a `PeerId`
-    /// are also used as IBD peers.
+    /// are queried directly during IBD; peer-less addresses enable discovery
+    /// of their connected tips after the network handshake.
     pub initial_peers: Vec<Multiaddr>,
 
     /// Output file path for the generated config

@@ -337,9 +337,7 @@ where
                 .time_relay()
                 .send(TimeServiceMessage::Subscribe { sender })
                 .await
-                .map_err(|(e, _)| {
-                    DynError::from(format!("failed to subscribe to slot ticks: {e}"))
-                })?;
+                .map_err(|e| DynError::from(format!("failed to subscribe to slot ticks: {e}")))?;
             receiver
                 .await
                 .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?

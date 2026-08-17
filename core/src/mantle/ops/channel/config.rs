@@ -8,9 +8,15 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
+        Value,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        ledger::Operation,
-        transactions::hash::TxHashView,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        ledger::{
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode, verification_mode::VerificationMode,
+        },
+        ops::SignedOp,
+        transactions::{hash::TxHashView, states::VerificationState},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -40,7 +46,6 @@ impl ChannelConfigOp {
 pub struct ChannelConfigValidationContext<'a> {
     pub channels: &'a Channels,
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a ChannelMultiSigProof,
 }
 
 pub struct ChannelConfigExecutionContext {
@@ -48,22 +53,25 @@ pub struct ChannelConfigExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
-    type PreverificationContext<'a>
-        = ()
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = ChannelConfigExecutionContext
-    where
-        Self: 'a;
-    type VerificationError = Error;
-    type ExecutionError = Error;
+impl ProvableOperation for ChannelConfigOp {
+    // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
+    // signature count. If this changes, update that too.
+    type Proof = ChannelMultiSigProof;
+}
+
+impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
+    const GAS_COST: Gas = Gas::new(56);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
+    type Context<'a> = ();
+    type Error = Error;
 
     fn preverify(
         &self,
-        _context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+        _proof: &Self::Proof,
+        _context: &Self::Context<'_>,
+    ) -> Result<(), Self::Error> {
         // Check config is well-formed
         if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
         {
@@ -72,19 +80,24 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
 
         Ok(())
     }
+}
 
-    fn verify(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
+    type Context<'a> = ChannelConfigValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
-        if let Some(channel) = ctx.channels.channel_state(&self.channel) {
+        if let Some(channel) = context.channels.channels.get(&self.channel).cloned() {
             // Check there is enough signatures
-            let signatures = ctx.proof.signatures();
+            let signatures = proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
                 return Err(Error::ThresholdUnmet {
                     channel_id: self.channel,
                     threshold: channel.configuration_threshold,
-                    actual: ctx.proof.signatures().len(),
+                    actual: proof.signatures().len(),
                 });
             }
 
@@ -98,7 +111,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
                         sequencers: channel.accredited_keys.len(),
                         index: signature.channel_key_index,
                     })?
-                    .verify(ctx.tx_hash_view.as_bytes(), &signature.signature)
+                    .verify(context.tx_hash_view.as_bytes(), &signature.signature)
                     .is_err()
                 {
                     return Err(Error::InvalidSignature);
@@ -108,25 +121,53 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
 
         Ok(())
     }
+}
 
-    fn execute(
+impl ExecutableOperation for ChannelConfigOp {
+    type Context<'a> = ChannelConfigExecutionContext;
+    type Error = Error;
+
+    fn execute<'a>(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
-        let channel = ChannelState {
-            accredited_keys: self.keys.clone().into(),
-            configuration_threshold: self.configuration_threshold,
-            tip_message: self.id(),
-            tip_slot: ctx.block_slot,
-            tip_sequencer: 0,
-            tip_sequencer_starting_slot: ctx.block_slot,
-            posting_timeframe: self.posting_timeframe.clone(),
-            transfer_threshold: self.transfer_threshold,
-            posting_timeout: self.posting_timeout.clone(),
-        };
-
+        mut context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it otherwise just update the config
-        ctx.channels = ctx.channels.set_channel_state(&self.channel, channel);
-        Ok((ctx, Vec::new()))
+        if let Some(channel) = context.channels.channels.get_mut(&self.channel) {
+            channel.accredited_keys = self.keys.clone().into();
+            channel.configuration_threshold = self.configuration_threshold;
+            channel.tip_sequencer = 0;
+            channel.tip_sequencer_starting_slot = context.block_slot;
+            channel.posting_timeframe = self.posting_timeframe.clone();
+            channel.posting_timeout = self.posting_timeout.clone();
+            channel.transfer_threshold = self.transfer_threshold;
+            channel.tip_slot = context.block_slot;
+            channel.tip_message = self.id();
+        } else {
+            context.channels.channels = context.channels.channels.insert(
+                self.channel,
+                ChannelState {
+                    accredited_keys: self.keys.clone().into(),
+                    configuration_threshold: self.configuration_threshold,
+                    tip_message: self.id(),
+                    tip_slot: context.block_slot,
+                    tip_sequencer: 0,
+                    tip_sequencer_starting_slot: context.block_slot,
+                    posting_timeframe: self.posting_timeframe.clone(),
+                    transfer_threshold: self.transfer_threshold,
+                    posting_timeout: self.posting_timeout.clone(),
+                },
+            );
+        }
+        Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<ChannelConfigOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        let signature_count = self.proof().signatures().len();
+        Value::try_from(signature_count)
+            .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
     }
 }

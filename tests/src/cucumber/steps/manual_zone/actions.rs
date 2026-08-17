@@ -12,7 +12,6 @@ use lb_key_management_system_service::keys::Ed25519Key;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
-    indexer::ZoneIndexer,
     sequencer::{FundingConfig, ZoneSequencer},
 };
 use tokio::{
@@ -55,7 +54,7 @@ use crate::{
             },
         },
         wallet::sync::current_available_utxos_for_wallet,
-        world::{CucumberWorld, WalletInfo},
+        world::{CucumberWorld, WalletInfo, ZoneReaderConfig},
     },
 };
 
@@ -65,7 +64,10 @@ const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
 const ZONE_SECURITY_PARAM: u32 = 5;
-const ZONE_TEST_PRIORITY_FEE: u64 = 400;
+// These high-volume scenarios can move storage prices before all queued
+// publishes are included. Keep their test funding comfortably above the
+// public 12% default so they exercise sequencing rather than fee starvation.
+const ZONE_TEST_PRIORITY_FEE_PERCENT: u64 = 50;
 
 pub(super) enum DriveMode {
     Passive {
@@ -608,10 +610,10 @@ pub(super) fn initialize_zone_indexer(
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref();
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
-    let indexer = ZoneIndexer::new(
-        world.zone.sequencer_channel_id(sequencer_alias)?,
-        ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url),
-    );
+    let indexer = ZoneReaderConfig {
+        channel_id: world.zone.sequencer_channel_id(sequencer_alias)?,
+        node_url,
+    };
 
     world.zone.set_indexer(indexer);
 
@@ -731,15 +733,30 @@ pub(super) async fn start_named_sequencer(
     checkpoint: Option<SequencerCheckpoint>,
     mode: DriveMode,
 ) -> StepResult {
+    let funding = log_step_error(step, sequencer_funding(world, sequencer_alias.as_ref()))?;
     start_named_sequencer_with_config(
         world,
         step,
         sequencer_alias,
         checkpoint,
         mode,
-        sequencer_config(),
+        sequencer_config(funding),
     )
     .await
+}
+
+/// Fund sequencer transactions from the node's own funding wallet.
+fn sequencer_funding(
+    world: &CucumberWorld,
+    sequencer_alias: &str,
+) -> Result<FundingConfig, StepError> {
+    let node_name = world.zone.sequencer_node_name(sequencer_alias)?;
+    let funding_pk = world.funding_wallet(node_name)?.public_key()?;
+    Ok(FundingConfig {
+        funding_pk,
+        max_tx_fee: GasCost::new(u64::MAX),
+        priority_fee_percent: ZONE_TEST_PRIORITY_FEE_PERCENT,
+    })
 }
 
 pub(super) async fn start_named_sequencer_with_pending_submit_depth(
@@ -750,7 +767,8 @@ pub(super) async fn start_named_sequencer_with_pending_submit_depth(
     mode: DriveMode,
     max_pending_publish_depth: usize,
 ) -> StepResult {
-    let config = sequencer_config_with_pending_submit_depth(max_pending_publish_depth);
+    let funding = log_step_error(step, sequencer_funding(world, sequencer_alias.as_ref()))?;
+    let config = sequencer_config_with_pending_submit_depth(max_pending_publish_depth, funding);
 
     start_named_sequencer_with_config(world, step, sequencer_alias, checkpoint, mode, config).await
 }
@@ -771,21 +789,6 @@ async fn start_named_sequencer_with_config(
         world.zone_node_http_client_for_sequencer(&sequencer_alias),
     )?;
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&sequencer_alias))?;
-    // Fund sequencer transactions from the node's own funding wallet. Falls
-    // back to fee-less transactions when the node has no registered funding
-    // wallet (only viable on zero-gas-price clusters).
-    let funding = world
-        .zone
-        .sequencer_node_name(&sequencer_alias)
-        .and_then(|node_name| world.funding_wallet(node_name))
-        .and_then(|wallet| wallet.public_key())
-        .map(|funding_pk| FundingConfig {
-            funding_pk,
-            max_tx_fee: GasCost::new(u64::MAX),
-            priority_fee: ZONE_TEST_PRIORITY_FEE,
-        })
-        .ok();
-    let config = lb_zone_sdk::sequencer::SequencerConfig { funding, ..config };
     let sequencer = ZoneSequencer::init_with_config(
         world.zone.sequencer_channel_id(&sequencer_alias)?,
         signing_key,
@@ -810,7 +813,6 @@ async fn start_named_sequencer_with_config(
         runtime.task,
         runtime.events,
         runtime.checkpoint_rx,
-        runtime.ready_rx,
         runtime.channel_view_rx,
         runtime.turn_to_write_rx,
         runtime.tx_status_rx,

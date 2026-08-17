@@ -3,17 +3,16 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    GasCalculator as _, MantleTx, NoteId, Op, OpProof, SignedMantleTx, TxHash,
-    gas::MainnetGasConstants,
+    NoteId, Op, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _, TxHash,
+    gas::MainnetGasProfile,
     traits::Hashable as _,
-    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs},
+    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs, mantle_tx::MantleTx as _},
 };
 use lb_key_management_system_service::keys::ZkKey;
 
 use super::{error::WalletTransactionError, signed::SignedWalletTransaction};
 use crate::common::wallet::WalletReservedInputs;
 
-pub(super) const ZKSIGN_MAX_INPUTS: usize = 32;
 pub(super) type WalletTransferSigners = HashMap<NoteId, ZkKey>;
 
 pub(super) fn sign_prepared_wallet_transaction(
@@ -32,7 +31,7 @@ pub(super) fn sign_prepared_wallet_transaction(
 
     let signed_tx = SignedMantleTx::new(mantle_tx, op_proofs).preverify()?;
     let spent_fee = signed_tx
-        .total_gas_cost::<MainnetGasConstants>(&gas_prices)?
+        .total_gas_cost::<MainnetGasProfile>(&gas_prices)?
         .into_inner();
 
     Ok(SignedWalletTransaction::new(
@@ -47,7 +46,7 @@ pub(super) fn sign_prepared_wallet_transaction(
 /// every input with the same wallet key. Suitable for transactions whose
 /// funding inputs all come from a single wallet account.
 pub fn transfer_proofs_for_funded_wallet_tx(
-    tx: &MantleTx,
+    tx: &RawMantleTx,
     signing_key: &ZkKey,
 ) -> Result<OpsProofs, WalletTransactionError> {
     let tx_hash = tx.hash();

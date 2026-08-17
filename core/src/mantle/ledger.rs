@@ -8,7 +8,6 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
-use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -38,29 +37,65 @@ pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
 pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
-// TODO: Specific proof type check?
-pub trait Operation<VerificationContext> {
-    type PreverificationContext<'a>
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-    where
-        Self: 'a;
+pub mod verification_mode {
+    pub trait VerificationMode {}
 
-    type VerificationError;
-    type ExecutionError;
+    pub struct GenesisMode;
+    impl VerificationMode for GenesisMode {}
+
+    pub struct StandardMode;
+    impl VerificationMode for StandardMode {}
+}
+
+pub trait ProvableOperation {
+    type Proof;
+}
+
+pub trait PreverifiableOperation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation
+{
+    type Context<'a>;
+    type Error;
 
     fn preverify(
         &self,
-        context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError>;
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<(), Self::Error>;
+}
 
-    fn verify(&self, context: &VerificationContext) -> Result<(), Self::VerificationError>;
+pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation
+{
+    type Context<'a>;
+    type Error;
 
-    fn execute(
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error>;
+}
+
+pub trait ExecutableOperation {
+    type Context<'a>;
+    type Error;
+
+    fn execute<'a>(
         &self,
-        context: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError>;
+        context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error>;
+}
+
+pub trait Operation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation + PreverifiableOperation<Mode> + VerifiableOperation<Mode> + ExecutableOperation
+{
+}
+
+impl<
+    T: ProvableOperation
+        + PreverifiableOperation<Mode>
+        + VerifiableOperation<Mode>
+        + ExecutableOperation,
+    Mode: verification_mode::VerificationMode,
+> Operation<Mode> for T
+{
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -78,6 +113,8 @@ pub enum InputsError {
     ChannelNote(NoteId),
     #[error("Note is not a channel note of the expected channel: {0:?}")]
     NotAChannelNote(NoteId),
+    #[error("Inputs cannot be empty")]
+    EmptyInputs,
     #[error("Inputs contain try to double spend the same NoteId")]
     DoubleSpend,
     #[error("Sum of input values overflows")]
@@ -266,6 +303,13 @@ impl Inputs {
         <&Self as IntoIterator>::into_iter(self)
     }
 
+    pub const fn preverify(&self) -> Result<(), InputsError> {
+        if self.is_empty() {
+            return Err(InputsError::EmptyInputs);
+        }
+        Ok(())
+    }
+
     /// Validates that every input is spendable as a regular note: unique,
     /// unlocked, not owned by a channel, and present in the ledger.
     ///
@@ -446,11 +490,6 @@ impl Note {
     pub const fn new(value: Value, pk: ZkPublicKey) -> Self {
         Self { value, pk }
     }
-
-    #[must_use]
-    pub fn as_fr_components(&self) -> [Fr; 2] {
-        [BigUint::from(self.value).into(), *self.pk.as_fr()]
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -499,6 +538,8 @@ impl Utxo {
 #[cfg(test)]
 mod test {
     use std::str::FromStr as _;
+
+    use num_bigint::BigUint;
 
     use super::*;
 

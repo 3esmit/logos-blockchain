@@ -11,7 +11,11 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, Ops, OpsProofs, mantle_tx::MantleTx, states::Unverified},
+        transactions::{
+            MantleTxBuilder, Ops, OpsProofs,
+            mantle_tx::{MantleTx, RawMantleTx},
+            states::Unverified,
+        },
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -21,28 +25,19 @@ use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use super::types::{Error, FundingConfig};
 use crate::adapter;
 
-/// Assemble the ops for a transaction, funding it from the node's wallet when
-/// a [`FundingConfig`] is present.
+/// Assemble the ops for a transaction, funding it from the node's wallet.
 ///
-/// With funding, the node appends a fee transfer (paid from
-/// `funding.funding_pk`, change back to it) and returns the proof for that
-/// transfer; all other ops must be proven by the caller over the funded
-/// transaction hash. Without funding the ops become a fee-less transaction
-/// (only valid while gas prices are zero).
+/// The node appends a fee transfer (paid from `funding.funding_pk`, change
+/// back to it) and returns the proof for that transfer; all other ops must
+/// be proven by the caller over the funded transaction hash.
 pub(super) async fn fund_ops<Node>(
     node: &Node,
-    funding: Option<&FundingConfig>,
+    funding: &FundingConfig,
     ops: Vec<Op>,
-) -> Result<(MantleTx, Option<OpProof>), Error>
+) -> Result<(RawMantleTx, Option<OpProof>), Error>
 where
     Node: adapter::Node + Sync,
 {
-    let Some(funding) = funding else {
-        let ops = Ops::try_from(ops)
-            .map_err(|e| Error::Network(format!("too many ops in transaction: {e:?}")))?;
-        return Ok((MantleTx(ops), None));
-    };
-
     let tx_builder = MantleTxBuilder::new()
         .extend_ops(ops)
         .map_err(|e| Error::Network(format!("too many ops in transaction: {e:?}")))?;
@@ -54,7 +49,9 @@ where
             change_public_key: funding.funding_pk,
             funding_public_keys: vec![funding.funding_pk],
             max_tx_fee: funding.max_tx_fee,
-            priority_fee: funding.priority_fee,
+            // The public request field is a percentage of the final
+            // mandatory fee, not an absolute fee amount.
+            priority_fee_percent: funding.priority_fee_percent,
         })
         .await
         .map_err(|e| Error::Network(format!("funding failed: {e}")))?;
@@ -64,9 +61,9 @@ where
 
 /// Append the fee transfer's proof to the channel-op proofs, matching the
 /// funded transaction's op layout (funding appends the transfer as the last
-/// op; a fee-less transaction carries none).
+/// op).
 pub(super) fn attach_transfer_proof(
-    tx: &MantleTx,
+    tx: &impl MantleTx,
     mut channel_proofs: OpsProofs,
     transfer_proof: Option<OpProof>,
 ) -> Result<OpsProofs, Error> {
@@ -105,7 +102,7 @@ pub(super) fn attach_transfer_proof(
     reason = "Belongs to the atomic withdraw flow; restored with `do_publish_atomic_withdraw`."
 )]
 pub(super) fn build_atomic_withdraw_ops_proofs(
-    tx: &MantleTx,
+    tx: &impl MantleTx,
     own_key_index: ChannelKeyIndex,
     own_sig: Ed25519Signature,
     transfer_proof: Option<&OpProof>,
@@ -167,7 +164,7 @@ pub(super) fn find_own_key_index(
 
 pub(super) async fn create_inscribe_tx<Node>(
     node: &Node,
-    funding: Option<&FundingConfig>,
+    funding: &FundingConfig,
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
     inscription: Inscription,
@@ -202,15 +199,21 @@ where
     Ok((signed_tx, msg_id))
 }
 
+/// Build and fund a `ChannelConfig` transaction.
+///
+/// `signer` is the sequencer's signing key paired with its index in the
+/// channel's *current* (pre-update) `accredited_keys` — that is the list the
+/// ledger verifies the signature against. Pass `None` for an unclaimed
+/// channel, whose configuration requires no signatures.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the channel config op fields plus the funding context"
 )]
 pub(super) async fn create_channel_config_tx<Node>(
     node: &Node,
-    funding: Option<&FundingConfig>,
+    funding: &FundingConfig,
     channel_id: ChannelId,
-    signing_keys: &[&Ed25519Key],
+    signer: Option<(ChannelKeyIndex, &Ed25519Key)>,
     keys: Keys,
     posting_timeframe: SlotTimeframe,
     posting_timeout: SlotTimeout,
@@ -233,15 +236,11 @@ where
         fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await?;
 
     let tx_hash = config_tx.hash();
-    let signatures = signing_keys
-        .iter()
-        .enumerate()
+    let signatures = signer
         .map(|(index, key)| {
-            IndexedSignature::new(
-                index as ChannelKeyIndex,
-                key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
-            )
+            IndexedSignature::new(index, key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
         })
+        .into_iter()
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
@@ -261,7 +260,7 @@ pub(super) fn prepare_tx(
     signing_key: &Ed25519Key,
     inscription: Inscription,
     parent: MsgId,
-) -> (MantleTx, MsgId, Ed25519Signature) {
+) -> (RawMantleTx, MsgId, Ed25519Signature) {
     let inscription_op = InscriptionOp {
         channel_id,
         inscription,
@@ -273,7 +272,7 @@ pub(super) fn prepare_tx(
     ops.try_push(Op::ChannelInscribe(inscription_op)).unwrap();
 
     // TODO: fund tx
-    let tx = MantleTx(ops);
+    let tx = RawMantleTx(ops);
 
     let inscription_sig = sign_tx(tx.hash(), signing_key);
 
@@ -282,4 +281,26 @@ pub(super) fn prepare_tx(
 
 pub(super) fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
     signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref())
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::test_support::{MockNode, funding_config};
+
+    #[tokio::test]
+    async fn funding_path_passes_priority_fee_as_a_percentage() {
+        let (priority_fees_tx, mut priority_fees_rx) = mpsc::channel(1);
+        let node = MockNode {
+            funding_priority_fees: Some(priority_fees_tx),
+            ..MockNode::default()
+        };
+        let funding = funding_config();
+
+        fund_ops(&node, &funding, Vec::new()).await.unwrap();
+
+        assert_eq!(priority_fees_rx.recv().await, Some(12));
+    }
 }

@@ -134,16 +134,23 @@ impl ChannelUpdateTx {
 pub struct FundingConfig {
     /// The node wallet key that pays transaction fees.
     pub funding_pk: ZkPublicKey,
-    /// Hard cap on the fee of a single transaction.
+    /// Absolute hard cap on the fee of a single funded transaction.
     pub max_tx_fee: GasCost,
-    /// Execution tip paid on top of the mandatory fee when funding a
-    /// transaction. [`Self::max_tx_fee`] caps the total.
-    pub priority_fee: Value,
+    /// Percentage of the final mandatory fee reserved as a priority reserve
+    /// when funding a transaction. The mandatory fee is execution plus
+    /// storage cost, and only the unused reserve becomes an effective tip.
+    /// The 12% default is a practical reserve intended to absorb normal fee
+    /// movement, including approximately one storage-market epoch increase
+    /// at normal price levels. It is not a protocol guarantee at very low
+    /// prices or when execution fees also rise materially: storage prices use
+    /// integer arithmetic, so a low price can jump proportionally more (for
+    /// example, 1 to 2). [`Self::max_tx_fee`] caps the total.
+    pub priority_fee_percent: u64,
 }
 
 impl FundingConfig {
-    /// Default execution tip.
-    pub const DEFAULT_PRIORITY_FEE: Value = 200;
+    /// Default percentage reserve for normal fee movement.
+    pub const DEFAULT_PRIORITY_FEE_PERCENT: Value = 12;
 }
 
 /// Configuration for the zone sequencer.
@@ -155,13 +162,14 @@ pub struct SequencerConfig {
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
     pub max_local_tx_tracking: usize,
-    /// Fund transactions from the node's wallet before signing. `None`
-    /// builds fee-less transactions (only valid while gas prices are zero).
-    pub funding: Option<FundingConfig>,
+    /// Fund transactions from the node's wallet before signing.
+    pub funding: FundingConfig,
 }
 
-impl Default for SequencerConfig {
-    fn default() -> Self {
+impl SequencerConfig {
+    /// Config with default values for everything but `funding`.
+    #[must_use]
+    pub const fn new(funding: FundingConfig) -> Self {
         Self {
             resubmit_interval: DEFAULT_RESUBMIT_INTERVAL,
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
@@ -169,7 +177,7 @@ impl Default for SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
             max_local_tx_tracking: DEFAULT_MAX_LOCAL_TX_TRACKING,
-            funding: None,
+            funding,
         }
     }
 }

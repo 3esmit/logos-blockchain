@@ -11,10 +11,10 @@ use lb_core::{
     mantle::{
         NoteId, OpProof, Utxo, Value,
         channel::Channels,
-        ledger::Operation,
+        ledger::{ExecutableOperation, VerifiableOperation, verification_mode::GenesisMode},
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPDeclareExecutionContext, SDPDeclareOp,
-            SDPDeclareVerificationContext, SDPWithdrawExecutionContext, SDPWithdrawOp,
+            SDPWithdrawExecutionContext, SDPWithdrawOp,
             declare::SDPDeclareGenesisValidationContext,
         },
     },
@@ -311,9 +311,31 @@ impl SdpLedger {
             .with_blend_service(&config.service_rewards_params.blend, epoch_state);
 
         let mut all_events = Vec::new();
-        for (op, _) in ops {
-            let (result, events) =
-                sdp.try_apply_genesis_sdp_declaration(utxo_tree, channels, op, config)?;
+        for (op, proof) in ops {
+            // TODO: remove this match once op/proof pairing is enforced by
+            // construction (e.g. via `SignedOp`) instead of at this call site.
+            let OpProof::ZkAndEd25519Sigs(proof) = proof else {
+                return Err(Error::InvalidProof);
+            };
+
+            let service_state = sdp
+                .services
+                .get(&op.service_type)
+                .ok_or(Error::ServiceNotFound(op.service_type))?;
+
+            <SDPDeclareOp as VerifiableOperation<GenesisMode>>::verify(
+                op,
+                proof,
+                &SDPDeclareGenesisValidationContext {
+                    utxo_tree,
+                    channels,
+                    locked_notes: &sdp.locked_notes,
+                    declarations: service_state.declarations(),
+                    min_stake: &config.min_stake,
+                },
+            )?;
+
+            let (result, events) = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
             sdp = result;
             all_events.extend(events);
         }
@@ -395,7 +417,6 @@ impl SdpLedger {
     pub fn try_apply_genesis_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
-        channels: &Channels,
         op: &SDPDeclareOp,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
@@ -403,29 +424,17 @@ impl SdpLedger {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
-        // Validate SDP Declare
-        // TODO: Genesis has a different verification flow than `SignedMantleTx`.
-        // Refactor into a   type state.
-        op.verify(&SDPDeclareGenesisValidationContext {
-            utxo_tree,
-            channels,
-            locked_notes: &self.locked_notes,
-            declarations: service_state.declarations(),
-            min_stake: &config.min_stake,
-        })?;
-
         // Execute SDP Declare
-        let (result, events) =
-            <SDPDeclareOp as Operation<SDPDeclareGenesisValidationContext>>::execute(
-                op,
-                SDPDeclareExecutionContext {
-                    utxo_tree: utxo_tree.clone(),
-                    epoch: self.epoch,
-                    declarations: service_state.declarations_clone(),
-                    locked_notes: self.locked_notes.clone(),
-                    min_stake: config.min_stake,
-                },
-            )?;
+        let (result, events) = <SDPDeclareOp as ExecutableOperation>::execute(
+            op,
+            SDPDeclareExecutionContext {
+                utxo_tree: utxo_tree.clone(),
+                epoch: self.epoch,
+                declarations: service_state.declarations_clone(),
+                locked_notes: self.locked_notes.clone(),
+                min_stake: config.min_stake,
+            },
+        )?;
 
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
@@ -442,7 +451,7 @@ impl SdpLedger {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
-        let (result, events) = <SDPDeclareOp as Operation<SDPDeclareVerificationContext>>::execute(
+        let (result, events) = <SDPDeclareOp as ExecutableOperation>::execute(
             op,
             SDPDeclareExecutionContext {
                 utxo_tree: utxo_tree.clone(),

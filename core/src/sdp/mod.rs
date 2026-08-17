@@ -11,6 +11,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
@@ -479,21 +480,20 @@ impl DeclarationMessage {
         // declaration_id = Hash(service||provider_id||zk_id||locators)
         hasher.update(service.as_bytes());
         hasher.update(self.provider_id.0);
-        for number in self.zk_id.as_fr().0.0 {
-            hasher.update(number.to_le_bytes());
-        }
-        for locator in &self.locators {
-            hasher.update(locator.0.as_ref());
-        }
+        hasher.update(fr_to_bytes(self.zk_id.as_fr()));
+        // The locators go in through the wire encoding, which prefixes the list
+        // with its count and every locator with its byte length.
+        hasher.update(self.locators.encode());
 
         DeclarationId(hasher.finalize().into())
     }
 
-    pub fn preverify(
+    pub(crate) fn preverify(
         &self,
         tx_hash_view: &TxHashView,
         proof_eddsa_signature: &Ed25519Signature,
     ) -> Result<(), SdpError> {
+        // Ensure ownership over the `provider_id`
         self.provider_id
             .0
             .verify(tx_hash_view.as_bytes(), proof_eddsa_signature)
@@ -656,5 +656,37 @@ mod tests {
         assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
         assert_eq!(declaration.withdraw_at, None);
         assert_eq!(declaration.nonce, 0);
+    }
+
+    fn declaration_message(locators: Vec<Locator>) -> DeclarationMessage {
+        DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            locators: locators.try_into().unwrap(),
+            provider_id: Ed25519Key::from_bytes(&[1; _]).public_key().into(),
+            zk_id: ZkPublicKey::new(Fr::from(3u64)),
+            locked_note_id: Fr::from(2u64).into(),
+        }
+    }
+
+    // The byte form of a multiaddr is self-describing, so `[A/B]` and `[A, B]`
+    // concatenate to the same bytes. The id has to tell them apart anyway.
+    #[test]
+    fn declaration_id_binds_the_locator_split() {
+        let concatenated = |message: &DeclarationMessage| {
+            message
+                .locators
+                .iter()
+                .flat_map(|locator| <Locator as AsRef<[u8]>>::as_ref(locator).to_vec())
+                .collect::<Vec<u8>>()
+        };
+
+        let joined = declaration_message(vec!["/ip4/203.0.113.10/tcp/4001".parse().unwrap()]);
+        let split = declaration_message(vec![
+            "/ip4/203.0.113.10".parse().unwrap(),
+            "/tcp/4001".parse().unwrap(),
+        ]);
+
+        assert_eq!(concatenated(&joined), concatenated(&split));
+        assert_ne!(joined.id(), split.id());
     }
 }

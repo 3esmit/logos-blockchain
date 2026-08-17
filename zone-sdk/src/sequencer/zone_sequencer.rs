@@ -15,7 +15,12 @@ use lb_core::{
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
         traits::Hashable as _,
-        transactions::{Ops, hash::TxHash, mantle_tx::MantleTx, states::Unverified},
+        transactions::{
+            Ops,
+            hash::TxHash,
+            mantle_tx::{MantleTx as _, RawMantleTx},
+            states::Unverified,
+        },
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
@@ -34,9 +39,9 @@ use super::{
         sign_tx as build_sign_tx,
     },
     types::{
-        Error, Event, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-        WithdrawArg,
+        Error, Event, FundingConfig, InscriptionInfo, PendingTx, PublishResult,
+        SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
+        TxStatus, TxStatusUpdate, WithdrawArg,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -75,9 +80,9 @@ pub struct ZoneSequencer<Node> {
     // operations that depend on cached on-chain state (inscription turn
     // check, atomic withdraw nonce, channel config) so they fail-fast with
     // `Error::Unavailable` during reconnect rather than building txs from
-    // stale state. With funding configured it also gates every publish-type
-    // operation (funding needs the node); a fresh `Event::Ready` is emitted
-    // when the reconnect completes.
+    // stale state. It also gates every publish-type operation (funding needs
+    // the node); a fresh `Event::Ready` is emitted when the reconnect
+    // completes.
     pub(super) connected: bool,
 
     // Resubmission
@@ -169,10 +174,10 @@ pub(super) enum ActorRequest {
     PrepareTx {
         ops: Ops,
         data: Inscription,
-        response_tx: oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
+        response_tx: oneshot::Sender<Result<(RawMantleTx, MsgId, Ed25519Signature), Error>>,
     },
     SignTx {
-        tx: MantleTx,
+        tx: RawMantleTx,
         response_tx: oneshot::Sender<Result<Ed25519Signature, Error>>,
     },
 }
@@ -187,13 +192,14 @@ where
         channel_id: ChannelId,
         signing_key: Ed25519Key,
         node: Node,
+        funding: FundingConfig,
         checkpoint: Option<SequencerCheckpoint>,
     ) -> Self {
         Self::init_with_config(
             channel_id,
             signing_key,
             node,
-            SequencerConfig::default(),
+            SequencerConfig::new(funding),
             checkpoint,
         )
     }
@@ -293,8 +299,7 @@ where
     /// one. Methods on the handle mutate state directly on the drive task
     /// and return the resulting [`SequencerCheckpoint`] inline, so the
     /// caller can persist the publish + checkpoint atomically. Publish-type
-    /// methods await one funding round-trip first when
-    /// [`SequencerConfig::funding`] is set.
+    /// methods await one funding round-trip first.
     pub const fn handle(&mut self) -> SequencerHandle<'_, Node> {
         SequencerHandle::new(self)
     }
@@ -556,14 +561,13 @@ where
         }
     }
 
-    /// With funding configured, building a transaction requires a round-trip
-    /// to the node's wallet — fail fast with [`Error::Unavailable`] while
-    /// disconnected instead of surfacing an HTTP error from the fund call.
-    /// A fresh [`Event::Ready`] is emitted once the reconnect completes, so
-    /// callers have a positive signal to retry. Fee-less sequencers
-    /// (`funding: None`) keep the accept-locally-while-disconnected contract.
+    /// Building a transaction requires a round-trip to the node's wallet —
+    /// fail fast with [`Error::Unavailable`] while disconnected instead of
+    /// surfacing an HTTP error from the fund call. A fresh [`Event::Ready`]
+    /// is emitted once the reconnect completes, so callers have a positive
+    /// signal to retry.
     const fn ensure_fundable(&self) -> Result<(), Error> {
-        if self.config.funding.is_some() && !self.connected {
+        if !self.connected {
             return Err(Error::Unavailable {
                 reason: "node disconnected; funding a transaction requires a connected node",
             });
@@ -595,7 +599,7 @@ where
         let parent = self.compute_publish_parent();
         let (signed_tx, new_msg_id) = create_inscribe_tx(
             &self.node,
-            self.config.funding.as_ref(),
+            &self.config.funding,
             self.channel_id,
             &self.signing_key,
             data.clone(),
@@ -791,18 +795,37 @@ where
         // prediction exact: it predicts a threshold-0 multi-sig proof for a
         // channel it cannot see yet, and a superfluous signature would make
         // the funded fee undershoot the actual storage cost.
-        let own_key = [&self.signing_key];
-        let signing_keys: &[&Ed25519Key] = if self.channel_state.is_some() {
-            &own_key
-        } else {
-            &[]
+        //
+        // For an existing channel the signature must claim our key's index in
+        // the *current* accredited list — that is what the ledger verifies
+        // against. Signature collection for `configuration_threshold > 1` is
+        // out of scope, so reject it early instead of submitting a
+        // transaction that can only die at block assembly.
+        let signer = match &self.channel_state {
+            None => None,
+            Some(channel) => {
+                if channel.configuration_threshold != 1 {
+                    return Err(Error::Network(format!(
+                        "channel config update needs {} signatures; this one-shot \
+                         helper only supports single-signer channels \
+                         (configuration_threshold 1) — collect the signatures \
+                         out-of-band and submit the fully-signed transaction via \
+                         `submit_signed_tx` instead",
+                        channel.configuration_threshold
+                    )));
+                }
+                let index = self.own_key_index.ok_or_else(|| {
+                    Error::Network("sequencer key not in channel accredited_keys".into())
+                })?;
+                Some((index, &self.signing_key))
+            }
         };
 
         let signed_tx = create_channel_config_tx(
             &self.node,
-            self.config.funding.as_ref(),
+            &self.config.funding,
             self.channel_id,
-            signing_keys,
+            signer,
             keys,
             posting_timeframe,
             posting_timeout,
@@ -849,9 +872,20 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         let id = tx.mantle_tx().hash();
-        track_pending_tx(state, tx.clone(), self.channel_id);
+        let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
-        self.last_msg_id = msg_id;
+        // The tip the tx leaves behind is defined by its ops (the last
+        // tip-advancing one — e.g. a config after an inscribe resets it), so
+        // the caller's `msg_id` is only a fallback for txs without one.
+        let new_tip = derived_tip.unwrap_or(msg_id);
+        if new_tip != msg_id {
+            warn!(target: TARGET,
+                "submit_signed_tx: caller msg_id {:?} is not the tx's resulting channel tip {:?}; \
+                 using the derived tip",
+                msg_id, new_tip
+            );
+        }
+        self.last_msg_id = new_tip;
         self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
@@ -879,7 +913,7 @@ where
                 tx: PendingTx::Inscription(InscriptionInfo {
                     tx_hash: id,
                     parent_msg,
-                    this_msg: msg_id,
+                    this_msg: new_tip,
                     payload,
                 }),
             },
@@ -891,7 +925,7 @@ where
         &self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
         self.ensure_ready()?;
         let parent = self.compute_publish_parent();
         Ok(build_prepare_tx(
@@ -903,7 +937,7 @@ where
         ))
     }
 
-    pub(super) fn do_sign_tx(&self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+    pub(super) fn do_sign_tx(&self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
         self.ensure_ready()?;
         Ok(build_sign_tx(tx.hash(), &self.signing_key))
     }
@@ -1061,22 +1095,30 @@ fn restored_pending_channel_tip(
 
 /// Track a signed tx in pending state: publish-shaped txs enter the
 /// inscription lineage, everything else is tracked opaquely.
+/// Returns the channel tip the tx leaves behind once mined (its last
+/// tip-advancing op), or `None` when the tx carries none for this channel.
 pub(super) fn track_pending_tx(
     state: &mut TxState,
     tx: SignedMantleTx<Unverified>,
     channel_id: ChannelId,
-) {
+) -> Option<MsgId> {
     match classify_channel_tx(&tx, channel_id, &mut None) {
         Some(BlockChannelTx::Inscription(i)) => {
-            state.submit_inscription(tx, i.parent_msg, i.this_msg, i.payload);
+            let this_msg = i.this_msg;
+            state.submit_inscription(tx, i.parent_msg, this_msg, i.payload);
+            Some(this_msg)
         }
-        Some(BlockChannelTx::AtomicWithdraw(aw)) => state.submit_atomic_withdraw(
-            tx,
-            aw.inscription.parent_msg,
-            aw.inscription.this_msg,
-            aw.inscription.payload,
-            aw.withdraws,
-        ),
+        Some(BlockChannelTx::AtomicWithdraw(aw)) => {
+            let this_msg = aw.inscription.this_msg;
+            state.submit_atomic_withdraw(
+                tx,
+                aw.inscription.parent_msg,
+                this_msg,
+                aw.inscription.payload,
+                aw.withdraws,
+            );
+            Some(this_msg)
+        }
         _ => state.submit_other(tx, channel_id),
     }
 }

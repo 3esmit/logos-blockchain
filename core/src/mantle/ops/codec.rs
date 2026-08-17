@@ -2,7 +2,11 @@ use lb_codec::{BinaryDecodeExt as _, BinaryEncode as _, DecodeError};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 
 use crate::{
-    mantle::{Op, OpProof, transactions::OpsProofs},
+    mantle::{
+        Op, OpProof,
+        ops::{NoOpProof, ZkAndEd25519Proof},
+        transactions::OpsProofs,
+    },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
@@ -38,13 +42,11 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> Result<(&'a [u8], OpProof), 
         Op::SDPDeclare(_) => {
             let (input, zk_sig) = ZkSignature::decode(input)?;
             let (input, ed25519_sig) = Ed25519Signature::decode(input)?;
-            Ok((
-                input,
-                OpProof::ZkAndEd25519Sigs {
-                    zk_sig,
-                    ed25519_sig,
-                },
-            ))
+            let proof = ZkAndEd25519Proof {
+                zk_sig,
+                ed25519_sig,
+            };
+            Ok((input, OpProof::ZkAndEd25519Sigs(proof)))
         }
 
         // ZkSigProof = ZkSignature
@@ -62,6 +64,7 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> Result<(&'a [u8], OpProof), 
             ChannelMultiSigProof::decode(input)
                 .map(|(rest, proof)| (rest, OpProof::ChannelMultiSigProof(proof)))
         }
+        Op::ClaimPowReward(_) => Ok((input, OpProof::None(NoOpProof))),
     }
 }
 
@@ -70,16 +73,14 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
         match proof {
             OpProof::Ed25519Sig(sig) => sig.encode_to_vec(),
             OpProof::ChannelMultiSigProof(proof) => proof.encode_to_vec(),
-            OpProof::ZkAndEd25519Sigs {
-                zk_sig,
-                ed25519_sig,
-            } => {
-                let mut bytes = zk_sig.encode_to_vec();
-                bytes.extend(ed25519_sig.encode_to_vec());
+            OpProof::ZkAndEd25519Sigs(proof) => {
+                let mut bytes = proof.zk_sig.encode_to_vec();
+                bytes.extend(proof.ed25519_sig.encode_to_vec());
                 bytes
             }
             OpProof::ZkSig(sig) => sig.encode_to_vec(),
             OpProof::PoC(poc) => poc.encode_to_vec(),
+            OpProof::None(pow) => pow.encode_to_vec(),
         }
     } else {
         panic!("Mismatch between proof type and operation type");

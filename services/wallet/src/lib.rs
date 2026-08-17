@@ -17,9 +17,10 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value, VerificationError,
-        gas::{GasCost, GasOverflow, MainnetGasConstants},
+        gas::{GasCost, GasOverflow, MainnetGasProfile},
         ledger::Inputs,
         ops::{
+            NoOpProof, ZkAndEd25519Proof,
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
                 LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret,
@@ -28,7 +29,8 @@ use lb_core::{
         },
         traits::{Hashable as _, MantleTxWithProofs},
         transactions::{
-            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, states::Preverified,
+            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, mantle_tx::MantleTx as _,
+            states::Preverified,
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -37,8 +39,8 @@ use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
-        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
-        secured_key::SecuredKey,
+        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkPublicKeys,
+        ZkSignature, secured_key::SecuredKey,
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
@@ -156,7 +158,9 @@ pub enum WalletMsg {
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        priority_fee: Value,
+        /// Percentage of the final mandatory fee reserved as a priority-fee
+        /// reserve; only the unused reserve becomes the effective tip.
+        priority_fee_percent: u64,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     BuildLeaderClaimTx {
@@ -179,7 +183,7 @@ pub enum WalletMsg {
     },
     SignTxWithZk {
         tx_hash: TxHash,
-        pks: Vec<ZkPublicKey>,
+        pks: ZkPublicKeys,
         resp_tx: Sender<Result<ZkSignature, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
@@ -533,7 +537,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
-                priority_fee,
+                priority_fee_percent,
                 resp_tx,
             } => {
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -555,13 +559,13 @@ where
                     }
                 };
 
-                let funded = match state.fund_tx::<MainnetGasConstants>(
+                let funded = match state.fund_tx::<MainnetGasProfile>(
                     tip,
                     &tx_builder,
                     change_pk,
                     funding_pks,
                     &context,
-                    priority_fee,
+                    priority_fee_percent,
                 ) {
                     Ok(funded) => funded,
                     Err(err) => {
@@ -606,7 +610,13 @@ where
                     funding_pk,
                     max_tx_fee,
                 };
-                let response = Self::build_leader_claim_tx(request, ledger, state, kms).await;
+                // Pinned to keep the future off the stack: `LedgerState` is
+                // passed by value and grew past the `clippy::large_futures`
+                // threshold, by 720 bytes for `PoW` and 112 for the uncle
+                // slots.
+                // TODO: consider passing it by reference so we can remove `Box::pin`.
+                let response =
+                    Box::pin(Self::build_leader_claim_tx(request, ledger, state, kms)).await;
 
                 match response {
                     Ok(built_tx) => {
@@ -809,10 +819,11 @@ where
         let zk_sig = Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], kms).await?;
         let ed25519_sig = Self::sign_ed25519(tx_hash, declare_op.provider_id.0, kms).await?;
 
-        Ok(OpProof::ZkAndEd25519Sigs {
+        let proof = ZkAndEd25519Proof {
             zk_sig,
             ed25519_sig,
-        })
+        };
+        Ok(OpProof::ZkAndEd25519Sigs(proof))
     }
 
     async fn sign_sdp_withdraw(
@@ -953,6 +964,7 @@ where
                     Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
+                Op::ClaimPowReward(_) => OpProof::None(NoOpProof),
             };
             ops_proofs.try_push(proof)?;
         }
@@ -992,6 +1004,7 @@ where
         pks: impl IntoIterator<Item = ZkPublicKey>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<ZkSignature, WalletServiceError> {
+        let pks = ZkPublicKeys::try_from_iter(pks)?;
         // Use hex-encoded public key as key_id for now
         let key_ids: Vec<_> = pks
             .into_iter()
@@ -1262,7 +1275,7 @@ where
             pk: request.funding_pk,
         }))?;
 
-        let funded_tx_builder = state.fund_tx::<MainnetGasConstants>(
+        let funded_tx_builder = state.fund_tx::<MainnetGasProfile>(
             request.tip,
             &tx_builder,
             request.funding_pk,
@@ -1294,7 +1307,7 @@ where
     ) -> Result<SignedMantleTx<Preverified>, WalletServiceError> {
         let context = ledger.tx_context();
         let net_balance = funded_tx_builder.net_balance();
-        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasConstants>(&context)?;
+        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasProfile>(&context)?;
         debug!(
             target: LOG_TARGET,
             net_balance,

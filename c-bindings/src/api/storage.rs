@@ -29,6 +29,7 @@ fn block_with_transaction_ids(
 
     CoreBlock::reconstruct(
         header,
+        block.uncle_headers().clone(),
         BlockTransactions::try_from(transactions)?,
         signature,
     )

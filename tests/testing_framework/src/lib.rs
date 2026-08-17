@@ -10,7 +10,10 @@ use std::sync::LazyLock;
 mod diagnostics;
 pub mod env;
 mod framework;
-pub use framework::local::{USER_CONFIG_FILE, ensure_node_binary_built};
+pub use framework::local::{
+    LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256, LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL, USER_CONFIG_FILE,
+    ensure_node_binary_built,
+};
 mod node;
 mod unique_persistent;
 pub mod workloads;
@@ -36,7 +39,9 @@ pub use framework::{
     block_feed_source_provider, block_feed_sources, named_block_feed_sources,
 };
 // Required by reused node-test config modules importing from crate root.
-pub use node::configs::deployment::{DeploymentBuilder, TopologyConfig};
+pub use node::configs::deployment::{
+    DeploymentBuilder, TopologyConfig, resolve_automatic_genesis_time,
+};
 pub use node::{NodeHttpClient, configs};
 pub use testing_framework_runner_compose::ComposeRunnerError;
 pub use testing_framework_runner_k8s::{

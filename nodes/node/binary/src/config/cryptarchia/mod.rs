@@ -103,6 +103,12 @@ impl ServiceConfig {
             bootstrap: lb_chain_network_service::BootstrapConfig {
                 ibd: lb_chain_network_service::IbdConfig {
                     peers: self.user.network.bootstrap.ibd.peers,
+                    discover_connected_peers: self
+                        .user
+                        .network
+                        .bootstrap
+                        .ibd
+                        .discover_connected_peers,
                     tips_fetch_max_attempts: self
                         .user
                         .network

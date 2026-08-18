@@ -32,7 +32,7 @@ use lb_blend::{
         epoch::{EpochEvent, UninitializedEpochEventStream},
         message_blend::{
             crypto::EpochCryptographicProcessorSettings,
-            provers::core_and_leader::CoreAndLeaderProofsGenerator,
+            provers::core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
         },
         message_scheduler::{
             OldEpochMessageScheduler, ProcessedMessageScheduler,
@@ -221,7 +221,7 @@ where
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId> + Send + Sync,
     ProofsGenerator:
-        CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
+        CoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
@@ -502,7 +502,7 @@ where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<KmsAdapter::CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     // To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
     // know the final key ID type is a `String`, so we constraint the trait impl here instead.
@@ -784,7 +784,7 @@ where
     Rng: rand::Rng + Clone + Send + Unpin,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
@@ -932,7 +932,7 @@ async fn retire<
     Rng: rand::Rng + Clone + Send + Unpin,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -1007,7 +1007,7 @@ async fn handle_epoch_event<
 where
     NodeId: Eq + Hash + Clone + Send,
     Rng: rand::Rng + Clone + Unpin,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
 {
@@ -1280,11 +1280,13 @@ where
     NodeId: Eq + Hash + Send + 'static,
     Rng: RngCore + Clone + Send + Unpin,
     BackendSettings: Clone + Send + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
+    // TODO: Change this to encapsulated differently depending on the type of
+    // payload.
     let Ok(wrapped_message) = cryptographic_processor
-        .encapsulate_data_payload(serialized_local_data_message)
+        .encapsulate_block_proposal_payload(serialized_local_data_message)
         .await
         .inspect_err(|e| {
             tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
@@ -1323,7 +1325,7 @@ where
         // If all the layers are peeled off locally, then we are left with the initial data message.
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
             assert!(
-                fully_decapsulated_message.payload_type() == PayloadType::Data,
+                fully_decapsulated_message.payload_type().is_data_message(),
                 "Locally-generated and fully-decapsulated message should be a data message."
             );
             let data_message: NetworkMessage = fully_decapsulated_message.payload_body().to_vec();
@@ -1650,7 +1652,7 @@ where
                     tracing::trace!(target: LOG_TARGET, "Discarding received cover message.");
                     (None, blending_tokens.into_iter())
                 }
-                (PayloadType::Data, data_message) => {
+                (PayloadType::BlockProposal, data_message) => {
                     tracing::trace!(
                         target: LOG_TARGET,
                         "Processing a fully decapsulated data message of {} bytes.",
@@ -1659,6 +1661,15 @@ where
                     let processed_message = ProcessedMessage::from(data_message);
                     scheduler.schedule_processed_message(processed_message.clone());
                     (Some(processed_message), blending_tokens.into_iter())
+                }
+                // TODO: Submit the tx to the mempool.
+                (PayloadType::Transaction, transaction) => {
+                    tracing::warn!(
+                        target: LOG_TARGET,
+                        "Discarding a fully decapsulated transaction message of {} bytes: mempool submission is not wired yet.",
+                        transaction.len()
+                    );
+                    (None, blending_tokens.into_iter())
                 }
             }
         }
@@ -1720,7 +1731,7 @@ where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
@@ -1950,7 +1961,7 @@ async fn generate_and_try_to_decapsulate_cover_message<
 where
     NodeId: Eq + Hash + 'static,
     BackendSettings: Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
     let encapsulated_cover_message = cryptographic_processor

@@ -25,7 +25,7 @@ use lb_blend::{
             crypto::EpochCryptographicProcessorSettings,
             provers::{
                 BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-                core_and_leader::CoreAndLeaderProofsGenerator,
+                core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
             },
         },
         message_scheduler::{self, epoch_info::EpochInfo as SchedulerEpochInfo},
@@ -435,7 +435,7 @@ pub fn recorded_set_epoch_private_calls() -> Vec<Epoch> {
 pub struct MockCoreAndLeaderProofsGenerator(ZkHash);
 
 #[async_trait]
-impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     for MockCoreAndLeaderProofsGenerator
 {
     fn new(
@@ -454,6 +454,10 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
     }
 
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(epoch_based_dummy_proofs(self.0))
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         Some(epoch_based_dummy_proofs(self.0))
     }
 }

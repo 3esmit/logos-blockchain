@@ -56,6 +56,7 @@ pub struct ApiHeader {
     pub id: HeaderId,
     pub parent_block: HeaderId,
     pub slot: Slot,
+    #[serde(alias = "block_root")]
     pub body_root: ContentId,
     pub proof_of_leadership: Groth16LeaderProof,
 }
@@ -65,6 +66,7 @@ pub struct ApiHeader {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ApiBlock {
     pub header: ApiHeader,
+    #[serde(default)]
     pub uncle_headers: Vec<ApiSignedHeader>,
     pub transactions: Vec<SignedMantleTx<Unverified>>,
 }

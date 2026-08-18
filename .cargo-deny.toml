@@ -15,6 +15,8 @@ ignore = [
   { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` can enter an unbounded DNSSEC NSEC3 validation loop and exhaust memory; pulled in through libp2p." },
   { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` DNS message compression can cause CPU exhaustion during encoding; pulled in through libp2p." },
   { id = "RUSTSEC-2026-0173", reason = "`proc-macro-error2` is unmaintained." },
+  { id = "RUSTSEC-2026-0194", reason = "`quick-xml` is pulled transitively through `pprof`/`inferno` and Cucumber's JUnit reporter; no compatible upgrade is available without replacing those integrations." },
+  { id = "RUSTSEC-2026-0195", reason = "`quick-xml` is pulled transitively through `pprof`/`inferno` and Cucumber's JUnit reporter; no compatible upgrade is available without replacing those integrations." },
 ]
 unused-ignored-advisory = "deny"
 yanked = "deny"
@@ -50,9 +52,7 @@ allow-git = [
   "https://github.com/logos-blockchain/logos-blockchain-circuits.git",
   "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git",
   "https://github.com/logos-blockchain/logos-blockchain-testing.git",
+  "https://github.com/3esmit/Overwatch",
 ]
 unknown-git = "deny"
 unknown-registry = "deny"
-
-[sources.allow-org]
-github = ["logos-co"]

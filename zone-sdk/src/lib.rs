@@ -73,6 +73,7 @@
 //! See the [`sequencer`] module for the full event vocabulary.
 
 pub mod adapter;
+pub mod indexer;
 pub mod sequencer;
 #[cfg(test)]
 mod test_support;

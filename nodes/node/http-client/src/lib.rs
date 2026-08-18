@@ -65,6 +65,7 @@ pub struct ApiHeader {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ApiBlock {
     pub header: ApiHeader,
+    #[serde(default)]
     pub uncle_headers: Vec<ApiSignedHeader>,
     pub transactions: Vec<SignedMantleTx<Unverified>>,
 }

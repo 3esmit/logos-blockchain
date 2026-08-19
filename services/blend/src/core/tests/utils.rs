@@ -51,8 +51,8 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use crate::{
     core::{
         backends::{BackendEpochInfo, BlendBackend},
+        dispatcher::PayloadDispatcher,
         kms::KmsPoQAdapter,
-        network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
             CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig as BlendConfig,
@@ -62,9 +62,10 @@ use crate::{
         tests::RuntimeServiceId,
     },
     epoch::CoreEpochPublicInfo,
-    message::NetworkInfo,
+    message::{BlendPayload, NetworkInfo},
     settings::TimingSettings,
     test_utils,
+    test_utils::mempool::TestMempoolService,
 };
 
 pub type NodeId = [u8; 32];
@@ -168,6 +169,7 @@ where
         _msg: EncapsulatedMessageWithVerifiedPublicHeader,
         _intended_epoch: Epoch,
     ) {
+        note_outgoing_message();
     }
 
     async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>) {
@@ -240,23 +242,53 @@ pub async fn wait_for_blend_backend_event(
     }
 }
 
-pub struct TestNetworkAdapter;
+thread_local! {
+    /// Installed by [`record_outgoing_messages`] for the duration of a test.
+    static OUTGOING_MESSAGES: RefCell<Option<mpsc::UnboundedSender<()>>> =
+        const { RefCell::new(None) };
+}
+
+/// Starts recording every message the service sends onwards, whether it goes
+/// to a Blend peer through the backend or to a local service through the
+/// dispatcher.
+pub fn outgoing_messages_recorder() -> mpsc::UnboundedReceiver<()> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    OUTGOING_MESSAGES.with_borrow_mut(|recorder| *recorder = Some(sender));
+    receiver
+}
+
+fn note_outgoing_message() {
+    OUTGOING_MESSAGES.with_borrow(|recorder| {
+        if let Some(sender) = recorder.as_ref() {
+            let _ = sender.send(());
+        }
+    });
+}
+
+pub struct TestPayloadDispatcher;
 
 #[async_trait]
-impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
+impl<RuntimeServiceId> PayloadDispatcher<RuntimeServiceId> for TestPayloadDispatcher
+where
+    RuntimeServiceId: Send + 'static,
+{
     type Backend = TestNetworkBackend;
+    type MempoolService = TestMempoolService<RuntimeServiceId>;
     type Settings = ();
 
     fn new(
         _network_relay: OutboundRelay<
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
+        _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         _settings: Self::Settings,
     ) -> Self {
         Self
     }
 
-    async fn broadcast(&self, _message: Vec<u8>) {}
+    async fn dispatch(&self, _payload: BlendPayload) {
+        note_outgoing_message();
+    }
 }
 
 pub struct TestNetworkBackend {

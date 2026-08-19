@@ -57,6 +57,7 @@ pub struct ApiHeader {
     pub id: HeaderId,
     pub parent_block: HeaderId,
     pub slot: Slot,
+    #[serde(alias = "block_root")]
     pub body_root: ContentId,
     pub proof_of_leadership: Groth16LeaderProof,
 }
@@ -66,6 +67,7 @@ pub struct ApiHeader {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ApiBlock {
     pub header: ApiHeader,
+    #[serde(default)]
     pub uncle_headers: Vec<ApiSignedHeader>,
     pub transactions: Vec<SignedMantleTx<Unverified>>,
 }
@@ -448,10 +450,7 @@ impl CommonHttpClient {
         let response = request.send().await.map_err(Error::Request)?;
         let status = response.status();
 
-        let blocks_stream = response.bytes_stream().filter_map(async |item| {
-            let bytes = item.ok()?;
-            serde_json::from_slice::<ProcessedBlockEvent>(&bytes).ok()
-        });
+        let blocks_stream = Self::parse_processed_blocks_event_stream(response);
         match status {
             StatusCode::OK => Ok(blocks_stream),
             StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server("Error".to_owned())),
@@ -549,10 +548,10 @@ impl CommonHttpClient {
             params.server_batch_size,
         )?;
         let response = self.send_blocks_range_stream_request(request_url).await?;
-        Ok(Self::parse_processed_blocks_range_event_stream(response))
+        Ok(Self::parse_processed_blocks_event_stream(response))
     }
 
-    fn parse_processed_blocks_range_event_stream(
+    fn parse_processed_blocks_event_stream(
         response: reqwest::Response,
     ) -> impl Stream<Item = ProcessedBlockEvent> {
         // NDJSON event upper bound; margin above max serialized single event line

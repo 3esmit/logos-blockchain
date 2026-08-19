@@ -77,7 +77,7 @@ where
     relay
         .send(ServiceMessage::Blend(payload).into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|e| e)?;
 
     Ok(id(&transaction))
 }
@@ -104,7 +104,7 @@ where
     relay
         .send(ServiceMessage::GetPendingTransactions { reply: sender }.into())
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|e| e)?;
 
     receiver
         .await

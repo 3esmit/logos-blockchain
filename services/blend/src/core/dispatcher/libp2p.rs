@@ -60,7 +60,7 @@ where
     /// Broadcast an unencrypted message to the network by publishing the
     /// message under the configured gossipsub topic.
     async fn broadcast_block_proposal(&self, proposal: Vec<u8>) {
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .network_relay
             .send(NetworkMsg::Process(Command::PubSub(
                 PubSubCommand::Broadcast {
@@ -97,7 +97,7 @@ where
         };
 
         let (reply_channel, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
+        if let Err(e) = self
             .mempool_relay
             .send(MempoolMsg::Add {
                 key: transaction.hash(),

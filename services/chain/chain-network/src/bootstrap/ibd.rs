@@ -126,15 +126,19 @@ where
         config: IbdConfig<NetAdapter::PeerId>,
         orphan_config: &OrphanConfig,
     ) -> Result<BlockProcessor, Error> {
-        if config.peers.is_empty() {
+        if config.peers.is_empty() && !config.discover_connected_peers {
             warn!("Skipping IBD as no peers are configured");
             return Ok(self.block_processor);
         }
 
-        info!(
-            "Starting Initial Block Download with {} peers",
-            config.peers.len()
-        );
+        if config.peers.is_empty() {
+            info!("Starting Initial Block Download by discovering connected peers");
+        } else {
+            info!(
+                "Starting Initial Block Download with {} peers",
+                config.peers.len()
+            );
+        }
 
         self.download_blocks(config, orphan_config).await?;
         Ok(self.block_processor)
@@ -160,13 +164,18 @@ where
             config
                 .peers
                 .len()
+                .max(1)
                 .try_into()
-                .expect("IBD peer set shouldn't be empty in this function"),
+                .expect("IBD downloader capacity must be non-zero"),
             orphan_config.max_rejected_cache_size,
         );
 
         loop {
-            let unsynced_tips = self.collect_unsynced_tips(&config).await?;
+            let unsynced_tips = if config.peers.is_empty() {
+                self.collect_unsynced_sampled_tips(&config).await?
+            } else {
+                self.collect_unsynced_tips(&config).await?
+            };
             if unsynced_tips.is_empty() {
                 info!("IBD complete: all configured peer tips are present in the local tree");
                 return Ok(());
@@ -178,6 +187,28 @@ where
 
             tokio::time::sleep(config.round_delay).await;
         }
+    }
+
+    /// Pulls tips from currently-connected peers when bootstrap addresses did
+    /// not include libp2p peer IDs. The network adapter samples peers that have
+    /// already completed a connection handshake, so the same orphan downloader
+    /// can fetch their chain without requiring a static peer-ID list.
+    async fn collect_unsynced_sampled_tips(
+        &self,
+        config: &IbdConfig<NetAdapter::PeerId>,
+    ) -> Result<HashSet<HeaderId>, Error> {
+        let tips = fetch_sampled_tips_with_retry(&self.network, config).await?;
+
+        Ok(try_join_all(tips.into_iter().map(async |tip| {
+            self.block_processor
+                .has_processed_block(tip)
+                .await
+                .map(|processed| (!processed).then_some(tip))
+        }))
+        .await?
+        .into_iter()
+        .flatten()
+        .collect())
     }
 
     /// Pulls every block from the orphan downloader, applying each to the
@@ -274,6 +305,60 @@ where
         )
         .notify(|_, delay| debug!("tip fetch returned no tips; retrying in {delay:?}"))
         .await
+}
+
+/// Samples tips from currently-connected peers, retrying while the initial
+/// bootstrap dials are still settling.
+async fn fetch_sampled_tips_with_retry<NetAdapter, RuntimeServiceId>(
+    network: &NetAdapter,
+    config: &IbdConfig<NetAdapter::PeerId>,
+) -> Result<HashSet<HeaderId>, AllPeersFailed>
+where
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    NetAdapter::PeerId: Copy + Debug + Eq + Hash + Send + Sync,
+    RuntimeServiceId: Sync,
+{
+    (|| fetch_sampled_tips(network, config.max_connected_peers_to_sample))
+        .retry(
+            ExponentialBuilder::default()
+                .with_min_delay(config.tips_fetch_min_delay)
+                .with_max_delay(config.tips_fetch_max_delay)
+                .with_max_times(config.tips_fetch_max_attempts)
+                .with_jitter(),
+        )
+        .notify(|_, delay| debug!("no connected peer returned a tip; retrying in {delay:?}"))
+        .await
+}
+
+/// Concurrently samples tips from every currently-connected peer selected by
+/// the network adapter. The adapter owns peer selection and drops individual
+/// request failures, so an empty result means no usable peer is available yet.
+async fn fetch_sampled_tips<NetAdapter, RuntimeServiceId>(
+    network: &NetAdapter,
+    max_peers: usize,
+) -> Result<HashSet<HeaderId>, AllPeersFailed>
+where
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    RuntimeServiceId: Sync,
+{
+    let mut responses = network.sample_tips(max_peers.max(1)).await;
+    let mut tips = HashSet::new();
+    while let Some(response) = responses.next().await {
+        match response {
+            GetTipResponse::Tip { tip, .. } => {
+                tips.insert(tip);
+            }
+            GetTipResponse::Failure(reason) => {
+                debug!("connected peer rejected tip request: {reason}");
+            }
+        }
+    }
+
+    if tips.is_empty() {
+        Err(AllPeersFailed)
+    } else {
+        Ok(tips)
+    }
 }
 
 /// Concurrently asks every peer for its current chain tip. Returns `Ok` with
@@ -390,6 +475,34 @@ mod tests {
         // The Cryptarchia remains unchanged.
         assert_eq!(cryptarchia.lib(), [GENESIS_ID; 32].into());
         assert_eq!(cryptarchia.tip(), [GENESIS_ID; 32].into());
+    }
+
+    #[tokio::test]
+    async fn discovers_connected_peers_when_peer_ids_are_unavailable() {
+        let peer = BlockProvider::new(
+            vec![
+                Block::genesis(),
+                Block::new(1, GENESIS_ID, 1, 1),
+                Block::new(2, 1, 2, 2),
+            ],
+            Ok(Block::new(2, 1, 2, 2)),
+        );
+        let mut ibd_config = config(HashSet::new());
+        ibd_config.discover_connected_peers = true;
+
+        let block_processor = InitialBlockDownload::new(
+            MockBlockProcessor::new(),
+            MockNetworkAdapter::<()>::new(vec![(NodeId(0), peer.clone())]),
+        )
+        .run(ibd_config, &orphan_config())
+        .await
+        .expect("connected peer discovery should complete IBD");
+
+        assert!(
+            peer.chain
+                .iter()
+                .all(|block| block_processor.cryptarchia.has_block(&block.id))
+        );
     }
 
     #[tokio::test]
@@ -693,6 +806,8 @@ mod tests {
     fn config(peers: HashSet<NodeId>) -> IbdConfig<NodeId> {
         IbdConfig {
             peers,
+            discover_connected_peers: false,
+            max_connected_peers_to_sample: 16,
             tips_fetch_max_attempts: 3,
             tips_fetch_min_delay: Duration::from_millis(250),
             tips_fetch_max_delay: Duration::from_secs(1),
@@ -845,8 +960,19 @@ mod tests {
             }
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
-            Box::new(stream::empty())
+        async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
+            let tips = self
+                .providers
+                .iter()
+                .take(max_peers)
+                .filter_map(|(_, provider)| provider.next_tip().ok())
+                .map(|tip| GetTipResponse::Tip {
+                    tip: tip.id,
+                    slot: tip.slot,
+                    height: tip.height,
+                })
+                .collect::<Vec<_>>();
+            Box::new(stream::iter(tips))
         }
 
         async fn request_blocks_from_peer(

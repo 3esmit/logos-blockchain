@@ -53,9 +53,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     );
                 }
             } else {
-                tracing::warn!(
+                tracing::debug!(
                     target: LOG_TARGET,
-                    "Multiaddr doesn't contain peer ID: {}",
+                    "Deferring Kademlia registration until the initial peer identity is learned: {}",
                     peer_addr
                 );
             }

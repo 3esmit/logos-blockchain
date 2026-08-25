@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use color_eyre::eyre::Result;
-use libp2p::{Multiaddr, PeerId};
+use libp2p::Multiaddr;
 use thiserror::Error;
 
 use crate::{
@@ -14,7 +14,9 @@ use crate::{
         ApiConfig, BlendArgs, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, SdpArgs, SdpConfig,
         StateConfig, StorageConfig, TimeConfig, TracingConfig, WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
+        configure_ibd_from_initial_peers,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
+        disable_ibd,
         network::serde::Config as NetworkConfig,
         sdp::serde::RequiredValues as SdpConfigRequiredValues,
         update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
@@ -164,16 +166,10 @@ fn build_cryptarchia_config(
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
             funding_pk: cryptarchia_funding_key.to_public_key(),
         });
-    if !cryptarchia_args.skip_ibd
-        && let Some(initial_peers) = initial_peers
-    {
-        cryptarchia_config.network.bootstrap.ibd.peers = initial_peers
-            .iter()
-            .filter_map(|addr| match addr.iter().last() {
-                Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
-                _ => None,
-            })
-            .collect();
+    if cryptarchia_args.skip_ibd {
+        disable_ibd(&mut cryptarchia_config);
+    } else if let Some(initial_peers) = initial_peers {
+        configure_ibd_from_initial_peers(&mut cryptarchia_config, &initial_peers);
     }
     update_cryptarchia(&mut cryptarchia_config, cryptarchia_args);
 
@@ -216,4 +212,46 @@ fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
         .collect();
 
     wallet_config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_config_resolves_peerless_initial_addresses_for_ibd() {
+        let mut args = InitArgs::default();
+        args.network.initial_peers = Some(vec!["/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap()]);
+
+        let config = build_user_config(&Keystore::default(), args);
+
+        assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
+        assert!(
+            config
+                .cryptarchia
+                .network
+                .bootstrap
+                .ibd
+                .resolve_peerless_initial_peers
+        );
+    }
+
+    #[test]
+    fn generated_config_honors_explicit_ibd_skip() {
+        let mut args = InitArgs::default();
+        args.network.initial_peers = Some(vec!["/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap()]);
+        args.cryptarchia.skip_ibd = true;
+
+        let config = build_user_config(&Keystore::default(), args);
+
+        assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
+        assert!(
+            !config
+                .cryptarchia
+                .network
+                .bootstrap
+                .ibd
+                .resolve_peerless_initial_peers
+        );
+    }
 }

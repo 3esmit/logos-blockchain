@@ -1,4 +1,10 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    hash::Hash,
+    marker::PhantomData,
+    time::Duration,
+};
 
 use backon::{ExponentialBuilder, Retryable as _};
 use futures::{
@@ -91,6 +97,8 @@ where
     _phantom: PhantomData<RuntimeServiceId>,
 }
 
+type TipSources<PeerId> = HashMap<HeaderId, HashSet<PeerId>>;
+
 impl<NetAdapter, BlockProcessor, RuntimeServiceId>
     InitialBlockDownload<NetAdapter, BlockProcessor, RuntimeServiceId>
 where
@@ -123,9 +131,17 @@ where
     /// - [`Error::AllPeersFailed`] if no IBD peer returned a tip.
     pub async fn run(
         mut self,
-        config: IbdConfig<NetAdapter::PeerId>,
+        mut config: IbdConfig<NetAdapter::PeerId>,
         orphan_config: &OrphanConfig,
     ) -> Result<BlockProcessor, Error> {
+        if config.peers.is_empty()
+            && config.resolve_peerless_initial_peers
+            && !self.add_resolved_initial_peers(&mut config).await?
+        {
+            error!("no configured network initial address resolved to an IBD peer");
+            return Err(AllPeersFailed.into());
+        }
+
         if config.peers.is_empty() {
             warn!("Skipping IBD as no peers are configured");
             return Ok(self.block_processor);
@@ -140,6 +156,28 @@ where
         Ok(self.block_processor)
     }
 
+    async fn add_resolved_initial_peers(
+        &self,
+        config: &mut IbdConfig<NetAdapter::PeerId>,
+    ) -> Result<bool, Error> {
+        let resolved = match self.network.wait_for_initial_peers(&config.peers).await {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                error!(?error, "failed to resolve network initial peers");
+                return Err(AllPeersFailed.into());
+            }
+        };
+        let previous_len = config.peers.len();
+        config.peers.extend(resolved);
+        Ok(config.peers.len() > previous_len)
+    }
+
+    fn add_current_initial_peers(&self, config: &mut IbdConfig<NetAdapter::PeerId>) -> bool {
+        let previous_len = config.peers.len();
+        config.peers.extend(self.network.resolved_initial_peers());
+        config.peers.len() > previous_len
+    }
+
     /// Start downloading blocks:
     /// 1. Fetch tips from configured peers
     /// 2. Enqueue tips into orphan downloader
@@ -152,7 +190,7 @@ where
     /// time to discover new peers.
     async fn download_blocks(
         &mut self,
-        config: IbdConfig<NetAdapter::PeerId>,
+        mut config: IbdConfig<NetAdapter::PeerId>,
         orphan_config: &OrphanConfig,
     ) -> Result<(), Error> {
         let mut downloader = OrphanBlocksDownloader::new(
@@ -166,8 +204,52 @@ where
         );
 
         loop {
-            let unsynced_tips = self.collect_unsynced_tips(&config).await?;
+            if config.resolve_peerless_initial_peers && self.add_current_initial_peers(&mut config)
+            {
+                downloader.ensure_pending_capacity(
+                    config
+                        .peers
+                        .len()
+                        .try_into()
+                        .expect("IBD peer set shouldn't be empty in this function"),
+                );
+            }
+
+            let unsynced_tips = match self.collect_unsynced_tips(&config).await {
+                Ok(tips) => tips,
+                Err(error @ Error::AllPeersFailed(_)) if config.resolve_peerless_initial_peers => {
+                    if self.add_resolved_initial_peers(&mut config).await? {
+                        downloader.ensure_pending_capacity(
+                            config
+                                .peers
+                                .len()
+                                .try_into()
+                                .expect("IBD peer set shouldn't be empty in this function"),
+                        );
+                        continue;
+                    }
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            };
             if unsynced_tips.is_empty() {
+                // A successful early bootstrap must not make IBD complete
+                // while another configured peerless address can still
+                // resolve. The backend owns the dial/retry lifecycle, so this
+                // wait has no independent timer or polling loop.
+                if config.resolve_peerless_initial_peers
+                    && self.add_resolved_initial_peers(&mut config).await?
+                {
+                    downloader.ensure_pending_capacity(
+                        config
+                            .peers
+                            .len()
+                            .try_into()
+                            .expect("IBD peer set shouldn't be empty in this function"),
+                    );
+                    continue;
+                }
+
                 info!("IBD complete: all configured peer tips are present in the local tree");
                 return Ok(());
             }
@@ -225,18 +307,18 @@ where
     async fn collect_unsynced_tips(
         &self,
         config: &IbdConfig<NetAdapter::PeerId>,
-    ) -> Result<HashSet<HeaderId>, Error> {
+    ) -> Result<TipSources<NetAdapter::PeerId>, Error> {
         debug!("collecting unsynced tips from {} peers", config.peers.len());
 
         let tips = fetch_tips_with_retry(&self.network, config)
             .await
             .inspect_err(|_| error!("no configured peer returned a tip this round"))?;
 
-        Ok(try_join_all(tips.into_iter().map(async |tip| {
+        Ok(try_join_all(tips.into_iter().map(async |(tip, peers)| {
             self.block_processor
                 .has_processed_block(tip)
                 .await
-                .map(|processed| (!processed).then_some(tip))
+                .map(|processed| (!processed).then_some((tip, peers)))
         }))
         .await?
         .into_iter()
@@ -256,7 +338,7 @@ where
 async fn fetch_tips_with_retry<NetAdapter, RuntimeServiceId>(
     network: &NetAdapter,
     config: &IbdConfig<NetAdapter::PeerId>,
-) -> Result<HashSet<HeaderId>, AllPeersFailed>
+) -> Result<TipSources<NetAdapter::PeerId>, AllPeersFailed>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
     NetAdapter::PeerId: Copy + Clone + Eq + Hash + Debug + Send + Sync,
@@ -282,27 +364,29 @@ where
 async fn fetch_tips<NetAdapter, RuntimeServiceId, I>(
     network: &NetAdapter,
     peers: I,
-) -> Result<HashSet<HeaderId>, AllPeersFailed>
+) -> Result<TipSources<NetAdapter::PeerId>, AllPeersFailed>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
-    NetAdapter::PeerId: Copy + Debug + Send + Sync,
+    NetAdapter::PeerId: Copy + Debug + Eq + Hash + Send + Sync,
     RuntimeServiceId: Sync,
     I: IntoIterator<Item = NetAdapter::PeerId>,
 {
-    let tips: HashSet<HeaderId> = join_all(peers.into_iter().map(async |peer| {
-        let result: Result<HeaderId, DynError> = match network.request_tip(peer).await {
-            Ok(GetTipResponse::Tip { tip, .. }) => Ok(tip),
-            Ok(GetTipResponse::Failure(reason)) => Err(DynError::from(reason)),
-            Err(e) => Err(e),
-        };
+    let responses = join_all(peers.into_iter().map(async |peer| {
+        let result: Result<(HeaderId, NetAdapter::PeerId), DynError> =
+            match network.request_tip(peer).await {
+                Ok(GetTipResponse::Tip { tip, .. }) => Ok((tip, peer)),
+                Ok(GetTipResponse::Failure(reason)) => Err(DynError::from(reason)),
+                Err(e) => Err(e),
+            };
         result
             .inspect_err(|e| warn!("failed to fetch tip from {peer:?}: {e}"))
             .ok()
     }))
-    .await
-    .into_iter()
-    .flatten()
-    .collect();
+    .await;
+    let mut tips = HashMap::<_, HashSet<_>>::new();
+    for (tip, peer) in responses.into_iter().flatten() {
+        tips.entry(tip).or_default().insert(peer);
+    }
     if tips.is_empty() {
         Err(AllPeersFailed)
     } else {
@@ -312,15 +396,22 @@ where
 
 fn enqueue_tips<NetAdapter, RuntimeServiceId>(
     downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
-    tips: HashSet<HeaderId>,
+    tips: TipSources<NetAdapter::PeerId>,
     info: &CryptarchiaInfo,
 ) where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Clone + Send + Sync + 'static,
+    NetAdapter::PeerId: Clone + Debug + Eq + Hash + Send + 'static,
     NetAdapter::Block: Clone + Send + Sync + 'static,
     RuntimeServiceId: Send + Sync + 'static,
 {
-    for tip in tips {
-        if let Err(e) = downloader.enqueue_orphan(tip, None, info.tip, info.lib) {
+    for (tip, preferred_peers) in tips {
+        if let Err(e) = downloader.enqueue_orphan_with_preferred_peers(
+            tip,
+            None,
+            info.tip,
+            info.lib,
+            preferred_peers,
+        ) {
             debug!("failed to enqueue tip {tip:?}: {e}");
         } else {
             debug!("enqueued tip {tip:?} for download");
@@ -345,11 +436,11 @@ pub struct AllPeersFailed;
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashMap,
+        collections::VecDeque,
         iter::empty,
         num::{NonZero, NonZeroU64},
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
     };
@@ -390,6 +481,125 @@ mod tests {
         // The Cryptarchia remains unchanged.
         assert_eq!(cryptarchia.lib(), [GENESIS_ID; 32].into());
         assert_eq!(cryptarchia.tip(), [GENESIS_ID; 32].into());
+    }
+
+    #[tokio::test]
+    async fn resolves_peerless_initial_address_before_ibd() {
+        let peer = BlockProvider::new(
+            vec![Block::genesis(), Block::new(1, GENESIS_ID, 1, 1)],
+            Ok(Block::new(1, GENESIS_ID, 1, 1)),
+        );
+        let adapter = MockNetworkAdapter::<()>::new(vec![(NodeId(0), peer.clone())])
+            .with_initial_peer_batches([HashSet::from([NodeId(0)])]);
+        let mut ibd_config = config(HashSet::new());
+        ibd_config.resolve_peerless_initial_peers = true;
+
+        let processor = InitialBlockDownload::new(MockBlockProcessor::new(), adapter)
+            .run(ibd_config, &orphan_config())
+            .await
+            .unwrap();
+
+        assert!(
+            peer.chain
+                .iter()
+                .all(|block| processor.cryptarchia.has_block(&block.id))
+        );
+    }
+
+    #[tokio::test]
+    async fn waits_for_another_initial_peer_after_first_source_fails() {
+        let unavailable = BlockProvider::new(vec![Block::genesis()], Err(()));
+        let available = BlockProvider::new(
+            vec![Block::genesis(), Block::new(1, GENESIS_ID, 1, 1)],
+            Ok(Block::new(1, GENESIS_ID, 1, 1)),
+        );
+        let adapter = MockNetworkAdapter::<()>::new(vec![
+            (NodeId(0), unavailable),
+            (NodeId(1), available.clone()),
+        ])
+        .with_initial_peer_batches([
+            HashSet::from([NodeId(0)]),
+            HashSet::from([NodeId(0), NodeId(1)]),
+        ]);
+        let mut ibd_config = config(HashSet::new());
+        ibd_config.resolve_peerless_initial_peers = true;
+        ibd_config.tips_fetch_max_attempts = 1;
+
+        let processor = InitialBlockDownload::new(MockBlockProcessor::new(), adapter)
+            .run(ibd_config, &orphan_config())
+            .await
+            .unwrap();
+
+        assert!(
+            available
+                .chain
+                .iter()
+                .all(|block| processor.cryptarchia.has_block(&block.id))
+        );
+    }
+
+    #[tokio::test]
+    async fn waits_for_every_initial_dial_to_settle_before_completion() {
+        let local = BlockProvider::new(vec![Block::genesis()], Ok(Block::genesis()));
+        let remote_tip = Block::new(1, GENESIS_ID, 1, 1);
+        let remote = BlockProvider::new(vec![Block::genesis(), remote_tip.clone()], Ok(remote_tip));
+        let adapter =
+            MockNetworkAdapter::<()>::new(vec![(NodeId(0), local), (NodeId(1), remote.clone())])
+                .with_initial_peer_batches([
+                    HashSet::from([NodeId(0)]),
+                    HashSet::from([NodeId(0), NodeId(1)]),
+                ]);
+        let mut ibd_config = config(HashSet::new());
+        ibd_config.resolve_peerless_initial_peers = true;
+
+        let processor = InitialBlockDownload::new(MockBlockProcessor::new(), adapter)
+            .run(ibd_config, &orphan_config())
+            .await
+            .unwrap();
+
+        assert!(
+            remote
+                .chain
+                .iter()
+                .all(|block| processor.cryptarchia.has_block(&block.id))
+        );
+    }
+
+    #[tokio::test]
+    async fn includes_newly_resolved_peers_before_the_next_tip_round() {
+        let tip = Block::new(1, GENESIS_ID, 1, 1);
+        let static_peer = BlockProvider::new(vec![Block::genesis()], Ok(tip.clone()));
+        let resolved_peer =
+            BlockProvider::new(vec![Block::genesis(), tip.clone()], Ok(tip.clone()));
+        let adapter = MockNetworkAdapter::<()>::new(vec![
+            (NodeId(0), static_peer),
+            (NodeId(1), resolved_peer),
+        ])
+        .with_resolved_initial_peers(HashSet::from([NodeId(1)]));
+        let mut ibd_config = config(HashSet::from([NodeId(0)]));
+        ibd_config.resolve_peerless_initial_peers = true;
+
+        let processor = InitialBlockDownload::new(MockBlockProcessor::new(), adapter)
+            .run(ibd_config, &orphan_config())
+            .await
+            .unwrap();
+
+        assert!(processor.cryptarchia.has_block(&tip.id));
+    }
+
+    #[tokio::test]
+    async fn fails_when_no_initial_address_resolves() {
+        let mut ibd_config = config(HashSet::new());
+        ibd_config.resolve_peerless_initial_peers = true;
+
+        let result = InitialBlockDownload::new(
+            MockBlockProcessor::new(),
+            MockNetworkAdapter::<()>::new(Vec::new()).with_initial_peer_batches([HashSet::new()]),
+        )
+        .run(ibd_config, &orphan_config())
+        .await;
+
+        assert!(matches!(result, Err(Error::AllPeersFailed(_))));
     }
 
     #[tokio::test]
@@ -482,6 +692,30 @@ mod tests {
 
         let cryptarchia = block_processor.cryptarchia;
         assert!(peer1.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
+    }
+
+    #[tokio::test]
+    async fn retains_every_peer_that_advertises_the_same_tip() {
+        let tip = Block::new(1, GENESIS_ID, 1, 1);
+        let adapter = MockNetworkAdapter::<()>::new(vec![
+            (
+                NodeId(0),
+                BlockProvider::new(vec![Block::genesis(), tip.clone()], Ok(tip.clone())),
+            ),
+            (
+                NodeId(1),
+                BlockProvider::new(vec![Block::genesis(), tip.clone()], Ok(tip.clone())),
+            ),
+        ]);
+
+        let tips = fetch_tips::<_, (), _>(&adapter, [NodeId(0), NodeId(1)])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tips.get(&tip.id),
+            Some(&HashSet::from([NodeId(0), NodeId(1)]))
+        );
     }
 
     /// If every peer's tip is already in the local tree, IBD finishes
@@ -693,6 +927,7 @@ mod tests {
     fn config(peers: HashSet<NodeId>) -> IbdConfig<NodeId> {
         IbdConfig {
             peers,
+            resolve_peerless_initial_peers: false,
             tips_fetch_max_attempts: 3,
             tips_fetch_min_delay: Duration::from_millis(250),
             tips_fetch_max_delay: Duration::from_secs(1),
@@ -789,6 +1024,8 @@ mod tests {
     #[derive(Clone)]
     struct MockNetworkAdapter<RuntimeServiceId> {
         providers: Arc<[(NodeId, BlockProvider)]>,
+        initial_peer_batches: Arc<Mutex<VecDeque<HashSet<NodeId>>>>,
+        resolved_initial_peers: Arc<Mutex<HashSet<NodeId>>>,
         _phantom: PhantomData<RuntimeServiceId>,
     }
 
@@ -796,8 +1033,23 @@ mod tests {
         fn new(providers: Vec<(NodeId, BlockProvider)>) -> Self {
             Self {
                 providers: providers.into(),
+                initial_peer_batches: Arc::new(Mutex::new(VecDeque::new())),
+                resolved_initial_peers: Arc::new(Mutex::new(HashSet::new())),
                 _phantom: PhantomData,
             }
+        }
+
+        fn with_initial_peer_batches(
+            mut self,
+            batches: impl IntoIterator<Item = HashSet<NodeId>>,
+        ) -> Self {
+            self.initial_peer_batches = Arc::new(Mutex::new(batches.into_iter().collect()));
+            self
+        }
+
+        fn with_resolved_initial_peers(mut self, peers: HashSet<NodeId>) -> Self {
+            self.resolved_initial_peers = Arc::new(Mutex::new(peers));
+            self
         }
     }
 
@@ -843,6 +1095,27 @@ mod tests {
                 }),
                 Err(()) => Err(DynError::from("cannot provide tip")),
             }
+        }
+
+        fn resolved_initial_peers(&self) -> HashSet<Self::PeerId> {
+            self.resolved_initial_peers.lock().unwrap().clone()
+        }
+
+        async fn wait_for_initial_peers(
+            &self,
+            _known_peers: &HashSet<Self::PeerId>,
+        ) -> Result<HashSet<Self::PeerId>, DynError> {
+            let next = self.initial_peer_batches.lock().unwrap().pop_front();
+            next.map_or_else(
+                || Ok(self.resolved_initial_peers()),
+                |peers| {
+                    self.resolved_initial_peers
+                        .lock()
+                        .unwrap()
+                        .clone_from(&peers);
+                    Ok(peers)
+                },
+            )
         }
 
         async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {

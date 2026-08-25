@@ -12,7 +12,7 @@ use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Key, UnsecuredZkKey, ZkPublicKey},
 };
-use lb_libp2p::{Multiaddr, ed25519::SecretKey};
+use lb_libp2p::{Multiaddr, PeerId, Protocol, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
     logging::local::{AppenderType, CompressionType, RetentionType, RollingConfig, RotationType},
@@ -263,8 +263,8 @@ pub struct CryptarchiaArgs {
     )]
     pub cryptarchia_funding_pk: Option<ZkPublicKey>,
 
-    /// Disable Initial Block Download (IBD) by leaving the IBD peer list
-    /// empty, regardless of any peers passed via `--net-initial-peers`/`-p`.
+    /// Disable Initial Block Download (IBD), regardless of any peers passed
+    /// via `--net-initial-peers`/`-p`.
     #[clap(long = "skip-ibd", default_value_t = false)]
     pub skip_ibd: bool,
 }
@@ -502,6 +502,38 @@ pub const fn update_cryptarchia(
     if let Some(pk) = funding_pk {
         cryptarchia.set_funding_pk(pk);
     }
+}
+
+/// Selects IBD peers from an explicit initial-peer override.
+///
+/// Addresses carrying a peer ID retain the historical static-peer behavior.
+/// Peerless addresses opt into identity resolution by the network backend.
+/// An empty list disables IBD.
+pub(crate) fn configure_ibd_from_initial_peers(
+    cryptarchia: &mut CryptarchiaConfig,
+    initial_peers: &[Multiaddr],
+) {
+    let ibd = &mut cryptarchia.network.bootstrap.ibd;
+    ibd.peers = initial_peers
+        .iter()
+        .filter_map(|address| match address.iter().last() {
+            Some(Protocol::P2p(multihash)) => PeerId::from_multihash(multihash.into()).ok(),
+            _ => None,
+        })
+        .collect();
+    ibd.resolve_peerless_initial_peers = initial_peers.iter().any(|address| {
+        !matches!(
+            address.iter().last(),
+            Some(Protocol::P2p(multihash))
+                if PeerId::from_multihash(multihash.into()).is_ok()
+        )
+    });
+}
+
+pub(crate) fn disable_ibd(cryptarchia: &mut CryptarchiaConfig) {
+    let ibd = &mut cryptarchia.network.bootstrap.ibd;
+    ibd.peers.clear();
+    ibd.resolve_peerless_initial_peers = false;
 }
 
 pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {

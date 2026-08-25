@@ -17,8 +17,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use self::swarm::SwarmHandler;
 pub use self::{
     command::{
-        ChainSyncCommand, Command, Dial, DiscoveryCommand, Libp2pInfo, NetworkCommand,
-        PubSubCommand,
+        ChainSyncCommand, Command, Dial, DiscoveryCommand, InitialPeerStatus, Libp2pInfo,
+        NetworkCommand, PubSubCommand,
     },
     config::Libp2pConfig,
 };
@@ -49,7 +49,6 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
         let (chainsync_events_tx, _) = broadcast::channel(BUFFER_SIZE);
 
         let initial_peers = config.initial_peers.clone();
-
         let mut swarm_handler = SwarmHandler::new(
             config,
             commands_tx.clone(),

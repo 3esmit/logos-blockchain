@@ -19,6 +19,10 @@ where
 {
     /// Peers to query for the chain tip during IBD.
     pub peers: HashSet<NodeId>,
+    /// Include identities learned from configured peerless network initial
+    /// addresses in the IBD peer set.
+    #[serde(default)]
+    pub resolve_peerless_initial_peers: bool,
     /// Maximum number of attempts when fetching tips from IBD peers.
     pub tips_fetch_max_attempts: usize,
     /// Lower bound of the exponential backoff between tip-fetch attempts.

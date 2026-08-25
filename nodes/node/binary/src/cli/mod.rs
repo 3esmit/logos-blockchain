@@ -22,9 +22,9 @@ use crate::{
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
         NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
-        blend::serde::core::BackendConfig as BlendCoreConfig, network::serde::SwarmConfig,
-        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
-        update_tracing,
+        blend::serde::core::BackendConfig as BlendCoreConfig, configure_ibd_from_initial_peers,
+        disable_ibd, network::serde::SwarmConfig, update_api, update_blend, update_cryptarchia,
+        update_network, update_sdp, update_state, update_tracing,
     },
 };
 
@@ -183,8 +183,8 @@ pub struct InitArgs {
 #[derive(Debug)]
 pub struct EmbeddedInitArgs {
     /// Trusted peers to bootstrap from (multiaddr format).
-    /// If `--skip-ibd` is not set, peers whose multiaddrs include a `PeerId`
-    /// are also used as IBD peers.
+    /// If `--skip-ibd` is not set, identified peers are used directly for IBD
+    /// and peerless addresses are resolved after the network connects.
     pub initial_peers: Vec<Multiaddr>,
 
     /// Output file path for the generated config
@@ -207,8 +207,8 @@ pub struct EmbeddedInitArgs {
     pub storage_path: Option<PathBuf>,
     pub logs_path: Option<PathBuf>,
 
-    /// Disable Initial Block Download (IBD) by leaving the IBD peer list
-    /// empty, regardless of any peers passed via `--initial-peers`/`-p`.
+    /// Disable Initial Block Download (IBD), regardless of any peers passed
+    /// via `--initial-peers`/`-p`.
     pub skip_ibd: bool,
 
     /// Log filter directives to write into the generated config, e.g.
@@ -457,6 +457,12 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
         state: state_args,
         ..
     } = args;
+    let initial_peers = network_args.initial_peers.clone();
+    if cryptarchia_args.skip_ibd {
+        disable_ibd(&mut user_config.cryptarchia);
+    } else if let Some(initial_peers) = &initial_peers {
+        configure_ibd_from_initial_peers(&mut user_config.cryptarchia, initial_peers);
+    }
     update_tracing(&mut user_config.tracing, log_args)?;
     update_network(&mut user_config.network, network_args)?;
     update_blend(&mut user_config.blend, blend_args);
@@ -474,4 +480,64 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
         deployment: deployment_settings,
         user: user_config,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::config::{init::build_user_config, keystore::Keystore};
+
+    #[test]
+    fn runtime_peerless_override_updates_the_ibd_source() {
+        let user_config = build_user_config(&Keystore::default(), InitArgs::default());
+        let args = CliArgs::parse_from([
+            "node",
+            "user_config.yaml",
+            "--net-initial-peers",
+            "/ip4/127.0.0.1/udp/3000/quic-v1",
+        ]);
+
+        let run_config = build_run_config(user_config, args).unwrap();
+
+        assert!(
+            run_config
+                .user
+                .cryptarchia
+                .network
+                .bootstrap
+                .ibd
+                .resolve_peerless_initial_peers
+        );
+    }
+
+    #[test]
+    fn runtime_skip_disables_initial_peer_ibd() {
+        let mut init_args = InitArgs::default();
+        init_args.network.initial_peers =
+            Some(vec!["/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap()]);
+        let user_config = build_user_config(&Keystore::default(), init_args);
+        let args = CliArgs::parse_from(["node", "user_config.yaml", "--skip-ibd"]);
+
+        let run_config = build_run_config(user_config, args).unwrap();
+
+        assert!(
+            run_config
+                .user
+                .cryptarchia
+                .network
+                .bootstrap
+                .ibd
+                .peers
+                .is_empty()
+        );
+        assert!(
+            !run_config
+                .user
+                .cryptarchia
+                .network
+                .bootstrap
+                .ibd
+                .resolve_peerless_initial_peers
+        );
+    }
 }

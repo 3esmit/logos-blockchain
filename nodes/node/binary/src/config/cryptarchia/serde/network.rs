@@ -28,6 +28,9 @@ pub struct BootstrapConfig {
 pub struct IbdConfig {
     /// Peers to query for the chain tip during IBD.
     pub peers: HashSet<PeerId>,
+    /// Include identities learned from configured peerless network initial
+    /// addresses in the IBD peer set.
+    pub resolve_peerless_initial_peers: bool,
     /// Deprecated: no longer used. Kept for YAML backward compatibility.
     pub delay_before_new_download: Duration,
     /// Maximum number of attempts when fetching tips from IBD peers.
@@ -44,6 +47,7 @@ impl Default for IbdConfig {
     fn default() -> Self {
         Self {
             peers: HashSet::new(),
+            resolve_peerless_initial_peers: false,
             delay_before_new_download: Duration::from_secs(10),
             tips_fetch_max_attempts: 3,
             tips_fetch_min_delay: Duration::from_millis(250),
@@ -121,5 +125,18 @@ impl Default for NetworkConfig {
             max_connected_peers_to_try_download: 16,
             max_discovered_peers_to_try_download: 16,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IbdConfig;
+
+    #[test]
+    fn legacy_ibd_config_does_not_enable_initial_peer_resolution() {
+        let config: IbdConfig = serde_yaml::from_str("peers: []\n").unwrap();
+
+        assert!(config.peers.is_empty());
+        assert!(!config.resolve_peerless_initial_peers);
     }
 }

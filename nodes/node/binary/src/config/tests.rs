@@ -8,6 +8,7 @@ use bytes::Bytes;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
+use libp2p::{Multiaddr, PeerId};
 use tracing::Level;
 
 use crate::{
@@ -19,9 +20,11 @@ use crate::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
         },
+        configure_ibd_from_initial_peers,
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
+        disable_ibd,
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
         sdp::{
@@ -47,6 +50,68 @@ const BLEND_RECOVERY_MARKER: &[u8] = b"recovery/test/blend";
 const MEMPOOL_RECOVERY_MARKER: &[u8] = b"recovery/test/mempool";
 const SDP_RECOVERY_MARKER: &[u8] = b"recovery/test/sdp";
 const WALLET_RECOVERY_MARKER: &[u8] = b"recovery/test/wallet";
+
+fn cryptarchia_config() -> CryptarchiaConfig {
+    CryptarchiaConfig::with_required_values(CryptarchiaRequiredValues {
+        funding_pk: ZkPublicKey::zero(),
+    })
+}
+
+#[test]
+fn peerless_initial_addresses_enable_runtime_ibd_resolution() {
+    let mut config = cryptarchia_config();
+    let address: Multiaddr = "/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap();
+
+    configure_ibd_from_initial_peers(&mut config, &[address]);
+
+    assert!(config.network.bootstrap.ibd.peers.is_empty());
+    assert!(config.network.bootstrap.ibd.resolve_peerless_initial_peers);
+}
+
+#[test]
+fn identified_initial_addresses_remain_static_ibd_peers() {
+    let mut config = cryptarchia_config();
+    let peer = PeerId::random();
+    let address: Multiaddr = format!("/ip4/127.0.0.1/udp/3000/quic-v1/p2p/{peer}")
+        .parse()
+        .unwrap();
+
+    configure_ibd_from_initial_peers(&mut config, &[address]);
+
+    assert_eq!(config.network.bootstrap.ibd.peers, [peer].into());
+    assert!(!config.network.bootstrap.ibd.resolve_peerless_initial_peers);
+}
+
+#[test]
+fn mixed_initial_addresses_keep_static_ids_and_peerless_fallback() {
+    let mut config = cryptarchia_config();
+    let peer = PeerId::random();
+    let direct: Multiaddr = format!("/ip4/127.0.0.1/udp/3000/quic-v1/p2p/{peer}")
+        .parse()
+        .unwrap();
+    let peerless: Multiaddr = "/ip4/127.0.0.1/udp/3001/quic-v1".parse().unwrap();
+
+    configure_ibd_from_initial_peers(&mut config, &[direct, peerless]);
+
+    assert_eq!(config.network.bootstrap.ibd.peers, [peer].into());
+    assert!(config.network.bootstrap.ibd.resolve_peerless_initial_peers);
+}
+
+#[test]
+fn explicit_ibd_disable_clears_static_and_runtime_sources() {
+    let mut config = cryptarchia_config();
+    let peer = PeerId::random();
+    let direct: Multiaddr = format!("/ip4/127.0.0.1/udp/3000/quic-v1/p2p/{peer}")
+        .parse()
+        .unwrap();
+    let peerless: Multiaddr = "/ip4/127.0.0.1/udp/3001/quic-v1".parse().unwrap();
+    configure_ibd_from_initial_peers(&mut config, &[direct, peerless]);
+
+    disable_ibd(&mut config);
+
+    assert!(config.network.bootstrap.ibd.peers.is_empty());
+    assert!(!config.network.bootstrap.ibd.resolve_peerless_initial_peers);
+}
 
 fn recovery_data_fixture() -> RecoveryData {
     RecoveryData::new(HashMap::from([

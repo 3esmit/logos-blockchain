@@ -17,7 +17,10 @@ macro_rules! log_error {
     };
 }
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use lb_libp2p::{
     Multiaddr, PeerId, Protocol, Swarm, SwarmEvent,
@@ -30,12 +33,12 @@ use lb_libp2p::{
 use lb_log_targets::network_service;
 use lb_utils::tokio::task::spawn;
 use rand::RngCore;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio_stream::StreamExt as _;
 
 use super::{
     Libp2pConfig, Message,
-    command::{Command, Dial, NetworkCommand},
+    command::{Command, Dial, InitialPeerStatus, NetworkCommand},
 };
 use crate::backends::libp2p::{Libp2pInfo, swarm::kademlia::PendingQueryData};
 
@@ -61,12 +64,21 @@ pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
 
     pending_queries: HashMap<QueryId, PendingQueryData>,
+    pending_initial_peers: HashSet<Multiaddr>,
+    initial_peer_status_tx: watch::Sender<InitialPeerStatus>,
 }
 
 // TODO: make this configurable
 const BACKOFF: u64 = 5;
 // TODO: make this configurable
 const MAX_RETRY: usize = 3;
+
+fn requires_peer_id_resolution(address: &Multiaddr) -> bool {
+    !matches!(
+        address.iter().last(),
+        Some(Protocol::P2p(multihash)) if PeerId::from_multihash(multihash.into()).is_ok()
+    )
+}
 
 impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     pub fn new(
@@ -77,6 +89,11 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
         rng: R,
     ) -> Self {
+        let initial_peers_pending = config.initial_peers.iter().any(requires_peer_id_resolution);
+        let (initial_peer_status_tx, _) = watch::channel(InitialPeerStatus {
+            peers: HashSet::new(),
+            pending: initial_peers_pending,
+        });
         let swarm = Swarm::build(config.inner, rng).unwrap();
 
         // Keep the dialing history since swarm.connect doesn't return the result
@@ -91,16 +108,25 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             pubsub_messages_tx: pubsub_events_tx,
             chainsync_events_tx,
             pending_queries: HashMap::new(),
+            pending_initial_peers: HashSet::new(),
+            initial_peer_status_tx,
         }
     }
 
     pub async fn run(&mut self, initial_peers: Vec<Multiaddr>) {
         self.bootstrap_kad_from_peers(&initial_peers);
+        let initial_peers: HashSet<_> = initial_peers.into_iter().collect();
+        self.pending_initial_peers = initial_peers
+            .iter()
+            .filter(|address| requires_peer_id_resolution(address))
+            .cloned()
+            .collect();
+        self.publish_initial_peer_status();
 
-        for initial_peer in &initial_peers {
+        for initial_peer in initial_peers {
             let (tx, _) = oneshot::channel();
             let dial = Dial {
-                addr: initial_peer.clone(),
+                addr: initial_peer,
                 retry_count: 0,
                 result_sender: tx,
             };
@@ -209,7 +235,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                         );
                         self.remove_kademlia_address_for_dial(peer_id, dial_addr);
                         // Drop any matching pending dial so it is not also retried.
-                        self.pending_dials.remove(&connection_id);
+                        if let Some(dial) = self.pending_dials.remove(&connection_id) {
+                            self.record_initial_peer_failure(&dial.addr);
+                        }
                     }
                     error => {
                         tracing::error!(
@@ -267,32 +295,39 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 self.connect(dial);
             }
             NetworkCommand::Info { reply } => {
-                let discovered_peers: Vec<PeerId> = self
-                    .swarm
-                    .kademlia_discovered_peers()
-                    .into_iter()
-                    .map(|peer_info| peer_info.peer_id)
-                    .collect();
-                let n_discovered_peers = discovered_peers.len();
-                let swarm = self.swarm.swarm();
-                let network_info = swarm.network_info();
-                let counters = network_info.connection_counters();
-                let info = Libp2pInfo {
-                    listen_addresses: swarm.listeners().cloned().collect(),
-                    peer_id: *swarm.local_peer_id(),
-                    connected_peers: swarm.connected_peers().copied().collect(),
-                    n_peers: network_info.num_peers(),
-                    n_connections: counters.num_connections(),
-                    n_pending_connections: counters.num_pending(),
-                    discovered_peers,
-                    n_discovered_peers,
-                };
+                let info = self.libp2p_info();
                 log_error!(reply.send(info));
             }
             NetworkCommand::ConnectedPeers { reply } => {
                 let connected_peers = self.swarm.swarm().connected_peers().copied().collect();
                 log_error!(reply.send(connected_peers));
             }
+            NetworkCommand::InitialPeerStatus { reply } => {
+                drop(reply.send(self.initial_peer_status_tx.subscribe()));
+            }
+        }
+    }
+
+    fn libp2p_info(&mut self) -> Libp2pInfo {
+        let discovered_peers: Vec<PeerId> = self
+            .swarm
+            .kademlia_discovered_peers()
+            .into_iter()
+            .map(|peer_info| peer_info.peer_id)
+            .collect();
+        let n_discovered_peers = discovered_peers.len();
+        let swarm = self.swarm.swarm();
+        let network_info = swarm.network_info();
+        let counters = network_info.connection_counters();
+        Libp2pInfo {
+            listen_addresses: swarm.listeners().cloned().collect(),
+            peer_id: *swarm.local_peer_id(),
+            connected_peers: swarm.connected_peers().copied().collect(),
+            n_peers: network_info.num_peers(),
+            n_connections: counters.num_connections(),
+            n_pending_connections: counters.num_pending(),
+            discovered_peers,
+            n_discovered_peers,
         }
     }
 
@@ -312,6 +347,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 self.pending_dials.insert(connection_id, dial);
             }
             Err(e) => {
+                self.record_initial_peer_failure(&dial.addr);
                 if let Err(err) = dial.result_sender.send(Err(e)) {
                     tracing::warn!(
                         target: LOG_TARGET,
@@ -323,14 +359,43 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     }
 
     fn complete_connect(&mut self, connection_id: ConnectionId, peer_id: PeerId) {
-        if let Some(dial) = self.pending_dials.remove(&connection_id)
-            && let Err(e) = dial.result_sender.send(Ok(peer_id))
-        {
-            tracing::warn!(
-                target: LOG_TARGET,
-                "failed to send the Ok result of dialing: {e:?}"
-            );
+        if let Some(dial) = self.pending_dials.remove(&connection_id) {
+            self.record_initial_peer_resolution(&dial.addr, peer_id);
+            if let Err(e) = dial.result_sender.send(Ok(peer_id)) {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    "failed to send the Ok result of dialing: {e:?}"
+                );
+            }
         }
+    }
+
+    fn record_initial_peer_resolution(&mut self, address: &Multiaddr, peer_id: PeerId) {
+        if !self.pending_initial_peers.remove(address) {
+            return;
+        }
+
+        // Peerless initial addresses are not inserted into Kademlia during
+        // startup. Retain the successful address under the learned identity so
+        // chain-sync can redial it after the initial connection closes.
+        self.swarm.kademlia_add_address(peer_id, address);
+
+        let mut status = self.initial_peer_status_tx.borrow().clone();
+        status.peers.insert(peer_id);
+        status.pending = !self.pending_initial_peers.is_empty();
+        self.initial_peer_status_tx.send_replace(status);
+    }
+
+    fn record_initial_peer_failure(&mut self, address: &Multiaddr) {
+        if self.pending_initial_peers.remove(address) {
+            self.publish_initial_peer_status();
+        }
+    }
+
+    fn publish_initial_peer_status(&self) {
+        let mut status = self.initial_peer_status_tx.borrow().clone();
+        status.pending = !self.pending_initial_peers.is_empty();
+        self.initial_peer_status_tx.send_replace(status);
     }
 
     // TODO: Consider a common retry module for all use cases
@@ -340,6 +405,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         };
         let Some(new_retry_count) = dial.retry_count.checked_add(1) else {
             tracing::debug!(target: LOG_TARGET, "Retry count overflow.");
+            self.record_initial_peer_failure(&dial.addr);
             return;
         };
         if new_retry_count > MAX_RETRY {
@@ -348,6 +414,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 "Max retry({MAX_RETRY}) has been reached: {dial:?}"
             );
             self.remove_kademlia_address_for_dial(peer_id, &dial.addr);
+            self.record_initial_peer_failure(&dial.addr);
             return;
         }
         dial.retry_count = new_retry_count;
@@ -369,7 +436,7 @@ const fn exp_backoff(retry: usize) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, net::Ipv4Addr, sync::Once, time::Instant};
+    use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
     use lb_libp2p::{
         libp2p::core::{ConnectedPoint, Endpoint, transport::PortUse},
@@ -430,6 +497,149 @@ mod tests {
             inner: create_swarm_config(port, !initial_peers.is_empty()),
             initial_peers,
         }
+    }
+
+    #[tokio::test]
+    async fn resolved_initial_peers_retain_every_successful_address() {
+        let first: Multiaddr = "/ip4/127.0.0.1/udp/31000/quic-v1".parse().unwrap();
+        let second: Multiaddr = "/ip4/127.0.0.1/udp/31001/quic-v1".parse().unwrap();
+        let config = create_libp2p_config(
+            vec![first.clone(), second.clone()],
+            get_available_udp_port().unwrap(),
+        );
+        let (commands_tx, commands_rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+        let mut handler = SwarmHandler::new(
+            config,
+            commands_tx,
+            commands_rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+        );
+        handler.pending_initial_peers = HashSet::from([first.clone(), second.clone()]);
+        let peer = PeerId::random();
+
+        handler.record_initial_peer_resolution(&first, peer);
+        handler.record_initial_peer_resolution(&second, peer);
+
+        let status = handler.initial_peer_status_tx.borrow().clone();
+        assert_eq!(status.peers, HashSet::from([peer]));
+        assert!(!status.pending);
+        let peer_info = handler
+            .swarm
+            .kademlia_discovered_peers()
+            .into_iter()
+            .find(|info| info.peer_id == peer)
+            .expect("resolved initial peer should be retained in Kademlia");
+        assert!(peer_info.addrs.contains(&first.with(Protocol::P2p(peer))));
+        assert!(peer_info.addrs.contains(&second.with(Protocol::P2p(peer))));
+    }
+
+    #[tokio::test]
+    async fn terminal_initial_dial_failure_closes_empty_resolution_window() {
+        let address: Multiaddr = "/ip4/127.0.0.1/udp/31002/quic-v1".parse().unwrap();
+        let config = create_libp2p_config(vec![address.clone()], get_available_udp_port().unwrap());
+        let (commands_tx, commands_rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+        let mut handler = SwarmHandler::new(
+            config,
+            commands_tx,
+            commands_rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+        );
+        handler.pending_initial_peers.insert(address.clone());
+
+        handler.record_initial_peer_failure(&address);
+
+        let status = handler.initial_peer_status_tx.borrow().clone();
+        assert!(status.peers.is_empty());
+        assert!(!status.pending);
+    }
+
+    #[tokio::test]
+    async fn identified_initial_address_needs_no_runtime_resolution() {
+        let peer = PeerId::random();
+        let address = format!("/ip4/127.0.0.1/udp/31003/quic-v1/p2p/{peer}")
+            .parse()
+            .unwrap();
+        let config = create_libp2p_config(vec![address], get_available_udp_port().unwrap());
+        let (commands_tx, commands_rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+        let handler = SwarmHandler::new(
+            config,
+            commands_tx,
+            commands_rx,
+            pubsub_events_tx,
+            chainsync_events_tx,
+            OsRng,
+        );
+
+        let status = handler.initial_peer_status_tx.borrow().clone();
+        assert!(status.peers.is_empty());
+        assert!(!status.pending);
+    }
+
+    #[tokio::test]
+    async fn peerless_initial_dial_publishes_the_learned_identity() {
+        let bootstrap_port = get_available_udp_port().unwrap();
+        let peerless_address = format!("/ip4/127.0.0.1/udp/{bootstrap_port}/quic-v1")
+            .parse::<Multiaddr>()
+            .unwrap();
+
+        let (bootstrap_tx, bootstrap_rx) = mpsc::channel(10);
+        let (bootstrap_pubsub_tx, _) = broadcast::channel(10);
+        let (bootstrap_chainsync_tx, _) = broadcast::channel(10);
+        let bootstrap_config = create_libp2p_config(Vec::new(), bootstrap_port);
+        let mut bootstrap = SwarmHandler::new(
+            bootstrap_config,
+            bootstrap_tx,
+            bootstrap_rx,
+            bootstrap_pubsub_tx,
+            bootstrap_chainsync_tx,
+            OsRng,
+        );
+        let bootstrap_peer = *bootstrap.swarm.swarm().local_peer_id();
+        let bootstrap_task = tokio::spawn(async move { bootstrap.run(Vec::new()).await });
+
+        let (client_tx, client_rx) = mpsc::channel(10);
+        let (client_pubsub_tx, _) = broadcast::channel(10);
+        let (client_chainsync_tx, _) = broadcast::channel(10);
+        let client_config = create_libp2p_config(
+            vec![peerless_address.clone()],
+            get_available_udp_port().unwrap(),
+        );
+        let mut client = SwarmHandler::new(
+            client_config,
+            client_tx,
+            client_rx,
+            client_pubsub_tx,
+            client_chainsync_tx,
+            OsRng,
+        );
+        let mut status_rx = client.initial_peer_status_tx.subscribe();
+        let client_task = tokio::spawn(async move { client.run(vec![peerless_address]).await });
+
+        let status = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let status = status_rx.borrow_and_update().clone();
+                if !status.pending {
+                    break status;
+                }
+                status_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("peerless initial dial should settle");
+
+        assert_eq!(status.peers, HashSet::from([bootstrap_peer]));
+        bootstrap_task.abort();
+        client_task.abort();
     }
 
     const NODE_COUNT: usize = 10;

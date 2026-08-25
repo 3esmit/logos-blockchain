@@ -1,5 +1,5 @@
 use color_eyre::eyre::Result;
-use libp2p::{Multiaddr, PeerId};
+use libp2p::Multiaddr;
 use thiserror::Error;
 
 use crate::{
@@ -13,8 +13,9 @@ use crate::{
     },
     config::{
         BlendArgs, BlendConfig, CryptarchiaArgs, CryptarchiaConfig, KmsConfig, NetworkConfig,
-        SdpArgs, SdpConfig, WalletConfig, update_api, update_blend, update_cryptarchia,
-        update_network, update_sdp, update_state, update_tracing,
+        SdpArgs, SdpConfig, WalletConfig, configure_ibd_from_initial_peers, disable_ibd,
+        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
+        update_tracing,
     },
 };
 
@@ -140,16 +141,10 @@ fn update_cryptarchia_config(
         .expect("Cryptarchia funding key set by default");
     cryptarchia_config.set_funding_pk(cryptarchia_funding_key.to_public_key());
 
-    if !cryptarchia_args.skip_ibd
-        && let Some(initial_peers) = initial_peers
-    {
-        cryptarchia_config.network.bootstrap.ibd.peers = initial_peers
-            .iter()
-            .filter_map(|addr| match addr.iter().last() {
-                Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
-                _ => None,
-            })
-            .collect();
+    if cryptarchia_args.skip_ibd {
+        disable_ibd(cryptarchia_config);
+    } else if let Some(initial_peers) = initial_peers {
+        configure_ibd_from_initial_peers(cryptarchia_config, &initial_peers);
     }
 
     update_cryptarchia(cryptarchia_config, cryptarchia_args);

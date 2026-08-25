@@ -12,8 +12,8 @@ use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{
-        ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
-        PubSubCommand::Subscribe, TopicHash,
+        ChainSyncCommand, Command, DiscoveryCommand, InitialPeerStatus, Libp2p, NetworkCommand,
+        PeerId, PubSubCommand::Subscribe, TopicHash,
     },
     message::{ChainSyncEvent, NetworkMsg},
 };
@@ -23,7 +23,7 @@ use overwatch::{
 };
 use rand::{seq::IteratorRandom as _, thread_rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
 
 use crate::{
@@ -37,6 +37,23 @@ type BlockStreamItem<Tx> = Result<(HeaderId, Block<Tx>), DynError>;
 type FirstBlockResponse<Tx> = Result<Option<BlockStreamItem<Tx>>, DynError>;
 type BlockDownloadStream<Tx> = BoxedStream<BlockStreamItem<Tx>>;
 
+async fn wait_for_initial_peer_update(
+    mut receiver: watch::Receiver<InitialPeerStatus>,
+    known_peers: &HashSet<PeerId>,
+) -> Result<HashSet<PeerId>, DynError> {
+    loop {
+        let status = receiver.borrow_and_update().clone();
+        if !status.peers.is_subset(known_peers) || !status.pending {
+            return Ok(status.peers);
+        }
+
+        receiver
+            .changed()
+            .await
+            .map_err(|error| Box::new(error) as DynError)?;
+    }
+}
+
 #[derive(Clone)]
 pub struct LibP2pAdapter<Tx, RuntimeServiceId>
 where
@@ -44,6 +61,7 @@ where
 {
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
+    initial_peer_status: Option<watch::Receiver<InitialPeerStatus>>,
     settings: LibP2pAdapterSettings,
     _phantom_tx: PhantomData<Tx>,
 }
@@ -143,6 +161,20 @@ where
         Ok(connected_peers)
     }
 
+    async fn subscribe_to_initial_peer_status(
+        relay: &Relay<Libp2p, RuntimeServiceId>,
+    ) -> Result<watch::Receiver<InitialPeerStatus>, DynError> {
+        let (reply, receiver) = oneshot::channel();
+        relay
+            .send(NetworkMsg::Process(Command::Network(
+                NetworkCommand::InitialPeerStatus { reply },
+            )))
+            .await
+            .map_err(|(error, _)| Box::new(error) as DynError)?;
+
+        receiver.await.map_err(|error| Box::new(error) as DynError)
+    }
+
     async fn get_discovered_peers(
         relay: &Relay<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
@@ -161,6 +193,75 @@ where
         let discovered_peers = receiver.await.map_err(|e| Box::new(e) as DynError)?;
 
         Ok(discovered_peers)
+    }
+
+    async fn request_blocks_with_preferred_peers(
+        &self,
+        preferred_peers: &HashSet<PeerId>,
+        target_block: HeaderId,
+        local_tip: HeaderId,
+        latest_immutable_block: HeaderId,
+        additional_blocks: HashSet<HeaderId>,
+    ) -> Result<BlockDownloadStream<Tx>, DynError>
+    where
+        Tx: MantleTxWithProofs + Serialize + DeserializeOwned + Clone + Eq + Send + Sync + 'static,
+    {
+        let connected_peers = Self::get_connected_peers(&self.network_relay).await?;
+
+        // All peers we know about, including those that are not connected.
+        let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
+
+        let peers_to_request: Vec<_> = choose_peers_to_request_download(
+            &connected_peers,
+            self.settings.max_connected_peers_to_try_download,
+            &discovered_peers,
+            self.settings.max_discovered_peers_to_try_download,
+            preferred_peers,
+        )
+        .collect();
+        tracing::debug!(
+            "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, preferred={}, connected={}, discovered={}, additional_blocks={}",
+            preferred_peers.len(),
+            connected_peers.len(),
+            discovered_peers.len(),
+            additional_blocks.len()
+        );
+
+        if peers_to_request.is_empty() {
+            return Err(format!(
+                "no candidate peers available to download orphan ancestors for target block {target_block:?} (preferred={}, connected={}, discovered={})",
+                preferred_peers.len(),
+                connected_peers.len(),
+                discovered_peers.len()
+            )
+            .into());
+        }
+
+        let requests = peers_to_request
+            .into_iter()
+            .map(|peer| {
+                let additional_blocks = additional_blocks.clone();
+                async move {
+                    let stream = self
+                        .request_available_blocks_stream_from_peer(
+                            peer,
+                            target_block,
+                            local_tip,
+                            latest_immutable_block,
+                            additional_blocks,
+                        )
+                        .await?;
+
+                    tracing::debug!("received a stream of orphan parents from peer: {peer}");
+
+                    Ok(stream)
+                }
+                .boxed()
+            })
+            .collect::<Vec<_>>();
+
+        // First peer with a validated first response wins.
+        select_ok(requests).await.map(|(stream, _)| stream)
     }
 }
 
@@ -182,6 +283,13 @@ where
             settings.topic
         );
         Self::subscribe(&relay, settings.topic.as_str()).await;
+        let initial_peer_status = match Self::subscribe_to_initial_peer_status(&relay).await {
+            Ok(receiver) => Some(receiver),
+            Err(error) => {
+                tracing::error!("failed to subscribe to initial-peer status: {error}");
+                None
+            }
+        };
         tracing::trace!("Starting up...");
         // this wait seems to be helpful in some cases since we give the time
         // to the network to establish connections before we start sending messages
@@ -189,6 +297,7 @@ where
 
         Self {
             network_relay,
+            initial_peer_status,
             settings,
             _phantom_tx: PhantomData,
         }
@@ -264,6 +373,24 @@ where
             .and_then(|response| response.map_err(Into::into));
 
         metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
+    }
+
+    fn resolved_initial_peers(&self) -> HashSet<Self::PeerId> {
+        self.initial_peer_status
+            .as_ref()
+            .map(|receiver| receiver.borrow().peers.clone())
+            .unwrap_or_default()
+    }
+
+    async fn wait_for_initial_peers(
+        &self,
+        known_peers: &HashSet<Self::PeerId>,
+    ) -> Result<HashSet<Self::PeerId>, DynError> {
+        let receiver = self
+            .initial_peer_status
+            .clone()
+            .ok_or_else(|| "initial-peer status subscription is unavailable".to_owned())?;
+        wait_for_initial_peer_update(receiver, known_peers).await
     }
 
     async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
@@ -366,65 +493,38 @@ where
         latest_immutable_block: HeaderId,
         additional_blocks: HashSet<HeaderId>,
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
-        let connected_peers = Self::get_connected_peers(&self.network_relay).await?;
-
-        // All peers we know about, including those that are not connected.
-        let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
-
-        let peers_to_request: Vec<_> = choose_peers_to_request_download(
-            &connected_peers,
-            self.settings.max_connected_peers_to_try_download,
-            &discovered_peers,
-            self.settings.max_discovered_peers_to_try_download,
+        self.request_blocks_with_preferred_peers(
+            &HashSet::new(),
+            target_block,
+            local_tip,
+            latest_immutable_block,
+            additional_blocks,
         )
-        .collect();
-        tracing::debug!(
-            "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, connected={}, discovered={}, additional_blocks={}",
-            connected_peers.len(),
-            discovered_peers.len(),
-            additional_blocks.len()
-        );
+        .await
+    }
 
-        if peers_to_request.is_empty() {
-            return Err(format!(
-                "no candidate peers available to download orphan ancestors for target block {target_block:?} (connected={}, discovered={})",
-                connected_peers.len(),
-                discovered_peers.len()
-            )
-            .into());
-        }
-
-        let requests = peers_to_request
-            .into_iter()
-            .map(|peer| {
-                let additional_blocks = additional_blocks.clone();
-                async move {
-                    let stream = self
-                        .request_available_blocks_stream_from_peer(
-                            peer,
-                            target_block,
-                            local_tip,
-                            latest_immutable_block,
-                            additional_blocks,
-                        )
-                        .await?;
-
-                    tracing::debug!("received a stream of orphan parents from peer: {peer}");
-
-                    Ok(stream)
-                }
-                .boxed()
-            })
-            .collect::<Vec<_>>();
-
-        // First peer with a validated first response wins
-        select_ok(requests).await.map(|(stream, _)| stream)
+    async fn request_blocks_from_preferred_peers(
+        &self,
+        preferred_peers: HashSet<Self::PeerId>,
+        target_block: HeaderId,
+        local_tip: HeaderId,
+        latest_immutable_block: HeaderId,
+        additional_blocks: HashSet<HeaderId>,
+    ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
+        self.request_blocks_with_preferred_peers(
+            &preferred_peers,
+            target_block,
+            local_tip,
+            latest_immutable_block,
+            additional_blocks,
+        )
+        .await
     }
 }
 
 /// Selects peers to attempt downloads from.
 ///
-/// Returns at most `max_connected_peers + max_discovered_peers` peers in total:
+/// Returns every preferred peer, plus regular fallback candidates:
 /// - at most `max_connected_peers` from the `connected_peers` set
 /// - at most `max_discovered_peers` from the `discovered_peers -
 ///   connected_peers` set
@@ -433,6 +533,7 @@ fn choose_peers_to_request_download<PeerId>(
     max_connected_peers: usize,
     discovered_peers: &HashSet<PeerId>,
     max_discovered_peers: usize,
+    preferred_peers: &HashSet<PeerId>,
 ) -> impl Iterator<Item = PeerId>
 where
     PeerId: Eq + Hash + Copy,
@@ -443,22 +544,65 @@ where
     let discovered_selected = discovered_peers
         .difference(connected_peers)
         .copied()
+        .filter(|peer| !preferred_peers.contains(peer))
         .choose_multiple(&mut rng, max_discovered_peers);
 
     // select from connected peers
     let connected_selected = connected_peers
         .iter()
         .copied()
+        .filter(|peer| !preferred_peers.contains(peer))
         .choose_multiple(&mut rng, max_connected_peers);
 
-    discovered_selected.into_iter().chain(connected_selected)
+    preferred_peers
+        .iter()
+        .copied()
+        .chain(discovered_selected)
+        .chain(connected_selected)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::task::Poll;
+
     use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
 
     use super::*;
+
+    #[tokio::test]
+    async fn initial_peer_wait_wakes_on_first_new_resolution() {
+        let (sender, receiver) = watch::channel(InitialPeerStatus {
+            peers: HashSet::new(),
+            pending: true,
+        });
+        let known = HashSet::new();
+        let wait = wait_for_initial_peer_update(receiver, &known);
+        tokio::pin!(wait);
+        assert!(matches!(futures::poll!(wait.as_mut()), Poll::Pending));
+
+        let peer = PeerId::random();
+        sender.send_replace(InitialPeerStatus {
+            peers: HashSet::from([peer]),
+            pending: true,
+        });
+
+        assert_eq!(wait.await.unwrap(), HashSet::from([peer]));
+    }
+
+    #[tokio::test]
+    async fn initial_peer_wait_finishes_when_all_dials_fail() {
+        let (_sender, receiver) = watch::channel(InitialPeerStatus {
+            peers: HashSet::new(),
+            pending: false,
+        });
+
+        assert!(
+            wait_for_initial_peer_update(receiver, &HashSet::new())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn validate_first_block_response_rejects_block_not_found() {
@@ -506,7 +650,8 @@ mod tests {
         let discovered = HashSet::from_iter(vec![[3; 32], [4; 32], [5; 32]]);
 
         let result =
-            choose_peers_to_request_download(&connected, 2, &discovered, 2).collect::<Vec<_>>();
+            choose_peers_to_request_download(&connected, 2, &discovered, 2, &HashSet::new())
+                .collect::<Vec<_>>();
 
         assert_eq!(result.len(), 4);
         // all discovered peers except `3` must be returned
@@ -532,7 +677,8 @@ mod tests {
 
         // set max=0 for connected peers
         let result =
-            choose_peers_to_request_download(&connected, 0, &discovered, 2).collect::<Vec<_>>();
+            choose_peers_to_request_download(&connected, 0, &discovered, 2, &HashSet::new())
+                .collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
         // all selected peers must be from the discovered-but-not-connected set
@@ -541,7 +687,8 @@ mod tests {
 
         // set max=0 for discovered peers
         let result =
-            choose_peers_to_request_download(&connected, 2, &discovered, 0).collect::<Vec<_>>();
+            choose_peers_to_request_download(&connected, 2, &discovered, 0, &HashSet::new())
+                .collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
         // all selected peers must be from the connected set
@@ -561,7 +708,8 @@ mod tests {
 
         // set max=4 larger than # of connected peers
         let result =
-            choose_peers_to_request_download(&connected, 4, &discovered, 0).collect::<Vec<_>>();
+            choose_peers_to_request_download(&connected, 4, &discovered, 0, &HashSet::new())
+                .collect::<Vec<_>>();
 
         // all connected peers must be returned
         assert_eq!(result.len(), connected.len());
@@ -571,11 +719,41 @@ mod tests {
 
         // set max=3 larger than # of `discovered - connected` peers
         let result =
-            choose_peers_to_request_download(&connected, 0, &discovered, 3).collect::<Vec<_>>();
+            choose_peers_to_request_download(&connected, 0, &discovered, 3, &HashSet::new())
+                .collect::<Vec<_>>();
 
         // all discovered peers except `3` must be returned
         assert_eq!(result.len(), 2);
         assert!(result.contains(&[4; 32]));
         assert!(result.contains(&[5; 32]));
+    }
+
+    #[test]
+    fn preferred_peers_are_additive_to_regular_limits() {
+        let preferred = [1; 32];
+        let fallback = [2; 32];
+        let connected = HashSet::from([preferred, fallback]);
+
+        let result = choose_peers_to_request_download(
+            &connected,
+            1,
+            &HashSet::new(),
+            0,
+            &HashSet::from([preferred]),
+        )
+        .collect::<HashSet<_>>();
+
+        assert_eq!(result, HashSet::from([preferred, fallback]));
+    }
+
+    #[test]
+    fn preferred_peers_remain_candidates_when_regular_limits_are_zero() {
+        let preferred = HashSet::from([[1; 32], [2; 32]]);
+
+        let result =
+            choose_peers_to_request_download(&HashSet::new(), 0, &HashSet::new(), 0, &preferred)
+                .collect::<HashSet<_>>();
+
+        assert_eq!(result, preferred);
     }
 }

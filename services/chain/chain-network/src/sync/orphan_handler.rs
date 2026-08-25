@@ -38,6 +38,10 @@ where
 {
     /// Queue of blocks waiting to be fetched
     pending_orphans_queue: HashMap<HeaderId, OrphanInfo>,
+    /// Download candidates that advertised each queued or active orphan.
+    preferred_peers: HashMap<HeaderId, HashSet<NetAdapter::PeerId>>,
+    /// Orphan currently being requested or downloaded.
+    active_orphan_id: Option<HeaderId>,
     /// Network interface
     network_adapter: NetAdapter,
     /// Current state of the downloader with associated data
@@ -129,6 +133,8 @@ where
     ) -> Self {
         Self {
             pending_orphans_queue: HashMap::new(),
+            preferred_peers: HashMap::new(),
+            active_orphan_id: None,
             network_adapter,
             state: DownloaderState::Idle,
             max_pending_orphans,
@@ -145,14 +151,60 @@ where
         self.rejected_blocks.insert(block_id);
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
+    /// Increases the pending-orphan limit without discarding queued or
+    /// rejected-block state.
+    pub fn ensure_pending_capacity(&mut self, capacity: NonZeroUsize) {
+        self.max_pending_orphans = self.max_pending_orphans.max(capacity);
+    }
+
     pub fn enqueue_orphan(
         &mut self,
         block_id: HeaderId,
         parent_id: Option<HeaderId>, // `None` if the caller knows only `block_id`
+        current_tip: HeaderId,
+        lib: HeaderId,
+    ) -> Result<(), OrphanEnqueueError> {
+        self.enqueue_orphan_inner(block_id, parent_id, current_tip, lib)
+    }
+
+    pub fn enqueue_orphan_with_preferred_peers(
+        &mut self,
+        block_id: HeaderId,
+        parent_id: Option<HeaderId>,
+        current_tip: HeaderId,
+        lib: HeaderId,
+        preferred_peers: HashSet<NetAdapter::PeerId>,
+    ) -> Result<(), OrphanEnqueueError>
+    where
+        NetAdapter::PeerId: Eq + std::hash::Hash,
+    {
+        match self.enqueue_orphan_inner(block_id, parent_id, current_tip, lib) {
+            Ok(()) => {
+                self.preferred_peers.insert(block_id, preferred_peers);
+                Ok(())
+            }
+            Err(
+                error @ (OrphanEnqueueError::AlreadyDownloading
+                | OrphanEnqueueError::AlreadyInQueue),
+            ) => {
+                self.preferred_peers
+                    .entry(block_id)
+                    .or_default()
+                    .extend(preferred_peers);
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
+    fn enqueue_orphan_inner(
+        &mut self,
+        block_id: HeaderId,
+        parent_id: Option<HeaderId>,
         current_tip: HeaderId,
         lib: HeaderId,
     ) -> Result<(), OrphanEnqueueError> {
@@ -169,9 +221,7 @@ where
             return Err(OrphanEnqueueError::Rejected);
         }
 
-        if let DownloaderState::Downloading(download) = &self.state
-            && download.orphan_block_id() == block_id
-        {
+        if self.active_orphan_id == Some(block_id) {
             debug!(target: LOG_TARGET, ?block_id, "Orphan block is already being downloaded, skipping enqueue");
             return Err(OrphanEnqueueError::AlreadyDownloading);
         }
@@ -233,7 +283,7 @@ where
     fn dequeue_next_orphan(&mut self) -> Option<OrphanInfo> {
         loop {
             let block_id = self.pending_orphans_queue.keys().next().copied()?;
-            let orphan_info = self.remove_orphan(&block_id)?;
+            let orphan_info = self.remove_queued_orphan(&block_id, false)?;
             if self
                 .rejected_blocks
                 .contains_block_or_parent(&block_id, orphan_info.parent_id.as_ref())
@@ -243,6 +293,7 @@ where
                     "dropping queued orphan: block (or its parent) is in the rejected cache"
                 );
                 self.insert_rejected_block(block_id);
+                self.preferred_peers.remove(&block_id);
                 metrics::orphan_blocks_dequeue_rejected_total();
                 continue;
             }
@@ -253,14 +304,19 @@ where
     async fn request_blocks_stream(
         network: NetAdapter,
         orphan_info: OrphanInfo,
+        preferred_peers: HashSet<NetAdapter::PeerId>,
         known_blocks: HashSet<HeaderId>,
         download_started_at: Instant,
-    ) -> Result<ActiveDownload<NetAdapter::Block>, DynError> {
+    ) -> Result<ActiveDownload<NetAdapter::Block>, DynError>
+    where
+        NetAdapter::PeerId: Send + 'static,
+    {
         // `request_blocks_from_peers` fans out to multiple peers in parallel.
         // So, we don't do retry. A single try with multiple peers is enough.
         // It's better to drain the orphan queue quicker.
         match network
-            .request_blocks_from_peers(
+            .request_blocks_from_preferred_peers(
+                preferred_peers,
                 orphan_info.orphan_id,
                 orphan_info.tip,
                 orphan_info.lib,
@@ -280,9 +336,16 @@ where
         }
     }
 
-    pub fn remove_orphan(&mut self, block_id: &HeaderId) -> Option<OrphanInfo> {
+    fn remove_queued_orphan(
+        &mut self,
+        block_id: &HeaderId,
+        remove_preferred_peers: bool,
+    ) -> Option<OrphanInfo> {
         let maybe_orphan_info = self.pending_orphans_queue.remove(block_id);
         if let Some(orphan_info) = &maybe_orphan_info {
+            if remove_preferred_peers {
+                self.preferred_peers.remove(block_id);
+            }
             debug!(
                 target: LOG_TARGET,
                 ?orphan_info, queue_size = self.pending_orphans_queue.len(),
@@ -294,10 +357,16 @@ where
         maybe_orphan_info
     }
 
+    pub fn remove_orphan(&mut self, block_id: &HeaderId) -> Option<OrphanInfo> {
+        self.remove_queued_orphan(block_id, true)
+    }
+
     pub fn cancel_active_download(&mut self) {
         if let DownloaderState::Downloading(download) = &mut self.state {
             let orphan_id = download.orphan_block_id();
             self.remove_orphan(&orphan_id);
+            self.preferred_peers.remove(&orphan_id);
+            self.active_orphan_id = None;
             self.state = DownloaderState::Idle;
             metrics::orphan_blocks_pending(self.pending_orphans_queue.len());
         }
@@ -311,7 +380,12 @@ where
         !self.pending_orphans_queue.is_empty() || !matches!(self.state, DownloaderState::Idle)
     }
 
-    fn get_next_stream_input(&mut self) -> Option<(OrphanInfo, HashSet<HeaderId>)> {
+    fn get_next_stream_input(
+        &mut self,
+    ) -> Option<(OrphanInfo, HashSet<NetAdapter::PeerId>, HashSet<HeaderId>)>
+    where
+        NetAdapter::PeerId: Clone,
+    {
         if let DownloaderState::Downloading(ActiveDownload {
             orphan_info,
             last_block_id: Some(last_block_id),
@@ -320,17 +394,29 @@ where
         {
             let orphan_info = orphan_info.clone();
             let last_block_id = *last_block_id;
-            return Some((orphan_info, HashSet::from([last_block_id])));
+            let preferred_peers = self
+                .preferred_peers
+                .get(&orphan_info.orphan_id)
+                .cloned()
+                .unwrap_or_default();
+            return Some((orphan_info, preferred_peers, HashSet::from([last_block_id])));
         }
 
-        self.dequeue_next_orphan()
-            .map(|orphan_info| (orphan_info, HashSet::new()))
+        self.dequeue_next_orphan().map(|orphan_info| {
+            let preferred_peers = self
+                .preferred_peers
+                .get(&orphan_info.orphan_id)
+                .cloned()
+                .unwrap_or_default();
+            (orphan_info, preferred_peers, HashSet::new())
+        })
     }
 }
 
 impl<NetAdapter, RuntimeServiceId> Stream for OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + Clone + 'static,
+    NetAdapter::PeerId: Clone + Send + 'static,
     NetAdapter::Block: Clone + Send + Sync + 'static,
     RuntimeServiceId: Send + Sync + 'static,
 {
@@ -349,14 +435,18 @@ where
 
         match &mut self.state {
             DownloaderState::Idle => {
-                let Some((orphan_info, known_blocks)) = self.get_next_stream_input() else {
+                let Some((orphan_info, preferred_peers, known_blocks)) =
+                    self.get_next_stream_input()
+                else {
                     return Poll::Pending;
                 };
 
                 debug!(target: LOG_TARGET, ?orphan_info, ?known_blocks, "Starting new orphan block download");
+                self.active_orphan_id = Some(orphan_info.orphan_id);
                 let request_blocks_stream_fut = Self::request_blocks_stream(
                     self.network_adapter.clone(),
                     orphan_info,
+                    preferred_peers,
                     known_blocks,
                     Instant::now(),
                 );
@@ -375,6 +465,9 @@ where
                 }
                 Poll::Ready(Err(e)) => {
                     error!(target: LOG_TARGET, "Error while starting download: {e}");
+                    if let Some(orphan_id) = self.active_orphan_id.take() {
+                        self.preferred_peers.remove(&orphan_id);
+                    }
                     self.state = DownloaderState::Idle;
 
                     cx.waker().wake_by_ref();
@@ -399,6 +492,7 @@ where
                         metrics::orphan_blocks_received_total();
 
                         if download.orphan_info.orphan_id == block_id {
+                            let orphan_id = download.orphan_info.orphan_id;
                             debug!(
                                 target: LOG_TARGET,
                                 ?block_id,
@@ -408,6 +502,8 @@ where
                             metrics::orphan_observe_parent_fetch_ok(
                                 download.download_started_at.elapsed(),
                             );
+                            self.preferred_peers.remove(&orphan_id);
+                            self.active_orphan_id = None;
                             self.state = DownloaderState::Idle;
                         }
 
@@ -419,6 +515,9 @@ where
                     Poll::Ready(Some(Err(e))) => {
                         error!(target: LOG_TARGET, "Error while fetching blocks: {e}");
 
+                        let orphan_id = download.orphan_block_id();
+                        self.preferred_peers.remove(&orphan_id);
+                        self.active_orphan_id = None;
                         self.state = DownloaderState::Idle;
                         metrics::orphan_blocks_fetch_failed_total();
 
@@ -430,8 +529,14 @@ where
 
                         if let Some(last_block_id) = download.last_block_id {
                             let orphan_info = download.orphan_info.clone();
+                            let orphan_id = orphan_info.orphan_id;
                             let known_blocks = HashSet::from([last_block_id]);
                             let download_started_at = download.download_started_at;
+                            let preferred_peers = self
+                                .preferred_peers
+                                .get(&orphan_id)
+                                .cloned()
+                                .unwrap_or_default();
 
                             debug!(
                                 target: LOG_TARGET, ?orphan_info, ?known_blocks,
@@ -441,6 +546,7 @@ where
                             let request_blocks_stream_fut = Self::request_blocks_stream(
                                 self.network_adapter.clone(),
                                 orphan_info,
+                                preferred_peers,
                                 known_blocks,
                                 download_started_at,
                             );
@@ -457,6 +563,8 @@ where
                             );
                             let orphan_id = download.orphan_block_id();
                             self.remove_orphan(&orphan_id);
+                            self.preferred_peers.remove(&orphan_id);
+                            self.active_orphan_id = None;
 
                             self.state = DownloaderState::Idle;
                             metrics::orphan_blocks_fetch_failed_total();
@@ -510,6 +618,7 @@ mod tests {
 
     type TestBlock = HeaderId;
     type OrphanResults = Vec<Result<TestBlock, String>>;
+    type TestBlockStream = BoxedStream<Result<(HeaderId, TestBlock), DynError>>;
 
     fn create_downloader() -> OrphanBlocksDownloader<MockNetworkAdapter, usize> {
         let network = MockNetworkAdapter::new();
@@ -594,6 +703,7 @@ mod tests {
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct Request {
+        preferred_peers: HashSet<u8>,
         target: HeaderId,
         local_tip: HeaderId,
         lib: HeaderId,
@@ -635,13 +745,48 @@ mod tests {
             self.responses.lock().unwrap().insert(key, responses);
             self
         }
+
+        fn request_blocks(
+            &self,
+            preferred_peers: HashSet<u8>,
+            target_block: HeaderId,
+            local_tip: HeaderId,
+            latest_immutable_block: HeaderId,
+            additional_blocks: HashSet<HeaderId>,
+        ) -> Result<TestBlockStream, DynError> {
+            let known_block = additional_blocks.iter().next().copied();
+            let request = Request {
+                preferred_peers,
+                target: target_block,
+                local_tip,
+                lib: latest_immutable_block,
+                additional_blocks,
+            };
+
+            self.requests.lock().unwrap().push(request);
+
+            let key = ResponseKey {
+                orphan_id: target_block,
+                known_block,
+            };
+
+            self.responses.lock().unwrap().remove(&key).map_or_else(
+                || Err("No response for this request".into()),
+                |blocks| {
+                    let stream = stream::iter(blocks)
+                        .map(|result| result.map(|block| (block, block)).map_err(Into::into))
+                        .boxed();
+                    Ok(Box::new(stream) as BoxedStream<Result<(HeaderId, TestBlock), DynError>>)
+                },
+            )
+        }
     }
 
     #[async_trait::async_trait]
     impl<RuntimeServiceId: Send + Sync> NetworkAdapter<RuntimeServiceId> for MockNetworkAdapter {
         type Backend = Mock;
         type Settings = ();
-        type PeerId = ();
+        type PeerId = u8;
         type Block = TestBlock;
         type Proposal = ();
 
@@ -666,6 +811,13 @@ mod tests {
             unimplemented!()
         }
 
+        async fn wait_for_initial_peers(
+            &self,
+            _known_peers: &HashSet<Self::PeerId>,
+        ) -> Result<HashSet<Self::PeerId>, DynError> {
+            Ok(HashSet::new())
+        }
+
         async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
             Box::new(stream::empty())
         }
@@ -688,28 +840,29 @@ mod tests {
             latest_immutable_block: HeaderId,
             additional_blocks: HashSet<HeaderId>,
         ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
-            let request = Request {
-                target: target_block,
+            self.request_blocks(
+                HashSet::new(),
+                target_block,
                 local_tip,
-                lib: latest_immutable_block,
-                additional_blocks: additional_blocks.clone(),
-            };
+                latest_immutable_block,
+                additional_blocks,
+            )
+        }
 
-            self.requests.lock().unwrap().push(request);
-
-            let key = ResponseKey {
-                orphan_id: target_block,
-                known_block: additional_blocks.iter().next().copied(),
-            };
-
-            self.responses.lock().unwrap().remove(&key).map_or_else(
-                || Err("No response for this request".into()),
-                |blocks| {
-                    let stream = stream::iter(blocks)
-                        .map(|result| result.map(|block| (block, block)).map_err(Into::into))
-                        .boxed();
-                    Ok(Box::new(stream) as BoxedStream<Result<(HeaderId, Self::Block), DynError>>)
-                },
+        async fn request_blocks_from_preferred_peers(
+            &self,
+            preferred_peers: HashSet<Self::PeerId>,
+            target_block: HeaderId,
+            local_tip: HeaderId,
+            latest_immutable_block: HeaderId,
+            additional_blocks: HashSet<HeaderId>,
+        ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
+            self.request_blocks(
+                preferred_peers,
+                target_block,
+                local_tip,
+                latest_immutable_block,
+                additional_blocks,
             )
         }
     }
@@ -1073,6 +1226,45 @@ mod tests {
         let received_blocks = receive_blocks(&mut downloader, 5).await;
 
         assert_eq!(&received_blocks, &chain);
+    }
+
+    #[tokio::test]
+    async fn preferred_peers_survive_following_requests() {
+        let chain = create_chain(5);
+        let preferred_peers = HashSet::from([7, 8]);
+        let mut downloader =
+            create_downloader_with_responses(&chain, vec![(4, vec![vec![0, 1, 2], vec![3, 4]])]);
+
+        downloader
+            .enqueue_orphan_with_preferred_peers(
+                chain[4],
+                None,
+                TEST_TIP.into(),
+                TEST_LIB.into(),
+                preferred_peers.clone(),
+            )
+            .unwrap();
+
+        let mut downloader = pin::pin!(downloader);
+        let received_blocks = receive_blocks(&mut downloader, 5).await;
+
+        assert_eq!(&received_blocks, &chain);
+        let requests = downloader
+            .as_mut()
+            .get_mut()
+            .network_adapter
+            .requests
+            .lock()
+            .unwrap()
+            .clone();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.preferred_peers == preferred_peers)
+        );
+        assert!(downloader.as_ref().get_ref().preferred_peers.is_empty());
+        assert_eq!(downloader.as_ref().get_ref().active_orphan_id, None);
     }
 
     #[tokio::test]

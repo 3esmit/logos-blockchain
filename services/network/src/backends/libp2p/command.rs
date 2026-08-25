@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use lb_libp2p::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 pub use crate::backends::libp2p::swarm::{ChainSyncCommand, DiscoveryCommand, PubSubCommand};
 
@@ -16,6 +16,19 @@ pub enum NetworkCommand {
     ConnectedPeers {
         reply: oneshot::Sender<HashSet<PeerId>>,
     },
+    InitialPeerStatus {
+        reply: oneshot::Sender<watch::Receiver<InitialPeerStatus>>,
+    },
+}
+
+/// Identities learned by dialing the configured network initial addresses.
+///
+/// `pending` remains true while at least one initial address can still resolve
+/// through the network backend's retry lifecycle.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InitialPeerStatus {
+    pub peers: HashSet<PeerId>,
+    pub pending: bool,
 }
 
 #[derive(Debug)]

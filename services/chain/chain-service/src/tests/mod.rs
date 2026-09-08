@@ -268,6 +268,100 @@ async fn get_block_ids_from_memory_and_storage() {
         stream.next().await.unwrap(),
         Err(Error::ParentIdNotFound(_))
     ));
+
+    // A restart reconstructs consensus at LIB with a self-parent root, even
+    // though the real parent and older wallet checkpoints remain in storage.
+    let lib = cryptarchia.lib_branch();
+    let lib_id = lib.id();
+    assert_ne!(lib_id, genesis_id);
+    let lib_index = block_ids.iter().position(|id| *id == lib_id).unwrap();
+    let mut recovered = Cryptarchia::from_lib(
+        lib_id,
+        cryptarchia.ledger.state(&lib_id).unwrap().clone(),
+        genesis_id,
+        cryptarchia.ledger.config().clone(),
+        lb_cryptarchia_engine::State::Online,
+        lib.slot(),
+        lib.length(),
+    );
+    assert_eq!(recovered.lib_branch().parent(), lib_id);
+    let child = try_build_block(&recovered, lib_id, utxo, &zk_key, slot).unwrap();
+    let child_id = child.header().id();
+    process_block(
+        &mut recovered,
+        child.clone(),
+        child.header().slot(),
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await
+    .unwrap();
+
+    // Cross the recovered root exactly once, then traverse stored ancestors.
+    let expected = std::iter::once(child_id)
+        .chain(block_ids[..=lib_index].iter().rev().copied())
+        .collect::<Vec<_>>();
+    let mut stream = get_block_ids(
+        &recovered,
+        child_id,
+        genesis_id,
+        relays.storage_adapter().clone(),
+    );
+    for expected_id in &expected {
+        assert_eq!(
+            stream
+                .next()
+                .await
+                .unwrap()
+                .expect("Recovered LIB must fall back to stored ancestry"),
+            *expected_id,
+        );
+    }
+    assert!(stream.next().await.is_none());
+
+    // Inclusive boundaries at the root do not duplicate it.
+    let mut stream = get_block_ids(&recovered, lib_id, lib_id, relays.storage_adapter().clone());
+    assert_eq!(stream.next().await.unwrap().unwrap(), lib_id);
+    assert!(stream.next().await.is_none());
+
+    // Unknown ancestry must still fail at actual genesis, not recovered LIB.
+    let mut stream = get_block_ids(
+        &recovered,
+        child_id,
+        [99; 32].into(),
+        relays.storage_adapter().clone(),
+    );
+    for expected_id in &expected {
+        assert_eq!(stream.next().await.unwrap().unwrap(), *expected_id);
+    }
+    assert!(
+        matches!(stream.next().await.unwrap(), Err(Error::ParentIdNotFound(id)) if id == genesis_id)
+    );
+    assert!(stream.next().await.is_none());
+
+    // A missing stored parent cannot be synthesized from the in-memory root.
+    let missing_root = HeaderId::from([88; 32]);
+    let missing = Cryptarchia::from_lib(
+        missing_root,
+        cryptarchia.ledger.state(&lib_id).unwrap().clone(),
+        genesis_id,
+        cryptarchia.ledger.config().clone(),
+        lb_cryptarchia_engine::State::Online,
+        lib.slot(),
+        lib.length(),
+    );
+    let mut stream = get_block_ids(
+        &missing,
+        missing_root,
+        genesis_id,
+        relays.storage_adapter().clone(),
+    );
+    assert_eq!(stream.next().await.unwrap().unwrap(), missing_root);
+    assert!(
+        matches!(stream.next().await.unwrap(), Err(Error::ParentIdNotFound(id)) if id == missing_root)
+    );
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]

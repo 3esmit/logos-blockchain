@@ -895,6 +895,12 @@ where
     let mut in_memory = Vec::new();
     let mut current = from_descendant;
     while let Some(branch) = branches.get(&current) {
+        // Recovery makes LIB a self-parented consensus root, not necessarily
+        // genesis. Continue through its real stored parent. Leave this ID for
+        // the storage stream so the boundary is yielded exactly once.
+        if current == branch.parent() && current != cryptarchia.genesis_id {
+            break;
+        }
         in_memory.push(Ok(branch.id()));
 
         if branch.id() == to_ancestor {

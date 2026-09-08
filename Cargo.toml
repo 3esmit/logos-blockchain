@@ -97,6 +97,17 @@ members = [
 ]
 resolver = "2"
 
+# Release-compatible cache advisory backport; keep the surrounding libp2p
+# protocol stack on its existing registry releases.
+[patch.crates-io]
+libp2p-swarm = { git = "https://github.com/3esmit/rust-libp2p", rev = "588ef0bf4e3e0f4aa356fba4275508676d1f99e3" }
+
+# Swarm's Git workspace paths otherwise create distinct public core types.
+[patch."https://github.com/3esmit/rust-libp2p"]
+libp2p-core         = { version = "=0.43.2" }
+libp2p-swarm-derive = { version = "=0.35.0" }
+multistream-select  = { version = "=0.13.0" }
+
 [workspace.dependencies]
 # Internal
 cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "cbd367a5461ae8adfe4986cbb8d499888c56eba4" }
@@ -235,7 +246,7 @@ libp2p                             = { default-features = false, version = "0.55
 libp2p-stream                      = { default-features = false, version = "0.3.0-alpha" }
 libp2p-swarm-test                  = { default-features = false, version = "0.5" }
 log                                = { default-features = false, version = "0.4" }
-lru                                = { default-features = false, version = "0.12" }
+lru                                = { default-features = false, version = "0.18.2" }
 multiaddr                          = { default-features = false, version = "0.18" }
 natpmp                             = { default-features = false, version = "0.5" }
 netdev                             = { default-features = false, version = "0.31" }
@@ -276,11 +287,11 @@ serde-big-array       = { default-features = false, version = "0.5" }
 serde_arrays          = { default-features = false, version = "0.2.0" }
 serde_ignored         = { default-features = false, version = "0.1" }
 serde_json            = { default-features = false, version = "1.0" }
+serde_norway          = { default-features = false, version = "0.9.42" }
 serde_path_to_error   = { default-features = false, version = "0.1" }
 serde_urlencoded      = { default-features = false, version = "0.7.1" }
 serde_with            = { default-features = false, version = "3.14.0" }
 serde_yaml            = { default-features = false, version = "0.9.33" }
-serde_yml             = { default-features = false, version = "0.0.12" }
 serial_test           = { default-features = false, version = "3.1.1" }
 sntpc                 = { default-features = false, version = "0.5" }
 strum                 = { default-features = false, version = "0.27" }

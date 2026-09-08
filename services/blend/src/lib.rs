@@ -2,7 +2,6 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -21,7 +20,6 @@ use lb_key_management_system_service::{
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
 use lb_sdp_service::{SdpMessage, SdpServiceApi};
-use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -66,6 +64,7 @@ mod instance;
 mod kms;
 mod modes;
 mod service_components;
+mod startup;
 pub use self::service_components::ServiceComponents;
 
 #[cfg(test)]
@@ -176,13 +175,12 @@ where
         let settings = settings_handle.notifier().get_updated_settings();
         let minimal_network_size = settings.common.minimum_network_size.get() as usize;
 
-        wait_until_services_are_ready!(
-            &overwatch_handle,
-            Some(Duration::from_mins(1)),
+        startup::wait_for_dependencies::<
             PreloadKmsService<_>,
             SdpService,
-            <EdgeService as EdgeServiceComponents>::ChainService
-        )
+            <EdgeService as EdgeServiceComponents>::ChainService,
+            _,
+        >(overwatch_handle)
         .await?;
 
         let sdp_service_api =

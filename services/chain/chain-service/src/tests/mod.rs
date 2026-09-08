@@ -48,6 +48,38 @@ use crate::{
 };
 
 #[test]
+fn cryptarchia_info_preserves_identity_and_accepts_legacy_responses() {
+    let genesis_id = HeaderId::from([1; 32]);
+    let info = crate::ChainServiceInfo {
+        cryptarchia_info: crate::CryptarchiaInfo {
+            genesis_id: Some(genesis_id),
+            lib: HeaderId::from([2; 32]),
+            lib_slot: Slot::new(3),
+            tip: HeaderId::from([4; 32]),
+            slot: Slot::new(5),
+            height: 6,
+            state: crate::State::Online,
+        },
+        phase: crate::PhaseTag::Following,
+    };
+    let mut response = serde_json::to_value(&info).unwrap();
+    let current: crate::ChainServiceInfo = serde_json::from_value(response.clone()).unwrap();
+    assert_eq!(current, info);
+
+    response["cryptarchia_info"]
+        .as_object_mut()
+        .unwrap()
+        .remove("genesis_id");
+    let legacy: crate::ChainServiceInfo = serde_json::from_value(response).unwrap();
+    assert_eq!(legacy.cryptarchia_info.genesis_id, None);
+    assert_eq!(legacy.cryptarchia_info.lib, info.cryptarchia_info.lib);
+    assert_eq!(
+        legacy.cryptarchia_info.lib_slot,
+        info.cryptarchia_info.lib_slot
+    );
+}
+
+#[test]
 fn cryptarchia_switch_to_online() {
     let k = NonZero::<u32>::new(1).unwrap();
     let config = ledger_config(k);
@@ -93,6 +125,7 @@ fn cryptarchia_switch_to_online() {
     // Now, the chain is [G, B1, B2, B3].
     // We now switch to Online and check that LIB advances to B2.
     let (cryptarchia, pruned_blocks) = cryptarchia.online();
+    assert_eq!(cryptarchia.info().genesis_id, Some(genesis_id));
     assert_eq!(cryptarchia.lib(), block_ids[2]);
     // All immutable blocks (G, B1, excluding LIB) should have been pruned
     assert_eq!(

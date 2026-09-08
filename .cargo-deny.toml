@@ -47,6 +47,7 @@ unused-allowed-license = "deny"
 
 [sources]
 allow-git = [
+  "https://github.com/3esmit/Overwatch",
   "https://github.com/3esmit/rust-libp2p",
   "https://github.com/EspressoSystems/jellyfish.git",
   "https://github.com/arkworks-rs/spongefish.git",
@@ -56,6 +57,3 @@ allow-git = [
 ]
 unknown-git = "deny"
 unknown-registry = "deny"
-
-[sources.allow-org]
-github = ["logos-co"]

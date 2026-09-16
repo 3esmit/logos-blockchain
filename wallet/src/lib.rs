@@ -269,12 +269,16 @@ impl WalletState {
         // wallet's UTXOs, for example when it pays no fee or the caller already
         // supplied inputs. In that case we must not pull in an extra input (and
         // the change note it would require).
-        match tx_builder
-            .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?
-            .cmp(&0)
-        {
+        let initial_funding_delta =
+            tx_builder.funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
+        let mut final_funding_delta = initial_funding_delta;
+        match initial_funding_delta.cmp(&0) {
             Ordering::Equal => return Ok(tx_builder.clone()),
             Ordering::Greater => {
+                let change_funding_delta = tx_builder
+                    .clone()
+                    .with_dummy_change_note()?
+                    .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
                 if let Some(tx_with_change) = tx_builder.clone().return_change::<G>(
                     context,
                     change_pk,
@@ -284,6 +288,7 @@ impl WalletState {
                 }
                 // The change note costs more than the surplus covers, so fall
                 // through and pull in more UTXO's below.
+                final_funding_delta = change_funding_delta;
             }
             Ordering::Less => {}
         }
@@ -295,6 +300,7 @@ impl WalletState {
 
             let funding_delta = funded_tx_builder
                 .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
+            final_funding_delta = funding_delta;
 
             match funding_delta.cmp(&0) {
                 Ordering::Less => {
@@ -309,7 +315,7 @@ impl WalletState {
                     // We have enough balance, but we need to introduce a change note.
                     // The change note will slightly increase the storage cost of the tx so there is
                     // a chance that we will not be able to fund the tx with the change note.
-                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(
+                    if let Some(tx_with_change) = funded_tx_builder.clone().return_change::<G>(
                         context,
                         change_pk,
                         priority_fee_percent,
@@ -318,13 +324,31 @@ impl WalletState {
                         return Ok(tx_with_change);
                     }
                     // Otherwise, need more UTXO's.
+                    final_funding_delta = funded_tx_builder
+                        .with_dummy_change_note()?
+                        .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
                 }
             }
         }
 
+        let available = utxos.iter().map(|u| u.note.value).sum::<u64>();
         Err(WalletError::InsufficientFunds {
-            available: utxos.iter().map(|u| u.note.value).sum::<u64>(),
+            available,
+            required: Self::required_funding(available, final_funding_delta),
         })
+    }
+
+    /// Reports the minimum total input value implied by the final funding
+    /// delta. A negative delta is the exact shortfall after all eligible UTXOs
+    /// have been selected; adding it to the available value gives callers the
+    /// amount the transaction requires.
+    fn required_funding(available: u64, funding_delta: i128) -> u64 {
+        if funding_delta >= 0 {
+            return available;
+        }
+
+        let shortfall = u64::try_from(funding_delta.unsigned_abs()).unwrap_or(u64::MAX);
+        available.saturating_add(shortfall)
     }
 
     #[must_use]
@@ -1620,7 +1644,10 @@ mod tests {
 
         assert_eq!(
             fund_attempt.unwrap_err(),
-            WalletError::InsufficientFunds { available: 400 }
+            WalletError::InsufficientFunds {
+                available: 400,
+                required: 2071,
+            }
         );
     }
 
@@ -1644,10 +1671,10 @@ mod tests {
         let fund_attempt =
             wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
-        assert_eq!(
+        assert!(matches!(
             fund_attempt.unwrap_err(),
-            WalletError::InsufficientFunds { available: 0 }
-        );
+            WalletError::InsufficientFunds { available: 0, .. }
+        ));
     }
 
     #[test]
@@ -1673,10 +1700,10 @@ mod tests {
         let fund_attempt =
             wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
-        assert_eq!(
+        assert!(matches!(
             fund_attempt.unwrap_err(),
-            WalletError::InsufficientFunds { available: 0 }
-        );
+            WalletError::InsufficientFunds { available: 0, .. }
+        ));
     }
 
     #[test]
@@ -1703,10 +1730,10 @@ mod tests {
         let fund_attempt =
             wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
-        assert_eq!(
+        assert!(matches!(
             fund_attempt.unwrap_err(),
-            WalletError::InsufficientFunds { available: 0 }
-        );
+            WalletError::InsufficientFunds { available: 0, .. }
+        ));
 
         // Fund the transaction with Bob's notes.
         wallet_state
@@ -1794,10 +1821,13 @@ mod tests {
                 0,
             );
 
-            assert_eq!(
+            assert!(matches!(
                 fund_attempt.unwrap_err(),
-                WalletError::InsufficientFunds { available: value }
-            );
+                WalletError::InsufficientFunds {
+                    available: actual,
+                    required,
+                } if actual == value && required == 794
+            ));
         }
 
         // We can fund the tx if the note value exceeds gas cost with change note
@@ -2007,7 +2037,10 @@ mod tests {
                 0,
             )
             .unwrap_err();
-        assert_eq!(err, WalletError::InsufficientFunds { available: 0 });
+        assert!(matches!(
+            err,
+            WalletError::InsufficientFunds { available: 0, .. }
+        ));
     }
 
     /// A `ChannelTransfer` must drop the consumed channel note from the
@@ -2261,7 +2294,10 @@ mod tests {
             )
             .unwrap_err();
         // The error detail says that the withdrawn note is now spendable.
-        assert_eq!(err, WalletError::InsufficientFunds { available: 100 });
+        assert!(matches!(
+            err,
+            WalletError::InsufficientFunds { available: 100, .. }
+        ));
     }
 
     #[test]

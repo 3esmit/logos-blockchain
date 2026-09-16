@@ -218,7 +218,10 @@ impl WalletSelectedInputs {
             }
         }
 
-        Err(WalletError::InsufficientFunds { available })
+        Err(WalletError::InsufficientFunds {
+            available,
+            required: target,
+        })
     }
 
     #[must_use]
@@ -339,13 +342,15 @@ impl WalletFundingPlan {
             }
         }
 
+        let available = self
+            .base_inputs
+            .iter()
+            .chain(self.ordered_utxos.iter())
+            .map(|utxo| utxo.note.value)
+            .sum();
         Err(WalletError::InsufficientFunds {
-            available: self
-                .base_inputs
-                .iter()
-                .chain(self.ordered_utxos.iter())
-                .map(|utxo| utxo.note.value)
-                .sum(),
+            available,
+            required: available,
         }
         .into())
     }

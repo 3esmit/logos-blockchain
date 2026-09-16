@@ -230,7 +230,9 @@ pub(super) async fn execute_send(
         )
         .await;
 
-        if let Err(StepError::WalletError(WalletError::InsufficientFunds { available })) = result {
+        if let Err(StepError::WalletError(WalletError::InsufficientFunds { available, .. })) =
+            result
+        {
             return Err(StepError::FundsDeficit {
                 available,
                 num_utxos_required: number_of_transactions - i,
@@ -274,7 +276,7 @@ pub(super) async fn prepare_ring_send_round_send_with_utxo_cache(
             )
             .await
             .map_err(|error| match error {
-                StepError::WalletError(WalletError::InsufficientFunds { available }) => {
+                StepError::WalletError(WalletError::InsufficientFunds { available, .. }) => {
                     StepError::FundsDeficit {
                         available,
                         num_utxos_required: transactions - i,

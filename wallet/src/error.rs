@@ -14,8 +14,8 @@ use thiserror::Error;
 pub enum WalletError {
     #[error("Requested wallet state for unknown block: {0}")]
     UnknownBlock(HeaderId),
-    #[error("Wallet does not have enough funds, available={available}")]
-    InsufficientFunds { available: u64 },
+    #[error("Wallet does not have enough funds, available={available}, required={required}")]
+    InsufficientFunds { available: u64, required: u64 },
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
     #[error("Transaction builder error: {0}")]

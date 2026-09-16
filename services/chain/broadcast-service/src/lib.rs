@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot};
 use tracing::{error, info, trace};
 
+pub mod api;
+
 const BROADCAST_CHANNEL_SIZE: usize = 128;
 const LOG_TARGET: &str = chain::broadcast::ROOT;
 

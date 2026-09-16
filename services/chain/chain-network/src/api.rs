@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
-use lb_core::block::Block;
+use lb_core::block::{Block, Proposal};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 
 use crate::Message;
 
@@ -12,6 +12,19 @@ where
 {
     relay: OutboundRelay<ChainNetworkService::Message>,
     _phantom: PhantomData<RuntimeServiceId>,
+}
+
+impl<ChainNetworkService, RuntimeServiceId> Clone
+    for ChainNetworkServiceApi<ChainNetworkService, RuntimeServiceId>
+where
+    ChainNetworkService: ChainNetworkServiceData,
+{
+    fn clone(&self) -> Self {
+        Self {
+            relay: self.relay.clone(),
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<ChainNetworkService, RuntimeServiceId>
@@ -50,6 +63,22 @@ where
                 "{relay_error} while receiving ApplyBlockAndReconcileMempool response"
             ))
         })??)
+    }
+
+    pub async fn subscribe_to_proposals(&self) -> Result<broadcast::Receiver<Proposal>, ApiError> {
+        let (result_sender, receiver) = oneshot::channel();
+        self.relay
+            .send(Message::SubscribeToProposals { result_sender })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending SubscribeToProposals"))
+            })?;
+
+        receiver.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving SubscribeToProposals response"
+            ))
+        })
     }
 }
 

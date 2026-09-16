@@ -1,27 +1,24 @@
 use std::fmt::{Debug, Display};
 
-use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::{
+    ServiceComponents,
+    api::{BlendServiceApi, BlendServiceData},
+    message::{DataPayload, NetworkInfo},
+};
 use lb_core::codec::{DeserializeOp, SerializeOp};
 use lb_network_service::backends::libp2p::PeerId;
-use overwatch::services::{AsServiceId, ServiceData};
-use tokio::sync::oneshot;
+use overwatch::services::AsServiceId;
 
 pub async fn blend_info<BlendService, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<Option<NetworkInfo<PeerId>>, overwatch::DynError>
 where
-    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    BlendService: BlendServiceData + ServiceComponents<NodeId = PeerId>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
     let relay = handle.relay::<BlendService>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(ServiceMessage::GetNetworkInfo { reply: sender }.into())
-        .await
-        .map_err(|(e, _)| e)?;
-
-    receiver
+    BlendServiceApi::<BlendService, RuntimeServiceId>::new(relay)
+        .network_info()
         .await
         .map_err(|e| Box::new(e) as overwatch::DynError)
 }
@@ -32,26 +29,14 @@ pub async fn blend_join_network<BlendService, RuntimeServiceId>(
     service_note_id: lb_core::mantle::NoteId,
 ) -> Result<lb_core::sdp::DeclarationId, overwatch::DynError>
 where
-    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    BlendService: BlendServiceData + ServiceComponents<NodeId = PeerId>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
     let relay = handle.relay::<BlendService>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(ProxyServiceMessage::JoinAsCore {
-            locator,
-            service_note_id,
-            reply: sender,
-        })
+    BlendServiceApi::<BlendService, RuntimeServiceId>::new(relay)
+        .join_as_core(locator, service_note_id)
         .await
-        .map_err(|(e, _)| e)?;
-
-    let result = receiver
-        .await
-        .map_err(|e| Box::new(e) as overwatch::DynError)??;
-
-    Ok(result)
+        .map_err(|e| Box::new(e) as overwatch::DynError)
 }
 
 /// Sends a transaction through the Blend network without adding it to this
@@ -65,7 +50,7 @@ pub async fn blend_transaction<BlendService, Transaction, Id, RuntimeServiceId>(
     id: impl Fn(&Transaction) -> Id,
 ) -> Result<Id, overwatch::DynError>
 where
-    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    BlendService: BlendServiceData + ServiceComponents<NodeId = PeerId>,
     Transaction: SerializeOp,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
@@ -73,11 +58,10 @@ where
     // node exits this one decodes what it expects.
     let payload = DataPayload::try_from_transaction(&transaction)?;
     let relay = handle.relay::<BlendService>().await?;
-
-    relay
-        .send(ServiceMessage::Blend(payload).into())
+    BlendServiceApi::<BlendService, RuntimeServiceId>::new(relay)
+        .publish(payload)
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|e| Box::new(e) as overwatch::DynError)?;
 
     Ok(id(&transaction))
 }
@@ -94,19 +78,13 @@ pub async fn blend_pending_transactions<BlendService, Transaction, Id, RuntimeSe
     id: impl Fn(&Transaction) -> Id,
 ) -> Result<Vec<Id>, overwatch::DynError>
 where
-    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    BlendService: BlendServiceData + ServiceComponents<NodeId = PeerId>,
     Transaction: DeserializeOp,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
     let relay = handle.relay::<BlendService>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(ServiceMessage::GetPendingTransactions { reply: sender }.into())
-        .await
-        .map_err(|(e, _)| e)?;
-
-    receiver
+    BlendServiceApi::<BlendService, RuntimeServiceId>::new(relay)
+        .pending_transactions()
         .await
         .map_err(|e| Box::new(e) as overwatch::DynError)?
         .iter()

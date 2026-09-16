@@ -16,7 +16,7 @@ use lb_api_service::http::{
     libp2p, mantle, mempool, pow,
     storage::StorageAdapter,
 };
-use lb_blend_service::message::ProxyServiceMessage;
+use lb_blend_service::{ServiceComponents, message::ProxyServiceMessage};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::{ChainServiceInfo, ConsensusMsg, Slot, api::CryptarchiaServiceApi};
@@ -67,7 +67,7 @@ use lb_storage_service::{
 };
 use lb_time_service::TimeServiceMessage;
 use lb_tx_service::{
-    MempoolMsg, TxMempoolService, backend::Mempool,
+    TxMempoolService, api::MempoolServiceApi, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_version::BuildVersionInfo;
@@ -675,7 +675,9 @@ pub async fn blend_info<BlendService, RuntimeServiceId>(
 where
     BlendService: ServiceData<
             Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
-        > + 'static,
+        > + Send
+        + ServiceComponents<NodeId = PeerId>
+        + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
     make_request_and_return_response!(blend::blend_info::<BlendService, RuntimeServiceId>(&handle))
@@ -697,7 +699,9 @@ pub async fn blend_join_network<BlendService, RuntimeServiceId>(
 where
     BlendService: ServiceData<
             Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
-        > + 'static,
+        > + Send
+        + ServiceComponents<NodeId = PeerId>
+        + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
     make_request_and_return_response!(blend::blend_join_network::<BlendService, RuntimeServiceId>(
@@ -721,7 +725,9 @@ pub async fn blend_pending_transactions<BlendService, RuntimeServiceId>(
 where
     BlendService: ServiceData<
             Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
-        > + 'static,
+        > + Send
+        + ServiceComponents<NodeId = PeerId>
+        + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
     make_request_and_return_response!(blend::blend_pending_transactions::<
@@ -747,7 +753,9 @@ pub async fn blend_tx<BlendService, RuntimeServiceId>(
 where
     BlendService: ServiceData<
             Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
-        > + 'static,
+        > + Send
+        + ServiceComponents<NodeId = PeerId>
+        + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
     make_request_and_return_response!(blend::blend_transaction::<
@@ -977,17 +985,14 @@ where
             RuntimeServiceId,
         >>()
         .await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(MempoolMsg::View {
-            ancestor_hint,
-            reply_channel: sender,
-        })
-        .await
-        .map_err(|(error, _)| error)?;
-
-    let txs = receiver.await?;
+    let txs = MempoolServiceApi::<
+        HeaderId,
+        SignedOps<Preverified, StandardMode>,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+    >::new(relay)
+    .view(ancestor_hint)
+    .await?;
 
     Ok(
         tokio_stream::StreamExt::map(txs, |tx: SignedOps<Preverified, StandardMode>| tx.hash())
@@ -1662,7 +1667,7 @@ where
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     ConsensusService:
-        ServiceData<Message = ConsensusMsg<SignedOps<Preverified, StandardMode>>> + 'static,
+        ServiceData<Message = ConsensusMsg<SignedOps<Preverified, StandardMode>>> + Send + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Display

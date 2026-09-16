@@ -1,3 +1,4 @@
+pub mod api;
 pub mod backend;
 mod metrics;
 pub mod network;

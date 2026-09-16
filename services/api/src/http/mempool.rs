@@ -4,10 +4,11 @@ use std::fmt::Display;
 use lb_core::{header::HeaderId, mantle::transactions::hash::PrefixedKey};
 use lb_network_service::backends::NetworkBackend;
 use lb_storage_service::StorageService;
-use lb_tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
+use lb_tx_service::{
+    TxMempoolService, api::MempoolServiceApi, backend::Mempool, network::NetworkAdapter,
+};
 use overwatch::{DynError, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::oneshot;
 
 pub async fn add_tx<
     MempoolNetworkBackend,
@@ -67,19 +68,9 @@ where
             RuntimeServiceId,
         >>()
         .await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(MempoolMsg::Add {
-            key: converter(&item),
-            payload: item,
-            reply_channel: sender,
-        })
+    let key = converter(&item);
+    MempoolServiceApi::<HeaderId, Item, Item, Key>::new(relay)
+        .add(key, item)
         .await
-        .map_err(|(e, _)| e)?;
-
-    receiver
-        .await
-        .map_err(|_| DynError::from("Failed to add tx"))?
-        .map_err(DynError::from)
+        .map_err(|e| Box::new(e) as DynError)
 }

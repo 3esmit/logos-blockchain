@@ -3,8 +3,8 @@ use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_log_targets::mempool;
 use lb_network_service::{
     NetworkService,
+    api::NetworkServiceApi,
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
-    message::NetworkMsg,
 };
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
@@ -15,8 +15,7 @@ use crate::network::NetworkAdapter;
 const LOG_TARGET: &str = mempool::network::LIBP2P;
 
 pub struct Libp2pAdapter<Item, Key, RuntimeServiceId> {
-    network_relay:
-        OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
+    network_api: NetworkServiceApi<Libp2p, RuntimeServiceId>,
     settings: Settings<Key, Item>,
 }
 
@@ -43,14 +42,15 @@ where
             "Subscribing tx adapter to pubsub topic {}",
             settings.topic
         );
-        network_relay
-            .send(NetworkMsg::Process(Command::PubSub(
-                PubSubCommand::Subscribe(settings.topic.clone()),
+        let network_api = NetworkServiceApi::new(network_relay);
+        network_api
+            .process(Command::PubSub(PubSubCommand::Subscribe(
+                settings.topic.clone(),
             )))
             .await
             .expect("Network backend should be ready");
         Self {
-            network_relay,
+            network_api,
             settings,
         }
     }
@@ -59,13 +59,11 @@ where
     ) -> Box<dyn Stream<Item = (Self::Key, Self::Payload)> + Unpin + Send> {
         let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
         let id = self.settings.id;
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        self.network_relay
-            .send(NetworkMsg::SubscribeToPubSub { sender })
+        let stream = self
+            .network_api
+            .subscribe_to_pubsub()
             .await
             .expect("Network backend should be ready");
-
-        let stream = receiver.await.unwrap();
         Box::new(Box::pin(stream.filter_map(move |message| match message {
             Ok(Message { data, topic, .. }) if topic == topic_hash => {
                 match Item::from_bytes(&data) {
@@ -85,14 +83,12 @@ where
             .to_bytes()
             .expect("Item should be able to be serialized");
         {
-            if let Err((e, _)) = self
-                .network_relay
-                .send(NetworkMsg::Process(Command::PubSub(
-                    PubSubCommand::Broadcast {
-                        topic: self.settings.topic.clone(),
-                        message: serialized.to_vec().into_boxed_slice(),
-                    },
-                )))
+            if let Err(e) = self
+                .network_api
+                .process(Command::PubSub(PubSubCommand::Broadcast {
+                    topic: self.settings.topic.clone(),
+                    message: serialized.to_vec().into_boxed_slice(),
+                }))
                 .await
             {
                 tracing::error!(target: LOG_TARGET, "failed to send item to topic: {e}");

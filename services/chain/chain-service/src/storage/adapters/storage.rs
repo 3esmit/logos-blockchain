@@ -16,11 +16,12 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_log_targets::chain;
 use lb_storage_service::{
-    StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
+    StorageService,
+    api::{StorageServiceApi, chain::StorageChainApi},
+    backends::StorageBackend,
 };
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::oneshot;
 
 use crate::storage::StorageAdapter as StorageAdapterTrait;
 
@@ -32,6 +33,7 @@ where
 {
     pub storage_relay:
         OutboundRelay<<StorageService<Storage, RuntimeServiceId> as ServiceData>::Message>,
+    storage_api: StorageServiceApi<Storage, RuntimeServiceId>,
     _tx: PhantomData<Tx>,
 }
 
@@ -42,6 +44,7 @@ where
     fn clone(&self) -> Self {
         Self {
             storage_relay: self.storage_relay.clone(),
+            storage_api: self.storage_api.clone(),
             _tx: PhantomData,
         }
     }
@@ -68,25 +71,20 @@ where
         >,
     ) -> Self {
         Self {
+            storage_api: StorageServiceApi::new(storage_relay.clone()),
             storage_relay,
             _tx: PhantomData,
         }
     }
 
     async fn get_block(&self, header_id: &HeaderId) -> Option<Self::Block> {
-        let (sender, receiver) = oneshot::channel();
-
-        self.storage_relay
-            .send(StorageMsg::get_block_request(*header_id, sender))
-            .await
-            .unwrap();
-
-        if let Ok(maybe_block) = receiver.await {
-            let block = maybe_block?;
-            block.try_into().ok()
-        } else {
-            tracing::error!(target: LOG_TARGET, "Failed to receive block from storage relay");
-            None
+        match self.storage_api.get_block(*header_id).await {
+            Ok(Some(block)) => block.try_into().ok(),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::error!(target: LOG_TARGET, "Failed to receive block from storage API: {error}");
+                None
+            }
         }
     }
 
@@ -106,54 +104,31 @@ where
             .try_into()
             .map_err(|_| "Failed to convert events to storage format")?;
 
-        let (sender, receiver) = oneshot::channel();
-
-        self.storage_relay
-            .send(StorageMsg::store_block_data_request(
-                header_id,
-                parent_id,
-                block,
-                events,
-                immutable_ids,
-                sender,
-            ))
+        self.storage_api
+            .store_block_data(header_id, parent_id, block, events, immutable_ids)
             .await
-            .map_err(|_| "Failed to send store block data request to storage relay")?;
-
-        receiver
-            .await
-            .map_err(|e| format!("Failed to receive store block data response from storage: {e}"))?
             .map_err(|e| format!("Failed to store block data in storage: {e}").into())
     }
 
     async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId> {
-        let (sender, receiver) = oneshot::channel();
-
-        self.storage_relay
-            .send(StorageMsg::get_block_parent_request(*header_id, sender))
+        self.storage_api
+            .get_block_parent(*header_id)
             .await
-            .unwrap();
-
-        receiver.await.unwrap_or_else(|e| {
-            tracing::error!(target: LOG_TARGET, "Failed to receive block parent from storage relay: {e}");
-            None
-        })
+            .unwrap_or_else(|e| {
+                tracing::error!(target: LOG_TARGET, "Failed to receive block parent from storage API: {e}");
+                None
+            })
     }
 
     async fn get_block_events(&self, header_id: &HeaderId) -> Option<Self::Events> {
-        let (sender, receiver) = oneshot::channel();
-
-        self.storage_relay
-            .send(StorageMsg::get_block_events_request(*header_id, sender))
-            .await
-            .unwrap();
-
-        let Ok(maybe_events) = receiver.await else {
-            tracing::error!(target: LOG_TARGET, "Failed to receive block events from storage relay");
-            return None;
+        let events = match self.storage_api.get_block_events(*header_id).await {
+            Ok(Some(events)) => events,
+            Ok(None) => return None,
+            Err(error) => {
+                tracing::error!(target: LOG_TARGET, "Failed to receive block events from storage API: {error}");
+                return None;
+            }
         };
-
-        let events = maybe_events?;
         let Ok(events) = events.try_into() else {
             tracing::error!(target: LOG_TARGET, "Failed to convert block events loaded from storage");
             return None;
@@ -165,16 +140,11 @@ where
         &self,
         header_id: HeaderId,
     ) -> Result<Option<Self::Block>, overwatch::DynError> {
-        let (sender, receiver) = oneshot::channel();
-
-        self.storage_relay
-            .send(StorageMsg::remove_block_request(header_id, sender))
+        let Some(removed_block) = self
+            .storage_api
+            .remove_block(header_id)
             .await
-            .map_err(|_| "Failed to send remove block request to storage relay.")?;
-
-        let Some(removed_block) = receiver
-            .await
-            .map_err(|_| "No block was deleted from the storage.")?
+            .map_err(|e| format!("Failed to remove block from storage: {e}"))?
         else {
             return Ok(None);
         };
@@ -190,20 +160,9 @@ where
         &self,
         blocks: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), overwatch::DynError> {
-        let (sender, receiver) = oneshot::channel();
-
-        self.storage_relay
-            .send(StorageMsg::store_immutable_block_ids_request(
-                blocks, sender,
-            ))
+        self.storage_api
+            .store_immutable_block_ids(blocks)
             .await
-            .map_err(|_| "Failed to send store_immutable_block_id request to storage relay")?;
-
-        receiver
-            .await
-            .map_err(|e| {
-                format!("Failed to receive store immutable block ids response from storage: {e}")
-            })?
             .map_err(|e| format!("Failed to store immutable block ids in storage: {e}").into())
     }
 
@@ -221,10 +180,10 @@ where
             })
             .collect::<Result<HashMap<_, _>, overwatch::DynError>>()?;
 
-        self.storage_relay
-            .send(StorageMsg::store_transactions_request(storage_transactions))
+        self.storage_api
+            .store_transactions(storage_transactions)
             .await
-            .map_err(|_| "Failed to send store transactions batch request")?;
+            .map_err(|e| format!("Failed to send store transactions batch request: {e}"))?;
 
         Ok(())
     }
@@ -233,16 +192,11 @@ where
         &self,
         tx_hashes: Vec<TxHash>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, overwatch::DynError> {
-        let (sender, receiver) = oneshot::channel();
-
-        self.storage_relay
-            .send(StorageMsg::get_transactions_request(tx_hashes, sender))
+        let storage_stream = self
+            .storage_api
+            .get_transactions(tx_hashes)
             .await
-            .map_err(|_| "Failed to send get transactions request")?;
-
-        let storage_stream = receiver
-            .await
-            .map_err(|_| "Failed to receive transactions stream from storage")?;
+            .map_err(|e| format!("Failed to get transactions from storage: {e}"))?;
 
         let mapped_stream =
             storage_stream.filter_map(async |storage_tx| Tx::from_bytes(storage_tx.as_ref()).ok());
@@ -251,10 +205,10 @@ where
     }
 
     async fn remove_transactions(&self, tx_hashes: &[TxHash]) -> Result<(), overwatch::DynError> {
-        self.storage_relay
-            .send(StorageMsg::remove_transactions_request(tx_hashes.to_vec()))
+        self.storage_api
+            .remove_transactions(tx_hashes.to_vec())
             .await
-            .map_err(|_| "Failed to send remove transactions batch request")?;
+            .map_err(|e| format!("Failed to send remove transactions batch request: {e}"))?;
 
         Ok(())
     }

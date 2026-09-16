@@ -13,6 +13,7 @@ use overwatch::{
 
 use crate::{config::NetworkConfig, message::BackendNetworkMsg};
 
+pub mod api;
 pub mod backends;
 pub mod config;
 pub mod message;

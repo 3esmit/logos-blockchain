@@ -1,10 +1,11 @@
-use std::pin::Pin;
+use std::{collections::HashMap, pin::Pin};
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
     block::{Block, UncleHeaders},
     events::Events,
     header::HeaderId,
+    sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
@@ -282,6 +283,42 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetBlockEvents"))
+        })
+    }
+
+    pub async fn get_sdp_declarations(
+        &self,
+    ) -> Result<HashMap<DeclarationId, Declaration>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetSdpDeclarations { reply_channel }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetSdpDeclarations"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetSdpDeclarations response"
+            ))
+        })
+    }
+
+    pub async fn get_sdp_snapshot(&self) -> Result<HashMap<DeclarationId, Declaration>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::GetSdpSnapshot { reply_channel }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetSdpSnapshot"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetSdpSnapshot response"
+            ))
         })
     }
 

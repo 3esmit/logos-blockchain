@@ -3,9 +3,10 @@ use std::{collections::HashMap, fmt::Display, num::NonZeroUsize, ops::RangeInclu
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
-use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
+use lb_chain_broadcast_service::{BlockBroadcastService, BlockInfo, api::BlockBroadcastServiceApi};
 use lb_chain_service::{
-    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Query, Slot,
+    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Slot,
+    api::CryptarchiaServiceApi,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
@@ -24,20 +25,16 @@ use lb_core::{
 };
 use lb_log_targets::api;
 use lb_storage_service::{
-    StorageMsg, StorageService,
-    api::{
-        StorageApiRequest,
-        chain::{StorageChainApi, requests::ChainApiRequest},
-    },
+    StorageService,
+    api::{StorageServiceApi, chain::StorageChainApi},
 };
 use lb_tx_service::{
-    MempoolMetrics, MempoolMsg, TxMempoolService, backend::Mempool,
+    MempoolMetrics, TxMempoolService, api::MempoolServiceApi, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
 use overwatch::services::{AsServiceId, ServiceData};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
@@ -131,15 +128,15 @@ where
     let relay = handle
         .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
         .await?;
-    let (sender, receiver) = oneshot::channel();
-    relay
-        .send(MempoolMsg::Metrics {
-            reply_channel: sender,
-        })
-        .await
-        .map_err(|(e, _)| e)?;
-
-    receiver.await.map_err(|e| Box::new(e) as super::DynError)
+    MempoolServiceApi::<
+        HeaderId,
+        SignedOps<Preverified, StandardMode>,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+    >::new(relay)
+    .metrics()
+    .await
+    .map_err(|e| Box::new(e) as super::DynError)
 }
 
 pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
@@ -166,16 +163,15 @@ where
     let relay = handle
         .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
         .await?;
-    let (sender, receiver) = oneshot::channel();
-    relay
-        .send(MempoolMsg::Status {
-            items,
-            reply_channel: sender,
-        })
-        .await
-        .map_err(|(e, _)| e)?;
-
-    receiver.await.map_err(|e| Box::new(e) as super::DynError)
+    MempoolServiceApi::<
+        HeaderId,
+        SignedOps<Preverified, StandardMode>,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+    >::new(relay)
+    .status(items)
+    .await
+    .map_err(|e| Box::new(e) as super::DynError)
 }
 
 pub async fn lib_block_stream<RuntimeServiceId>(
@@ -188,15 +184,10 @@ where
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<BlockBroadcastService<RuntimeServiceId>>,
 {
     let relay = handle.relay().await?;
-    let (sender, receiver) = oneshot::channel();
-    relay
-        .send(BlockBroadcastMsg::SubscribeToFinalizedBlocks {
-            result_sender: sender,
-        })
+    let broadcast_receiver = BlockBroadcastServiceApi::<RuntimeServiceId>::new(relay)
+        .subscribe_to_finalized_blocks()
         .await
-        .map_err(|(e, _)| e)?;
-
-    let broadcast_receiver = receiver.await.map_err(|e| Box::new(e) as super::DynError)?;
+        .map_err(|e| Box::new(e) as super::DynError)?;
     let stream = BroadcastStream::new(broadcast_receiver)
         .map(|result| result.map_err(|e| Box::new(e) as crate::http::DynError));
 
@@ -213,19 +204,13 @@ pub async fn get_processed_blocks_event_stream<Transaction, Service, RuntimeServ
     super::DynError,
 >
 where
-    Transaction: Send + 'static,
-    Service: ServiceData<Message = ConsensusMsg<Transaction>>,
+    Transaction: Send + Sync + 'static,
+    Service: ServiceData<Message = ConsensusMsg<Transaction>> + Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<Service>,
 {
     let relay = handle.relay().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(Query::NewBlockSubscribe { sender }.into())
-        .await
-        .map_err(|(error, _)| error)?;
-
-    let new_blocks_receiver = receiver
+    let new_blocks_receiver = CryptarchiaServiceApi::<Service, RuntimeServiceId>::new(relay)
+        .subscribe_new_blocks()
         .await
         .map_err(|error| Box::new(error) as super::DynError)?;
 
@@ -256,7 +241,7 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    ConsensusService: ServiceData<Message = ConsensusMsg<Transaction>>,
+    ConsensusService: ServiceData<Message = ConsensusMsg<Transaction>> + Send + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -306,32 +291,18 @@ where
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<Backend, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
-    let (response_tx, response_rx) = oneshot::channel();
-    let request = if descending {
-        ChainApiRequest::ScanImmutableBlockIdsReverse {
-            slot_range: RangeInclusive::new(slot_from, slot_to),
-            limit,
-            response_tx,
-        }
+    let storage_api = StorageServiceApi::<Backend, RuntimeServiceId>::new(handle.relay().await?);
+    if descending {
+        storage_api
+            .scan_immutable_block_ids_reverse(RangeInclusive::new(slot_from, slot_to), limit)
+            .await
+            .map_err(|error| Box::new(error) as super::DynError)
     } else {
-        ChainApiRequest::ScanImmutableBlockIds {
-            slot_range: RangeInclusive::new(slot_from, slot_to),
-            limit,
-            response_tx,
-        }
-    };
-
-    relay
-        .send(StorageMsg::Api {
-            request: StorageApiRequest::Chain(request),
-        })
-        .await
-        .map_err(|(error, _)| error)?;
-
-    response_rx
-        .await
-        .map_err(|error| Box::new(error) as super::DynError)
+        storage_api
+            .scan_immutable_block_ids(RangeInclusive::new(slot_from, slot_to), limit)
+            .await
+            .map_err(|error| Box::new(error) as super::DynError)
+    }
 }
 
 async fn load_blocks_with_chain_state_by_ids<Transaction, StorageBackend, RuntimeServiceId>(
@@ -854,19 +825,10 @@ where
         + 'static,
 {
     let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpDeclarations {
-                reply_channel: sender,
-            }
-            .into(),
-        )
+    CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay)
+        .get_sdp_declarations()
         .await
-        .map_err(|(e, _)| e)?;
-
-    Ok(receiver.await?)
+        .map_err(|e| Box::new(e) as super::DynError)
 }
 
 pub async fn get_sdp_snapshot<RuntimeServiceId>(
@@ -882,17 +844,8 @@ where
         + 'static,
 {
     let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpSnapshot {
-                reply_channel: sender,
-            }
-            .into(),
-        )
+    CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay)
+        .get_sdp_snapshot()
         .await
-        .map_err(|(e, _)| e)?;
-
-    Ok(receiver.await?)
+        .map_err(|e| Box::new(e) as super::DynError)
 }

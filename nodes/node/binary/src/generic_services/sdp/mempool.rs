@@ -16,13 +16,13 @@ use lb_sdp_service::mempool::{MempoolAdapterError, SdpMempoolAdapter as SdpMempo
 use lb_storage_service::StorageService;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService,
+    api::{MempoolApiError, MempoolServiceApi},
     backend::{MemPool, RecoverableMempool},
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
 
 type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Item, Key>>;
 
@@ -34,6 +34,7 @@ where
     Mempool::Key: Debug + 'static,
 {
     pub mempool_relay: MempoolRelay<Mempool::Item, Mempool::Key>,
+    mempool_api: MempoolServiceApi<HeaderId, Mempool::Item, Mempool::Item, Mempool::Key>,
     _phantom: PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
 }
 
@@ -73,24 +74,21 @@ where
 
     fn new(mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>) -> Self {
         Self {
-            mempool_relay,
+            mempool_relay: mempool_relay.clone(),
+            mempool_api: MempoolServiceApi::new(mempool_relay),
             _phantom: PhantomData,
         }
     }
 
     async fn post_tx(&self, tx: Self::Tx) -> Result<(), MempoolAdapterError> {
-        let (reply_channel, receiver) = oneshot::channel();
-        self.mempool_relay
-            .send(MempoolMsg::Add {
-                key: tx.hash(),
-                payload: tx,
-                reply_channel,
-            })
+        self.mempool_api
+            .add(tx.hash(), tx)
             .await
-            .map_err(|(e, _)| MempoolAdapterError::Other(Box::new(e)))?;
-
-        receiver
-            .await?
-            .map_err(|e| MempoolAdapterError::Mempool(Box::new(e)))
+            .map_err(|error| match error {
+                MempoolApiError::Mempool(error) => MempoolAdapterError::Mempool(Box::new(error)),
+                MempoolApiError::CommsFailure(message) => {
+                    MempoolAdapterError::Other(message.into())
+                }
+            })
     }
 }

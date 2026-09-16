@@ -3,8 +3,8 @@ use lb_core::mantle::mock::{MockTransaction, MockTxId};
 use lb_log_targets::mempool;
 use lb_network_service::{
     NetworkService,
+    api::NetworkServiceApi,
     backends::mock::{Mock, MockBackendMessage, MockContentTopic, MockMessage, NetworkEvent},
-    message::NetworkMsg,
 };
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 
@@ -16,7 +16,7 @@ pub const MOCK_TX_CONTENT_TOPIC: MockContentTopic = MockContentTopic::new("Mock"
 const LOG_TARGET: &str = mempool::network::ROOT;
 
 pub struct MockAdapter<RuntimeServiceId> {
-    network_relay: OutboundRelay<<NetworkService<Mock, RuntimeServiceId> as ServiceData>::Message>,
+    network_api: NetworkServiceApi<Mock, RuntimeServiceId>,
 }
 
 #[async_trait::async_trait]
@@ -33,45 +33,38 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         >,
     ) -> Self {
         // send message to boot the network producer
-        if let Err(e) = network_relay
-            .send(NetworkMsg::Process(MockBackendMessage::BootProducer {
+        let network_api = NetworkServiceApi::new(network_relay);
+        if let Err(e) = network_api
+            .process(MockBackendMessage::BootProducer {
                 spawner: Box::new(move |fut| {
                     tokio::spawn(fut);
                     Ok(())
                 }),
-            }))
+            })
             .await
         {
-            panic!(
-                "Couldn't send boot producer message to the network service: {:?}",
-                e.0
-            );
+            panic!("Couldn't send boot producer message to the network service: {e:?}");
         }
 
-        if let Err((e, _)) = network_relay
-            .send(NetworkMsg::Process(MockBackendMessage::RelaySubscribe {
+        if let Err(e) = network_api
+            .process(MockBackendMessage::RelaySubscribe {
                 topic: MOCK_PUB_SUB_TOPIC.to_owned(),
-            }))
+            })
             .await
         {
             panic!("Couldn't send subscribe message to the network service: {e}");
         }
-        Self { network_relay }
+        Self { network_api }
     }
 
     async fn payload_stream(
         &self,
     ) -> Box<dyn Stream<Item = (Self::Key, Self::Payload)> + Unpin + Send> {
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        if let Err((_, e)) = self
-            .network_relay
-            .send(NetworkMsg::SubscribeToPubSub { sender })
+        let stream = self
+            .network_api
+            .subscribe_to_pubsub()
             .await
-        {
-            tracing::error!(target: LOG_TARGET, err = ?e);
-        }
-
-        let stream = receiver.await.unwrap();
+            .expect("Network backend should be ready");
         Box::new(Box::pin(stream.filter_map(async |event| match event {
             Ok(NetworkEvent::RawMessage(message)) => {
                 tracing::debug!(target: LOG_TARGET, "Received message: {:?}", message.payload());
@@ -85,12 +78,12 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
     }
 
     async fn send(&self, msg: Self::Payload) {
-        if let Err((e, _)) = self
-            .network_relay
-            .send(NetworkMsg::Process(MockBackendMessage::Broadcast {
+        if let Err(e) = self
+            .network_api
+            .process(MockBackendMessage::Broadcast {
                 topic: MOCK_PUB_SUB_TOPIC.into(),
                 msg: msg.message().clone(),
-            }))
+            })
             .await
         {
             tracing::error!(target: LOG_TARGET, "failed to send item to topic: {e}");

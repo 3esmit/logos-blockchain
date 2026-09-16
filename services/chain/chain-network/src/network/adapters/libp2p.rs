@@ -15,11 +15,12 @@ use lb_cryptarchia_sync::GetTipResponse;
 use lb_log_targets::chain;
 use lb_network_service::{
     NetworkService,
+    api::NetworkServiceApi,
     backends::libp2p::{
         ChainSyncCommand, Command, DiscoveryCommand, Libp2p, NetworkCommand, PeerId,
         PubSubCommand::Subscribe, TopicHash,
     },
-    message::{ChainSyncEvent, NetworkMsg},
+    message::ChainSyncEvent,
 };
 use overwatch::{
     DynError,
@@ -48,8 +49,7 @@ pub struct LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq,
 {
-    network_relay:
-        OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
+    network_api: NetworkServiceApi<Libp2p, RuntimeServiceId>,
     settings: LibP2pAdapterSettings,
     _phantom_tx: PhantomData<Tx>,
 }
@@ -65,7 +65,7 @@ pub struct LibP2pAdapterSettings {
     pub max_discovered_peers_to_try_download: usize,
 }
 
-impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
+impl<Tx, RuntimeServiceId: 'static> LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq + Serialize,
 {
@@ -127,27 +127,20 @@ where
         }
     }
 
-    async fn subscribe(relay: &Relay<Libp2p, RuntimeServiceId>, topic: &str) {
-        if let Err((e, _)) = relay
-            .send(NetworkMsg::Process(Command::PubSub(Subscribe(
-                topic.into(),
-            ))))
-            .await
-        {
+    async fn subscribe(api: &NetworkServiceApi<Libp2p, RuntimeServiceId>, topic: &str) {
+        if let Err(e) = api.process(Command::PubSub(Subscribe(topic.into()))).await {
             tracing::error!(target: LOG_TARGET, "error subscribing to {topic}: {e}");
         }
     }
 
     async fn get_connected_peers(
-        relay: &Relay<Libp2p, RuntimeServiceId>,
+        api: &NetworkServiceApi<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = relay
-            .send(NetworkMsg::Process(Command::Network(
-                NetworkCommand::ConnectedPeers {
-                    reply: reply_sender,
-                },
-            )))
+        if let Err(e) = api
+            .process(Command::Network(NetworkCommand::ConnectedPeers {
+                reply: reply_sender,
+            }))
             .await
         {
             return Err(Box::new(e));
@@ -158,15 +151,13 @@ where
     }
 
     async fn get_discovered_peers(
-        relay: &Relay<Libp2p, RuntimeServiceId>,
+        api: &NetworkServiceApi<Libp2p, RuntimeServiceId>,
     ) -> Result<HashSet<PeerId>, DynError> {
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = relay
-            .send(NetworkMsg::Process(Command::Discovery(
-                DiscoveryCommand::GetDiscoveredPeers {
-                    reply: reply_sender,
-                },
-            )))
+        if let Err(e) = api
+            .process(Command::Discovery(DiscoveryCommand::GetDiscoveredPeers {
+                reply: reply_sender,
+            }))
             .await
         {
             return Err(Box::new(e));
@@ -179,7 +170,8 @@ where
 }
 
 #[async_trait::async_trait]
-impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
+impl<Tx, RuntimeServiceId: 'static> NetworkAdapter<RuntimeServiceId>
+    for LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: SignedMantleTx<Preverified, StandardMode>
         + StorageSize
@@ -198,36 +190,28 @@ where
     type Proposal = Proposal;
 
     async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
-        let relay = network_relay.clone();
+        let network_api = NetworkServiceApi::new(network_relay);
         tracing::debug!(
             target: LOG_TARGET,
             "Subscribing chain-network adapter to pubsub topic {}",
             settings.topic
         );
-        Self::subscribe(&relay, settings.topic.as_str()).await;
+        Self::subscribe(&network_api, settings.topic.as_str()).await;
         tracing::trace!(target: LOG_TARGET, "Starting up...");
         // this wait seems to be helpful in some cases since we give the time
         // to the network to establish connections before we start sending messages
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         Self {
-            network_relay,
+            network_api,
             settings,
             _phantom_tx: PhantomData,
         }
     }
 
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
-        let (sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
-            .network_relay
-            .send(NetworkMsg::SubscribeToPubSub { sender })
-            .await
-        {
-            return Err(Box::new(e));
-        }
+        let stream = self.network_api.subscribe_to_pubsub().await?;
         let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
-        let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
             Ok(message) if message.topic == topic_hash => match Proposal::decode_all(&message.data)
             {
@@ -246,17 +230,7 @@ where
     }
 
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError> {
-        let (sender, receiver) = oneshot::channel();
-
-        if let Err((e, _)) = self
-            .network_relay
-            .send(NetworkMsg::SubscribeToChainSync { sender })
-            .await
-        {
-            return Err(Box::new(e));
-        }
-
-        let stream = receiver.await.map_err(Box::new)?;
+        let stream = self.network_api.subscribe_to_chainsync().await?;
         Ok(Box::new(stream.filter_map(|event| {
             event
                 .map_err(|e| tracing::error!(target: LOG_TARGET, "lagged messages: {e}"))
@@ -268,11 +242,12 @@ where
         let started_at = Instant::now();
         tracing::debug!(target: LOG_TARGET, "Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
-            .network_relay
-            .send(NetworkMsg::Process(Command::ChainSync(
-                ChainSyncCommand::RequestTip { peer, reply_sender },
-            )))
+        if let Err(e) = self
+            .network_api
+            .process(Command::ChainSync(ChainSyncCommand::RequestTip {
+                peer,
+                reply_sender,
+            }))
             .await
         {
             return Err(Box::new(e));
@@ -288,7 +263,7 @@ where
 
     async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
         use futures::stream::StreamExt as FuturesStreamExt;
-        let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
+        let connected_peers = match Self::get_connected_peers(&self.network_api).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch connected peers: {e}");
@@ -308,14 +283,15 @@ where
             stream::iter(
                 sampled
                     .into_iter()
-                    .zip(iter::repeat(self.network_relay.clone())),
+                    .zip(iter::repeat(self.network_api.clone())),
             ),
-            async |(peer, relay)| {
+            async |(peer, api)| {
                 let (reply_sender, receiver) = oneshot::channel();
-                if let Err((e, _)) = relay
-                    .send(NetworkMsg::Process(Command::ChainSync(
-                        ChainSyncCommand::RequestTip { peer, reply_sender },
-                    )))
+                if let Err(e) = api
+                    .process(Command::ChainSync(ChainSyncCommand::RequestTip {
+                        peer,
+                        reply_sender,
+                    }))
                     .await
                 {
                     tracing::debug!(target: LOG_TARGET, "tip poll: failed to send GetTip to peer {peer:?}: {e}");
@@ -352,18 +328,16 @@ where
             "Requesting blocks from peer {peer:?} for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?} and {additional_blocks_len} additional blocks"
         );
         let (reply_sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
-            .network_relay
-            .send(NetworkMsg::Process(Command::ChainSync(
-                ChainSyncCommand::DownloadBlocks {
-                    peer,
-                    target_block,
-                    local_tip,
-                    latest_immutable_block,
-                    additional_blocks,
-                    reply_sender,
-                },
-            )))
+        if let Err(e) = self
+            .network_api
+            .process(Command::ChainSync(ChainSyncCommand::DownloadBlocks {
+                peer,
+                target_block,
+                local_tip,
+                latest_immutable_block,
+                additional_blocks,
+                reply_sender,
+            }))
             .await
         {
             return Err(Box::new(e));
@@ -388,10 +362,10 @@ where
         latest_immutable_block: HeaderId,
         additional_blocks: HashSet<HeaderId>,
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
-        let connected_peers = Self::get_connected_peers(&self.network_relay).await?;
+        let connected_peers = Self::get_connected_peers(&self.network_api).await?;
 
         // All peers we know about, including those that are not connected.
-        let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
+        let discovered_peers = Self::get_discovered_peers(&self.network_api).await?;
 
         let peers_to_request: Vec<_> = choose_peers_to_request_download(
             &connected_peers,

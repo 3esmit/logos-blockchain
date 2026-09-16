@@ -1,11 +1,16 @@
 use std::marker::PhantomData;
 
+use lb_core::{
+    mantle::NoteId,
+    sdp::{DeclarationId, Locator},
+};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
+use tokio::sync::oneshot;
 
 use crate::{
     ServiceComponents,
-    message::{DataPayload, ProxyServiceMessage, ServiceMessage},
+    message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage},
 };
 
 /// Marker trait for the top-level blend service, used to parametrize
@@ -83,5 +88,64 @@ where
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending Blend"))
             })
+    }
+
+    pub async fn network_info(&self) -> Result<Option<NetworkInfo<Blend::NodeId>>, ApiError> {
+        let (reply, receiver) = oneshot::channel();
+        self.relay
+            .send(ServiceMessage::GetNetworkInfo { reply }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetNetworkInfo"))
+            })?;
+
+        receiver.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetNetworkInfo response"
+            ))
+        })
+    }
+
+    pub async fn join_as_core(
+        &self,
+        locator: Locator,
+        service_note_id: NoteId,
+    ) -> Result<DeclarationId, ApiError> {
+        let (reply, receiver) = oneshot::channel();
+        self.relay
+            .send(ProxyServiceMessage::JoinAsCore {
+                locator,
+                service_note_id,
+                reply,
+            })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending JoinAsCore"))
+            })?;
+
+        receiver
+            .await
+            .map_err(|relay_error| {
+                ApiError::CommsFailure(format!("{relay_error} while receiving JoinAsCore response"))
+            })?
+            .map_err(|error| ApiError::CommsFailure(error.to_string()))
+    }
+
+    pub async fn pending_transactions(&self) -> Result<Vec<Vec<u8>>, ApiError> {
+        let (reply, receiver) = oneshot::channel();
+        self.relay
+            .send(ServiceMessage::GetPendingTransactions { reply }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!(
+                    "{relay_error} while sending GetPendingTransactions"
+                ))
+            })?;
+
+        receiver.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!(
+                "{relay_error} while receiving GetPendingTransactions response"
+            ))
+        })
     }
 }

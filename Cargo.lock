@@ -4249,6 +4249,7 @@ dependencies = [
  "logos-blockchain-log-targets",
  "overwatch",
  "serde",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]

@@ -5,21 +5,22 @@ use lb_core::{
         transactions::hash::{TxHash, TxHashPrefix},
     },
 };
-use lb_tx_service::{MempoolMsg, TxsWithCommonPrefix};
+use lb_tx_service::{MempoolMsg, TxsWithCommonPrefix, api::MempoolServiceApi};
 use overwatch::services::relay::OutboundRelay;
-use tokio::sync::oneshot;
 
 use super::MempoolAdapter as MempoolAdapterTrait;
 
 #[derive(Clone)]
 pub struct MempoolAdapter<Tx> {
-    mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>,
+    mempool_api: MempoolServiceApi<HeaderId, Tx, Tx, TxHash>,
 }
 
-impl<Tx> MempoolAdapter<Tx> {
+impl<Tx: Send> MempoolAdapter<Tx> {
     #[must_use]
     pub const fn new(mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>) -> Self {
-        Self { mempool_relay }
+        Self {
+            mempool_api: MempoolServiceApi::new(mempool_relay),
+        }
     }
 }
 
@@ -29,27 +30,18 @@ where
     Tx: Hashable<Hash = TxHash> + Send + Sync + 'static,
 {
     async fn add_transaction(&self, tx: Tx) -> Result<(), overwatch::DynError> {
-        let (reply_sender, reply_receiver) = oneshot::channel();
-        self.mempool_relay
-            .send(MempoolMsg::Add {
-                key: tx.hash(),
-                payload: tx,
-                reply_channel: reply_sender,
-            })
+        self.mempool_api
+            .add(tx.hash(), tx)
             .await
-            .map_err(|(e, _)| format!("Could not add transactions to mempool: {e}"))?;
-        reply_receiver
-            .await
-            .map_err(|e| format!("Could not receive response: {e}"))?
-            .map_err(|e| format!("Mempool error: {e}"))?;
+            .map_err(|e| format!("Could not add transactions to mempool: {e}"))?;
         Ok(())
     }
 
     async fn remove_transactions(&self, ids: &[TxHash]) -> Result<(), overwatch::DynError> {
-        self.mempool_relay
-            .send(MempoolMsg::Remove { ids: ids.to_vec() })
+        self.mempool_api
+            .remove(ids.to_vec())
             .await
-            .map_err(|(e, _)| format!("Could not remove transactions from mempool: {e}"))?;
+            .map_err(|e| format!("Could not remove transactions from mempool: {e}"))?;
 
         Ok(())
     }
@@ -58,20 +50,9 @@ where
         &self,
         prefix: TxHashPrefix,
     ) -> Result<TxsWithCommonPrefix<Tx>, overwatch::DynError> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-
-        self.mempool_relay
-            .send(MempoolMsg::GetTransactionsByPrefix {
-                prefix,
-                reply_channel: resp_tx,
-            })
+        self.mempool_api
+            .get_transactions_by_prefix(prefix)
             .await
-            .map_err(|(e, _)| format!("Could not get transactions by prefix: {e}"))?;
-
-        let response = resp_rx
-            .await
-            .map_err(|e| format!("Could not receive response: {e}"))?;
-
-        Ok(response.map_err(|e| format!("Mempool error: {e}"))?)
+            .map_err(|e| format!("Could not get transactions by prefix: {e}").into())
     }
 }

@@ -3,11 +3,11 @@ use std::fmt::{Debug, Display};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::{
     NetworkService,
+    api::NetworkServiceApi,
     backends::libp2p::{
         Command, Dial, Libp2p, Libp2pInfo,
         NetworkCommand::{Connect, Info},
     },
-    message::NetworkMsg,
 };
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
@@ -22,12 +22,10 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
 
-    relay
-        .send(NetworkMsg::Process(Command::Network(Info {
-            reply: sender,
-        })))
+    NetworkServiceApi::<Libp2p, RuntimeServiceId>::new(relay)
+        .process(Command::Network(Info { reply: sender }))
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|e| Box::new(e) as overwatch::DynError)?;
 
     receiver
         .await
@@ -45,14 +43,14 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
 
-    relay
-        .send(NetworkMsg::Process(Command::Network(Connect(Dial {
+    NetworkServiceApi::<Libp2p, RuntimeServiceId>::new(relay)
+        .process(Command::Network(Connect(Dial {
             addr,
             retry_count: 0,
             result_sender: sender,
-        }))))
+        })))
         .await
-        .map_err(|(e, _)| e)?;
+        .map_err(|e| Box::new(e) as overwatch::DynError)?;
 
     let dial_result = receiver
         .await

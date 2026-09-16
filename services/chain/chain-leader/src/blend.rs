@@ -8,7 +8,7 @@
 
 use std::marker::PhantomData;
 
-use lb_blend_service::message::{DataPayload, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::{api::BlendServiceApi, message::DataPayload};
 use lb_codec::BinaryEncode as _;
 use lb_core::block::Proposal;
 use lb_log_targets::chain;
@@ -17,42 +17,38 @@ use tracing::error;
 
 const LOG_TARGET: &str = chain::leader::BLEND;
 
-pub struct BlendAdapter<BlendService>
+pub struct BlendAdapter<BlendService, RuntimeServiceId>
 where
-    BlendService: ServiceData + lb_blend_service::ServiceComponents,
+    BlendService: lb_blend_service::api::BlendServiceData,
 {
-    relay: OutboundRelay<<BlendService as ServiceData>::Message>,
-    // `fn() -> BlendService` (rather than `PhantomData<BlendService>`) so the
-    // adapter's `Send`/`Sync` do not depend on `BlendService`'s — the adapter
-    // only uses `BlendService` as a type-level tag for the relay message type,
-    // and is held by shared reference across awaits in the leader run loop.
-    _phantom: PhantomData<fn() -> BlendService>,
+    api: BlendServiceApi<BlendService, RuntimeServiceId>,
+    // Service and runtime IDs are type-level tags; the adapter is held by
+    // shared reference across awaits in the leader run loop.
+    _phantom: PhantomData<fn() -> (BlendService, RuntimeServiceId)>,
 }
 
-impl<BlendService> BlendAdapter<BlendService>
+impl<BlendService, RuntimeServiceId> BlendAdapter<BlendService, RuntimeServiceId>
 where
-    BlendService: ServiceData + lb_blend_service::ServiceComponents,
+    BlendService: lb_blend_service::api::BlendServiceData,
 {
     pub const fn new(relay: OutboundRelay<<BlendService as ServiceData>::Message>) -> Self {
         Self {
-            relay,
+            api: BlendServiceApi::new(relay),
             _phantom: PhantomData,
         }
     }
 }
 
-impl<BlendService> BlendAdapter<BlendService>
+impl<BlendService, RuntimeServiceId> BlendAdapter<BlendService, RuntimeServiceId>
 where
-    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<BlendService::NodeId>>>
-        + lb_blend_service::ServiceComponents,
-    <BlendService as ServiceData>::Message: Send,
+    BlendService: lb_blend_service::api::BlendServiceData,
+    BlendService::NodeId: Send,
+    RuntimeServiceId: Sync,
 {
     pub async fn publish_proposal(&self, proposal: Proposal) {
-        if let Err((e, _)) = self
-            .relay
-            .send(
-                ServiceMessage::Blend(DataPayload::BlockProposal(proposal.encode_to_vec())).into(),
-            )
+        if let Err(e) = self
+            .api
+            .publish(DataPayload::BlockProposal(proposal.encode_to_vec()))
             .await
         {
             error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {e:?}");

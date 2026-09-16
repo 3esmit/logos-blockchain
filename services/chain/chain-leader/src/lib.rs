@@ -404,7 +404,8 @@ where
                 .expect("Relay with KMS service should be available."),
         );
 
-        let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
+        let blend_adapter =
+            BlendAdapter::<BlendService, RuntimeServiceId>::new(relays.blend_relay().clone());
 
         // Wait for other services to become ready, with timeout.
         // (except Chain, ChainNetwork, and Blend)
@@ -711,7 +712,7 @@ where
     async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
         chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
-        blend_adapter: &BlendAdapter<BlendService>,
+        blend_adapter: &BlendAdapter<BlendService, RuntimeServiceId>,
     ) {
         if let Err(e) = chain_network_api
             .apply_block_and_reconcile_mempool(block.clone())

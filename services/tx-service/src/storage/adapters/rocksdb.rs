@@ -6,7 +6,7 @@ use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     mantle::transactions::hash::TxHash,
 };
-use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
+use lb_storage_service::{StorageService, api::StorageServiceApi, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,7 @@ use crate::{backend::MempoolError, storage::MempoolStorageAdapter};
 /// relay
 #[derive(Clone)]
 pub struct RocksStorageAdapter<Item, Key> {
-    storage_relay: OutboundRelay<StorageMsg<RocksBackend>>,
+    storage_api: StorageServiceApi<RocksBackend, ()>,
     _phantom: PhantomData<(Item, Key)>,
 }
 
@@ -41,7 +41,7 @@ where
         >,
     ) -> Self {
         Self {
-            storage_relay,
+            storage_api: StorageServiceApi::new(storage_relay),
             _phantom: PhantomData,
         }
     }
@@ -55,8 +55,8 @@ where
         let mut transactions = HashMap::new();
         transactions.insert(tx_hash, item_bytes);
 
-        self.storage_relay
-            .send(StorageMsg::store_transactions_request(transactions))
+        self.storage_api
+            .store_transactions(transactions)
             .await
             .map_err(|_| {
                 MempoolError::DynamicPoolError("Failed to send store transactions request".into())
@@ -73,20 +73,13 @@ where
 
         let tx_hashes: Vec<TxHash> = keys.iter().cloned().map(Into::into).collect();
 
-        let (reply_channel, reply_rx) = tokio::sync::oneshot::channel();
-        self.storage_relay
-            .send(StorageMsg::get_transactions_request(
-                tx_hashes,
-                reply_channel,
-            ))
+        let tx_stream = self
+            .storage_api
+            .get_transactions(tx_hashes)
             .await
             .map_err(|_| {
                 MempoolError::DynamicPoolError("Failed to send get transactions request".into())
             })?;
-
-        let tx_stream = reply_rx.await.map_err(|_| {
-            MempoolError::DynamicPoolError("Failed to receive transactions response".into())
-        })?;
 
         let item_stream = tx_stream.filter_map(async |bytes| Self::Item::from_bytes(&bytes).ok());
 
@@ -96,8 +89,8 @@ where
     async fn remove_items(&mut self, keys: &[Self::Key]) -> Result<(), Self::Error> {
         let tx_hashes: Vec<TxHash> = keys.iter().cloned().map(Into::into).collect();
 
-        self.storage_relay
-            .send(StorageMsg::remove_transactions_request(tx_hashes))
+        self.storage_api
+            .remove_transactions(tx_hashes)
             .await
             .map_err(|_| {
                 MempoolError::DynamicPoolError("Failed to send remove transactions request".into())

@@ -230,16 +230,7 @@ where
             )
             .await;
 
-        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| match msg {
-            ServiceMessage::Blend(message) => Some(message),
-            ServiceMessage::GetNetworkInfo { reply } => {
-                drop(reply.send(Some(NetworkInfo {
-                    node_id: local_node_id.clone(),
-                    core_info: None,
-                })));
-                None
-            }
-        }));
+        let messages_to_blend_stream = Box::pin(messages_to_blend(inbound_relay, local_node_id));
 
         let network_adapter = {
             let network_relay = overwatch_handle
@@ -283,6 +274,37 @@ where
             e.into()
         })
     }
+}
+
+fn messages_to_blend<NodeId: Clone, BroadcastSettings>(
+    inbound: impl Stream<Item = ServiceMessage<BroadcastSettings, NodeId>>,
+    local_node_id: NodeId,
+) -> impl Stream<Item = NetworkMessage<BroadcastSettings>> {
+    inbound.filter_map(move |message| {
+        std::future::ready(match message {
+            ServiceMessage::Blend(message) => Some(message),
+            ServiceMessage::GetNetworkInfo { reply } => {
+                drop(reply.send(Some(NetworkInfo {
+                    node_id: local_node_id.clone(),
+                    core_info: None,
+                })));
+                None
+            }
+        })
+    })
+}
+
+// Include subscription establishment in the stream's polling lifecycle. Edge
+// readiness must not depend on Leader, which itself waits for Blend readiness.
+fn pol_info_stream<'handle, Provider, RuntimeServiceId>(
+    overwatch_handle: &'handle OverwatchHandle<RuntimeServiceId>,
+) -> impl Stream<Item = PolEpochInfo>
+where
+    Provider: PolInfoProviderTrait<RuntimeServiceId> + 'handle,
+{
+    futures::stream::once(Provider::subscribe(overwatch_handle))
+        .map(|stream| stream.expect("Should not fail to subscribe to secret PoL info stream."))
+        .flatten()
 }
 
 /// Run the event loop of the service.
@@ -347,12 +369,12 @@ where
 
     notify_ready();
 
-    // No need to wait for the PoL stream to return an element. We just move on and
-    // will have a `None` handler until secret info for an epoch is passed to this
-    // service.
-    let mut secret_pol_info_stream = PolInfoProvider::subscribe(overwatch_handle)
-        .await
-        .expect("Should not fail to subscribe to secret PoL info stream.");
+    // The subscription itself can wait for chain-leader readiness. Poll it with
+    // the other inputs so a ready edge can answer network-info requests and
+    // process membership changes even while leadership is unavailable. No
+    // handler is created until secret info for an epoch actually arrives.
+    let mut secret_pol_info_stream =
+        Box::pin(pol_info_stream::<PolInfoProvider, _>(overwatch_handle));
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
     let mut current_epoch_message_handler: Option<

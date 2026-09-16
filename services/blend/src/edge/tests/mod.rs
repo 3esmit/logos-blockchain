@@ -24,6 +24,7 @@ use crate::{
     test_utils::membership::membership,
 };
 
+mod readiness;
 pub mod utils;
 
 /// [`run`] forwards messages to the core nodes in the updated membership.

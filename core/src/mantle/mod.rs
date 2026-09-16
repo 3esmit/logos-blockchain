@@ -10,8 +10,21 @@ pub mod traits;
 pub mod transactions;
 
 pub use gas::GasProfile;
-pub use ledger::{Note, NoteId, Utxo, Value};
+pub use ledger::{LGO_DECIMALS, Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof, OpProofRef, OpRef};
 pub use transactions::{CryptarchiaParameter, GenesisTime, SignedOps, hash::TxHash};
 
 pub use crate::mantle::transactions::VerificationError;
+
+#[cfg(test)]
+mod tests {
+    use super::{LGO_DECIMALS, Value};
+
+    #[test]
+    fn value_uses_whole_lgo_units() {
+        let value: Value = 10_000;
+
+        assert_eq!(value, 10_000);
+        assert_eq!(LGO_DECIMALS, 0);
+    }
+}

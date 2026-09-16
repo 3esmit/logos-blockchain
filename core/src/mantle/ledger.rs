@@ -86,7 +86,12 @@ pub trait ExecutableOperation {
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
 pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
+/// Monetary values use whole LGO units in this repository's acceptance-test
+/// convention; no sub-unit scaling is applied.
 pub type Value = u64;
+
+/// Number of decimal places in a [`Value`].
+pub const LGO_DECIMALS: u32 = 0;
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum InputsError {

@@ -17,7 +17,10 @@ macro_rules! log_error {
     };
 }
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use lb_libp2p::{
     Multiaddr, PeerId, Protocol, Swarm, SwarmEvent,
@@ -61,6 +64,9 @@ pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
 
     pending_queries: HashMap<QueryId, PendingQueryData>,
+    /// Addresses configured as initial peers. These operator-provided
+    /// bootstrap anchors must remain retryable across transient outages.
+    bootstrap_peers: HashSet<Multiaddr>,
 }
 
 // TODO: make this configurable
@@ -77,6 +83,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         chainsync_events_tx: broadcast::Sender<ChainSyncEvent>,
         rng: R,
     ) -> Self {
+        let bootstrap_peers = config.initial_peers.iter().cloned().collect();
         let swarm = Swarm::build(config.inner, rng).unwrap();
 
         // Keep the dialing history since swarm.connect doesn't return the result
@@ -91,10 +98,12 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             pubsub_messages_tx: pubsub_events_tx,
             chainsync_events_tx,
             pending_queries: HashMap::new(),
+            bootstrap_peers,
         }
     }
 
     pub async fn run(&mut self, initial_peers: Vec<Multiaddr>) {
+        self.bootstrap_peers.extend(initial_peers.iter().cloned());
         self.bootstrap_kad_from_peers(&initial_peers);
 
         for initial_peer in &initial_peers {
@@ -338,11 +347,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         let Some(mut dial) = self.pending_dials.remove(&connection_id) else {
             return;
         };
-        let Some(new_retry_count) = dial.retry_count.checked_add(1) else {
-            tracing::debug!(target: LOG_TARGET, "Retry count overflow.");
-            return;
-        };
-        if new_retry_count > MAX_RETRY {
+        let is_bootstrap_peer = self.bootstrap_peers.contains(&dial.addr);
+        let new_retry_count = dial.retry_count.saturating_add(1);
+        if new_retry_count > MAX_RETRY && !is_bootstrap_peer {
             tracing::debug!(
                 target: LOG_TARGET,
                 "Max retry({MAX_RETRY}) has been reached: {dial:?}"
@@ -350,9 +357,19 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             self.remove_kademlia_address_for_dial(peer_id, &dial.addr);
             return;
         }
-        dial.retry_count = new_retry_count;
+        // Keep operator-provided bootstrap addresses alive indefinitely. Once
+        // the normal retry budget is exhausted, hold the capped backoff rather
+        // than evicting the address; a later attempt can recover a transient
+        // outage without requiring a node restart.
+        dial.retry_count = new_retry_count.min(MAX_RETRY);
 
         let wait = exp_backoff(dial.retry_count);
+        if is_bootstrap_peer && new_retry_count > MAX_RETRY {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Bootstrap peer retry budget exhausted; retrying in {wait:?}: {dial:?}"
+            );
+        }
         tracing::debug!(target: LOG_TARGET, "Retry dialing in {wait:?}: {dial:?}");
 
         let commands_tx = self.commands_tx.clone();
@@ -369,7 +386,7 @@ const fn exp_backoff(retry: usize) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, net::Ipv4Addr, sync::Once, time::Instant};
+    use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
     use lb_libp2p::protocol_name::StreamProtocol;
     use lb_utils::net::get_available_udp_port;
@@ -663,6 +680,70 @@ mod tests {
                 .any(|p| p.peer_id == remote_peer && p.addrs.contains(&remote_addr)),
             "Expected failed dial address to be removed from Kademlia",
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bootstrap_dial_retries_after_retry_budget() -> Result<(), String> {
+        init_tracing();
+
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+        let remote_peer = PeerId::random();
+        let remote_addr = format!(
+            "/ip4/127.0.0.1/udp/{}/quic-v1",
+            get_available_udp_port().unwrap()
+        )
+        .parse::<Multiaddr>()
+        .unwrap()
+        .with(Protocol::P2p(remote_peer));
+
+        let config =
+            create_libp2p_config(vec![remote_addr.clone()], get_available_udp_port().unwrap());
+        let mut handler =
+            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+        handler.bootstrap_kad_from_peers(&vec![remote_addr.clone()]);
+
+        let (result_sender, _) = oneshot::channel();
+        let connection_id = ConnectionId::new_unchecked(1);
+        handler.pending_dials.insert(
+            connection_id,
+            Dial {
+                addr: remote_addr.clone(),
+                retry_count: MAX_RETRY,
+                result_sender,
+            },
+        );
+
+        handler.handle_swarm_event(SwarmEvent::OutgoingConnectionError {
+            peer_id: Some(remote_peer),
+            connection_id,
+            error: DialError::NoAddresses,
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(exp_backoff(MAX_RETRY)).await;
+
+        let command = handler
+            .commands_rx
+            .recv()
+            .await
+            .expect("bootstrap retry should be scheduled");
+        let dial = match command {
+            Command::Network(NetworkCommand::Connect(dial)) => dial,
+            other => return Err(format!("unexpected command: {other:?}")),
+        };
+        assert_eq!(dial.addr, remote_addr);
+        assert_eq!(dial.retry_count, MAX_RETRY);
+
+        let discovered = handler.swarm.kademlia_discovered_peers();
+        assert!(
+            discovered
+                .iter()
+                .any(|peer| peer.peer_id == remote_peer && peer.addrs.contains(&remote_addr)),
+            "bootstrap address must remain available for future retries",
+        );
+
+        Ok(())
     }
 
     // A peer that rotated its identity key (e.g. redeployed without a stable

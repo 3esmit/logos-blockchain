@@ -24,7 +24,7 @@ use logos_blockchain_tools::{
     },
     overwrite_yaml, value_from_dotted_kv,
 };
-use serde_yml::Value;
+use serde_norway::Value;
 
 // ── CLI definition
 // ────────────────────────────────────────────────────────────
@@ -294,7 +294,7 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 
     let content = fs::read_to_string(path)
         .with_context(|| format!("cannot read config file '{}'", path.display()))?;
-    serde_yml::from_str(&content)
+    serde_norway::from_str(&content)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))
 }
 
@@ -310,7 +310,7 @@ fn resolve_override(s: &str) -> Result<Value> {
     let path = Path::new(s);
     let content = fs::read_to_string(path)
         .with_context(|| format!("cannot read override file '{}'", path.display()))?;
-    serde_yml::from_str(&content)
+    serde_norway::from_str(&content)
         .with_context(|| format!("cannot parse YAML from override file '{}'", path.display()))
 }
 
@@ -380,10 +380,10 @@ fn build_genesis_block(
 /// Wrap a serialised `GenesisBlock` value in the mapping that corresponds to
 /// `cryptarchia.genesis_block` in a deployment config.
 fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
-    let mut inner = serde_yml::Mapping::new();
+    let mut inner = serde_norway::Mapping::new();
     inner.insert(Value::String("genesis_block".to_owned()), block_value);
 
-    let mut outer = serde_yml::Mapping::new();
+    let mut outer = serde_norway::Mapping::new();
     outer.insert(
         Value::String("cryptarchia".to_owned()),
         Value::Mapping(inner),
@@ -395,10 +395,10 @@ fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
 /// Wrap a serialised faucet public key in the mapping that corresponds to
 /// `cryptarchia.faucet_pk` in a deployment config.
 fn wrap_as_cryptarchia_faucet_pk(faucet_pk: Value) -> Value {
-    let mut inner = serde_yml::Mapping::new();
+    let mut inner = serde_norway::Mapping::new();
     inner.insert(Value::String("faucet_pk".to_owned()), faucet_pk);
 
-    let mut outer = serde_yml::Mapping::new();
+    let mut outer = serde_norway::Mapping::new();
     outer.insert(
         Value::String("cryptarchia".to_owned()),
         Value::Mapping(inner),
@@ -450,27 +450,17 @@ fn run_inscribe(args: &InscribeArgs) -> Result<()> {
 
 /// Serialize a value to a human-readable YAML [`Value`].
 ///
-/// Two pitfalls make a direct `serde_yml::to_value` call unsuitable:
-///
-/// 1. `serde_yml::to_value` uses a *non*-human-readable serializer, so types
-///    guarded by `is_human_readable()` (e.g. `HeaderId`, `MantleTx`) fall back
-///    to their binary representation.
-/// 2. Some types (e.g. `PoLProof`) call `serializer.serialize_bytes`
-///    unconditionally; `serde_yml::to_string` rejects those with an error.
-///
-/// Using `serde_yaml::to_string` as an intermediate format avoids both
-/// problems: YAML is a human-readable format (fixing pitfall 1).
-/// Regarding (fixing pitfall 2): The error doesn't appear when using templates
-/// from the `deployment/ceremony/genesis/<env>` directories, but if it happens,
-/// settings override code should be refactored to use concrete genesis related
-/// types instead of operating at YAML level.
+/// Keep the text serialization boundary used by the ceremony tools: types
+/// guarded by `is_human_readable()` (such as `HeaderId`) retain their readable
+/// representation. Unsupported raw byte serialization remains an error rather
+/// than silently changing the generated configuration to a sequence of numbers.
 fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
-    let yaml_string = serde_yml::to_string(value)?;
-    serde_yml::from_str(&yaml_string).map_err(Into::into)
+    let yaml_string = serde_norway::to_string(value)?;
+    serde_norway::from_str(&yaml_string).map_err(Into::into)
 }
 
 fn ensure_valid_deployment_settings(value: &Value) -> Result<()> {
-    let yaml = serde_yml::to_string(value)?;
+    let yaml = serde_norway::to_string(value)?;
     drop(
         deserialize_value_from_reader::<DeploymentSettings, _>(
             yaml.as_bytes(),
@@ -492,7 +482,7 @@ where
 }
 
 fn write_yaml(value: &Value, output: Option<&Path>) -> Result<()> {
-    let yaml = serde_yml::to_string(value)?;
+    let yaml = serde_norway::to_string(value)?;
     output.map_or_else(
         || {
             io::stdout()
@@ -504,4 +494,79 @@ fn write_yaml(value: &Value, output: Option<&Path>) -> Result<()> {
                 .with_context(|| format!("cannot write to '{}'", path.display()))
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct HumanReadableProbe;
+
+    impl serde::Serialize for HumanReadableProbe {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            if serializer.is_human_readable() {
+                serializer.serialize_str("human-readable")
+            } else {
+                serializer.serialize_u64(42)
+            }
+        }
+    }
+
+    struct BytesProbe;
+
+    impl serde::Serialize for BytesProbe {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_bytes(&[0, 1, 255])
+        }
+    }
+
+    #[test]
+    fn yaml_conversion_preserves_human_readable_and_byte_error_contracts() {
+        assert_eq!(
+            struct_to_yaml_value(&HumanReadableProbe).unwrap(),
+            Value::String("human-readable".to_owned())
+        );
+        assert!(struct_to_yaml_value(&BytesProbe).is_err());
+    }
+
+    #[test]
+    fn yaml_conversion_preserves_header_hex_and_enum_tags() {
+        #[derive(serde::Serialize)]
+        enum Tagged {
+            Header(lb_core::header::HeaderId),
+        }
+
+        let value = struct_to_yaml_value(&Tagged::Header([0x12; 32].into())).unwrap();
+        let expected: Value =
+            serde_norway::from_str(&format!("!Header '{}'\n", "12".repeat(32))).unwrap();
+        assert_eq!(value, expected);
+        assert_eq!(
+            serde_norway::from_str::<Value>(&serde_norway::to_string(&value).unwrap()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn ceremony_templates_round_trip_without_value_changes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deployment/ceremony/genesis");
+        for environment in ["standalone", "testnet", "devnet"] {
+            for name in [
+                "providers",
+                "stakeholders",
+                "inscribe",
+                "deployment-template",
+                "faucet",
+            ] {
+                let path = root.join(environment).join(format!("{name}.yaml"));
+                let input = fs::read_to_string(&path).unwrap();
+                let value: Value = serde_norway::from_str(&input).unwrap();
+                let output = serde_norway::to_string(&value).unwrap();
+                // Exercise the node's existing YAML reader as well as the
+                // tools' serializer, without rewriting ceremony inputs.
+                let decoded: Value =
+                    deserialize_value_from_reader(output.as_bytes(), OnUnknownKeys::Fail).unwrap();
+                assert_eq!(decoded, value, "template: {}", path.display());
+            }
+        }
+    }
 }

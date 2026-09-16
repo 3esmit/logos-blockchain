@@ -50,3 +50,41 @@ impl RejectedBlocks {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_cache_never_rejects_blocks_or_parents() {
+        let id = HeaderId::from([1; 32]);
+        let mut cache = RejectedBlocks::new(0);
+        cache.insert(id);
+        assert!(!cache.contains_block_or_parent(&id, Some(&id)));
+    }
+
+    #[test]
+    fn hits_refresh_recency_before_eviction() {
+        let [first, second, third, child] = [1, 2, 3, 4].map(|byte| HeaderId::from([byte; 32]));
+        let mut cache = RejectedBlocks::new(2);
+        cache.insert(first);
+        cache.insert(second);
+        assert!(cache.contains_block_or_parent(&child, Some(&first)));
+        cache.insert(third);
+        assert!(!cache.contains_block_or_parent(&second, None));
+        assert!(cache.contains_block_or_parent(&first, None));
+        assert!(cache.contains_block_or_parent(&third, None));
+    }
+
+    #[test]
+    fn duplicate_insertion_preserves_other_entry() {
+        let first = HeaderId::from([1; 32]);
+        let second = HeaderId::from([2; 32]);
+        let mut cache = RejectedBlocks::new(2);
+        cache.insert(first);
+        cache.insert(second);
+        cache.insert(first);
+        assert!(cache.contains_block_or_parent(&first, None));
+        assert!(cache.contains_block_or_parent(&second, None));
+    }
+}

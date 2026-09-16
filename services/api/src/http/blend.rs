@@ -77,7 +77,7 @@ where
     relay
         .send(ServiceMessage::Blend(payload).into())
         .await
-        .map_err(|e| e)?;
+        .map_err(|_| std::io::Error::other("blend service relay is closed"))?;
 
     Ok(id(&transaction))
 }
@@ -104,7 +104,7 @@ where
     relay
         .send(ServiceMessage::GetPendingTransactions { reply: sender }.into())
         .await
-        .map_err(|e| e)?;
+        .map_err(|_| std::io::Error::other("blend service relay is closed"))?;
 
     receiver
         .await

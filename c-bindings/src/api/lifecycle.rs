@@ -10,6 +10,7 @@ use tokio::runtime::Runtime;
 use crate::{
     LogosBlockchainNode, OperationStatus,
     errors::OperationStatusCode,
+    macros::ffi_guard,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer,
 };
@@ -43,10 +44,14 @@ pub extern "C" fn start_lb_node(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> FfiInitializedLogosBlockchainNodeResult {
-    initialize_lb_node(config_path, custom_deployment_path).map_or_else(
-        FfiInitializedLogosBlockchainNodeResult::err,
-        FfiInitializedLogosBlockchainNodeResult::from_value,
-    )
+    ffi_guard(|| {
+        return_error_if_null_pointer!(config_path);
+
+        initialize_lb_node(config_path, custom_deployment_path).map_or_else(
+            FfiInitializedLogosBlockchainNodeResult::err,
+            FfiInitializedLogosBlockchainNodeResult::from_value,
+        )
+    })
 }
 
 /// Initializes and starts a Logos blockchain node based on the provided
@@ -96,7 +101,12 @@ fn initialize_lb_node(
     // for its chain without querying a service for a value that cannot change.
     let chain_id = run_config.deployment.chain_id();
 
-    let runtime = Runtime::new().expect("Failed to create Tokio runtime");
+    let runtime = Runtime::new().map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create Tokio runtime: {error}"),
+        )
+    })?;
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
         OperationStatus::error(
             OperationStatusCode::InitializationError,
@@ -194,9 +204,11 @@ fn get_deployment_config(
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {
-    return_error_if_null_pointer!(node);
-    let node = unsafe { Box::from_raw(node) };
-    node.shutdown()
+    ffi_guard(|| {
+        return_error_if_null_pointer!(node);
+        let node = unsafe { Box::from_raw(node) };
+        node.shutdown()
+    })
 }
 
 #[cfg(test)]
@@ -323,6 +335,17 @@ mod test {
         assert!(
             shutdown_status.is_ok(),
             "Failed to shut down node: {shutdown_status:?}"
+        );
+    }
+
+    #[test]
+    fn start_rejects_null_config_path() {
+        let result = start_lb_node(std::ptr::null(), std::ptr::null());
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.error.code,
+            crate::errors::OperationStatusCode::NullPointer
         );
     }
 

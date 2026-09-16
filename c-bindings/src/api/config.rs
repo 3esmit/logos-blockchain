@@ -10,7 +10,9 @@ use lb_node::cli::{EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, Upd
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
 
-use crate::{OperationStatus, errors::OperationStatusCode, return_error_if_null_pointer};
+use crate::{
+    OperationStatus, errors::OperationStatusCode, macros::ffi_guard, return_error_if_null_pointer,
+};
 
 /// Converts a non-null C string pointer into a [`PathBuf`].
 ///
@@ -140,7 +142,15 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
 #[must_use]
 pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
     let init_args: InitArgs = args.into();
-    let runtime = Runtime::new().expect("Failed to create Tokio runtime.");
+    let runtime = match Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to create Tokio runtime: {error}"),
+            );
+        }
+    };
     let run_result = runtime.block_on(async move { lb_node::cli::config::init::run(init_args) });
     match run_result {
         Ok(()) => OperationStatus::OK,
@@ -169,8 +179,10 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
 #[must_use]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
-    let init_args = EmbeddedInitArgs::from(args);
-    generate_config_sync(init_args)
+    ffi_guard(|| {
+        let init_args = EmbeddedInitArgs::from(args);
+        generate_config_sync(init_args)
+    })
 }
 
 /// Updates an existing user config file with keys from a keystore file,

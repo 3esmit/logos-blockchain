@@ -38,8 +38,8 @@ impl OperationStatus {
     };
 
     pub(crate) fn error(code: OperationStatusCode, message: impl Into<String>) -> Self {
-        let message = CString::new(message.into())
-            .expect("Message contained an interior NUL byte.")
+        let message = CString::new(message.into().replace('\0', "\\0"))
+            .unwrap_or_else(|_| CString::default())
             .into_raw();
         Self { code, message }
     }

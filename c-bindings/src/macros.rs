@@ -1,5 +1,21 @@
 use crate::{errors::OperationStatus, result::FfiResult};
 
+/// Executes a C ABI entry point without allowing a Rust panic to cross the
+/// boundary. Panics are converted into a regular runtime error so callers can
+/// handle them using the same status protocol as other failures.
+pub fn ffi_guard<Return, Function>(function: Function) -> Return
+where
+    Function: FnOnce() -> Return,
+    Return: FfiReturn,
+{
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(function)).unwrap_or_else(|_| {
+        Return::from_operation_status(OperationStatus::error(
+            crate::errors::OperationStatusCode::RuntimeError,
+            "A panic occurred while executing the C API operation.",
+        ))
+    })
+}
+
 /// Checks if a pointer is null and returns from the calling function with a
 /// null-pointer error status.
 ///
@@ -69,4 +85,17 @@ impl FfiReturn for OperationStatus {
 
 impl FfiReturn for () {
     fn from_operation_status(_status: OperationStatus) -> Self {}
+}
+
+#[cfg(test)]
+mod test {
+    use super::ffi_guard;
+    use crate::{OperationStatus, errors::OperationStatusCode};
+
+    #[test]
+    fn converts_panics_to_runtime_errors() {
+        let status: OperationStatus = ffi_guard(|| panic!("test panic"));
+
+        assert_eq!(status.code, OperationStatusCode::RuntimeError);
+    }
 }

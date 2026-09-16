@@ -5,10 +5,11 @@ mod leadership;
 mod mempool;
 mod metrics;
 mod relays;
+mod startup;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, iter, pin::Pin, time::Duration};
+use std::{fmt::Display, iter, pin::Pin};
 
 use futures::{Stream, StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
@@ -32,7 +33,6 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
-use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
@@ -415,25 +415,16 @@ where
             blend_broadcast_settings.clone(),
         );
 
-        // Wait for other services to become ready, with timeout.
-        // (except Chain, ChainNetwork, and Blend)
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+        startup::wait_for_dependencies::<
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
             Wallet,
-            PreloadKmsService<_>
-        )
-        .await?;
-        // Wait for the remaining dependencies to become ready, without timeout
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            None,
-            CryptarchiaService, // becomes ready after recoverying blocks
-            ChainNetwork,       // becomes ready after IBD
-            BlendService        // becomes ready after chain becomes online
-        )
+            PreloadKmsService<_>,
+            CryptarchiaService,
+            ChainNetwork,
+            BlendService,
+            _,
+        >(&self.service_resources_handle.overwatch_handle)
         .await?;
 
         let mut slot_timer = {

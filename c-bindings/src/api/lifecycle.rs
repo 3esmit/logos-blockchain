@@ -172,15 +172,27 @@ pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> Operat
     node.shutdown()
 }
 
+/// Compatibility alias for the maintained module's lifecycle API.
+///
+/// # Safety
+///
+/// The caller must satisfy [`shutdown_node`]'s requirements. This consumes the
+/// handle; it must not be used again after this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
+    // SAFETY: callers must uphold the same ownership contract as shutdown_node.
+    unsafe { shutdown_node(node) }
+}
+
 #[cfg(test)]
 mod test {
-    use std::{ffi::CString, path::PathBuf, sync::LazyLock};
+    use std::{ffi::CString, net::Ipv4Addr, path::PathBuf, sync::LazyLock};
 
     use lb_node::UserConfig;
     use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
     use tempfile::TempDir;
 
-    use crate::api::lifecycle::{shutdown_node, start_lb_node};
+    use crate::api::lifecycle::{start_lb_node, stop_node};
 
     static REPOSITORY_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
         let crate_dir = env!("CARGO_MANIFEST_DIR");
@@ -225,6 +237,14 @@ mod test {
             )
             .expect("Standalone user config should deserialize");
             node_config.state.base_folder = state_dir_path;
+            if let Some(file) = node_config.tracing.logger.file.as_mut() {
+                file.directory = log_dir;
+            }
+            node_config.network.backend.swarm.host = Ipv4Addr::LOCALHOST;
+            node_config.network.backend.swarm.port = 0;
+            node_config.blend.core.backend.listening_address = "/ip4/127.0.0.1/udp/0/quic-v1"
+                .parse()
+                .expect("Ephemeral blend listener address should be valid");
             node_config.api.backend.listen_address = "127.0.0.1:0"
                 .parse()
                 .expect("Local address should be correct");
@@ -269,7 +289,10 @@ mod test {
         );
         let node = start_status.value;
 
-        let shutdown_status = unsafe { shutdown_node(node) };
+        // SAFETY: startup succeeded and returned a library-owned live handle.
+        // This is its only consumer; the handle is never used after stopping.
+        // The maintained alias delegates to shutdown_node, exercising both.
+        let shutdown_status = unsafe { stop_node(node) };
 
         assert!(
             shutdown_status.is_ok(),

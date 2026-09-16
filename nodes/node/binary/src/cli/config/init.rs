@@ -1,5 +1,4 @@
-use std::collections::HashSet;
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use color_eyre::eyre::Result;
 use libp2p::{Multiaddr, PeerId};

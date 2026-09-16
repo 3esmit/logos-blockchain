@@ -1969,8 +1969,9 @@ pub mod wallet {
     #[utoipa::path(
     post,
     path = paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
+    request_body = WalletTransferFundsRequestBody,
     responses(
-        (status = 200, description = "Make transfer"),
+        (status = 201, description = "Make transfer", body = WalletTransferFundsResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]

@@ -186,16 +186,27 @@ pub mod transfer_funds {
 
     const LOG_TARGET: &str = api::http::wallet::TRANSFER_FUNDS;
 
-    #[derive(Serialize, Deserialize)]
+    /// Request body for building and submitting a wallet transfer.
+    ///
+    /// `funding_public_keys` lists the wallet keys whose notes may be spent;
+    /// `change_public_key` receives any remaining value after fees and the
+    /// transfer amount.
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
+    #[serde(deny_unknown_fields)]
     pub struct WalletTransferFundsRequestBody {
+        /// Optional chain tip to use while selecting inputs.
         pub tip: Option<HeaderId>,
+        /// Public key that receives transaction change.
         pub change_public_key: ZkPublicKey,
+        /// Wallet public keys whose notes may fund the transfer.
         pub funding_public_keys: Vec<ZkPublicKey>,
+        /// Public key that receives the requested amount.
         pub recipient_public_key: ZkPublicKey,
+        /// Amount to transfer, in the chain's native value units.
         pub amount: Value,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, utoipa::ToSchema)]
     pub struct WalletTransferFundsResponseBody {
         pub hash: lb_core::mantle::transactions::TxHash,
     }
@@ -222,6 +233,43 @@ pub mod transfer_funds {
             });
 
             (StatusCode::CREATED, json).into_response()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use lb_core::header::HeaderId;
+        use lb_key_management_system_keys::keys::ZkPublicKey;
+        use serde_json::json;
+
+        use super::WalletTransferFundsRequestBody;
+
+        fn request_body() -> WalletTransferFundsRequestBody {
+            WalletTransferFundsRequestBody {
+                tip: Some(HeaderId::from([0; 32])),
+                change_public_key: ZkPublicKey::zero(),
+                funding_public_keys: vec![ZkPublicKey::zero()],
+                recipient_public_key: ZkPublicKey::zero(),
+                amount: 1,
+            }
+        }
+
+        #[test]
+        fn transfer_request_rejects_unknown_fields() {
+            let mut value = serde_json::to_value(request_body()).expect("request serializes");
+            value["value"] = json!(1);
+
+            let Err(error) = serde_json::from_value::<WalletTransferFundsRequestBody>(value) else {
+                panic!("unknown fields must be rejected");
+            };
+            assert!(error.to_string().contains("unknown field `value`"));
+        }
+
+        #[test]
+        fn transfer_request_accepts_documented_fields() {
+            let value = serde_json::to_value(request_body()).expect("request serializes");
+            serde_json::from_value::<WalletTransferFundsRequestBody>(value)
+                .expect("documented fields must deserialize");
         }
     }
 }

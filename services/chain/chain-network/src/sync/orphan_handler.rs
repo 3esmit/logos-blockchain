@@ -8,6 +8,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_core::header::HeaderId;
+use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
 use overwatch::DynError;
 use tracing::{debug, error, warn};
 
@@ -19,6 +20,7 @@ use crate::{
 
 type PendingNetworkRequest<Block> =
     Pin<Box<dyn Future<Output = Result<ActiveDownload<Block>, DynError>> + Send>>;
+const MAX_BLOCKS_DOWNLOAD_ATTEMPTS: usize = 3;
 
 /// State of the orphan blocks downloader
 pub enum DownloaderState<Block> {
@@ -255,34 +257,70 @@ where
         }
     }
 
+    fn is_retryable_download_error(err: &DynError) -> bool {
+        err.downcast_ref::<ChainSyncError>().is_some_and(|err| {
+            matches!(
+                err.kind,
+                ChainSyncErrorKind::BlockProviderUnavailable(
+                    BlocksUnavailableReason::BlockNotFound(_)
+                        | BlocksUnavailableReason::StartBlockNotFound
+                ) | ChainSyncErrorKind::ChannelReceiveError(_)
+                    | ChainSyncErrorKind::OpenStreamError(_)
+                    | ChainSyncErrorKind::IoError(_)
+                    | ChainSyncErrorKind::Timeout(_)
+            )
+        })
+    }
+
     async fn request_blocks_stream(
         network: NetAdapter,
         orphan_info: OrphanInfo,
         known_blocks: HashSet<HeaderId>,
         download_started_at: Instant,
     ) -> Result<ActiveDownload<NetAdapter::Block>, DynError> {
-        // `request_blocks_from_peers` fans out to multiple peers in parallel.
-        // So, we don't do retry. A single try with multiple peers is enough.
-        // It's better to drain the orphan queue quicker.
-        match network
-            .request_blocks_from_peers(
-                orphan_info.orphan_id,
-                orphan_info.tip,
-                orphan_info.lib,
-                known_blocks,
-            )
-            .await
-        {
-            Ok(stream) => Ok(ActiveDownload::new(
-                orphan_info,
-                stream,
-                download_started_at,
-            )),
-            Err(err) => {
-                metrics::orphan_observe_parent_fetch_err();
-                Err(err)
+        // Each attempt fans out over a fresh, reshuffled peer set. A bounded
+        // retry absorbs transient provider/channel failures without allowing a
+        // missing target to spin forever.
+        let mut attempts_remaining = MAX_BLOCKS_DOWNLOAD_ATTEMPTS;
+        let mut last_err = None;
+
+        while attempts_remaining > 0 {
+            match network
+                .request_blocks_from_peers(
+                    orphan_info.orphan_id,
+                    orphan_info.tip,
+                    orphan_info.lib,
+                    known_blocks.clone(),
+                )
+                .await
+            {
+                Ok(stream) => {
+                    return Ok(ActiveDownload::new(
+                        orphan_info,
+                        stream,
+                        download_started_at,
+                    ));
+                }
+                Err(err) if Self::is_retryable_download_error(&err) => {
+                    attempts_remaining -= 1;
+                    warn!(
+                        target: LOG_TARGET,
+                        ?err,
+                        orphan_id = ?orphan_info.orphan_id,
+                        attempts_remaining,
+                        "Orphan fetch hit a transient provider error; retrying with a reshuffled peer selection"
+                    );
+                    last_err = Some(err);
+                }
+                Err(err) => {
+                    metrics::orphan_observe_parent_fetch_err();
+                    return Err(err);
+                }
             }
         }
+
+        metrics::orphan_observe_parent_fetch_err();
+        Err(last_err.unwrap_or_else(|| DynError::from("orphan recovery exhausted retries")))
     }
 
     pub fn remove_orphan(&mut self, block_id: &HeaderId) -> Option<OrphanInfo> {
@@ -500,6 +538,7 @@ pub enum OrphanEnqueueError {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::VecDeque,
         pin,
         sync::{Arc, Mutex},
         time::Duration,
@@ -507,7 +546,11 @@ mod tests {
 
     use futures::stream;
     use lb_cryptarchia_sync::GetTipResponse;
-    use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
+    use lb_network_service::{
+        NetworkService,
+        backends::{libp2p::PeerId, mock::Mock},
+        message::ChainSyncEvent,
+    };
     use overwatch::services::{ServiceData, relay::OutboundRelay};
     use tokio::time::timeout;
 
@@ -615,6 +658,7 @@ mod tests {
     struct MockNetworkAdapter {
         requests: Arc<Mutex<Vec<Request>>>,
         responses: Arc<Mutex<HashMap<ResponseKey, OrphanResults>>>,
+        request_errors: Arc<Mutex<HashMap<ResponseKey, VecDeque<ChainSyncErrorKind>>>>,
     }
 
     impl Unpin for MockNetworkAdapter {}
@@ -624,6 +668,7 @@ mod tests {
             Self {
                 requests: Arc::new(Mutex::new(Vec::new())),
                 responses: Arc::new(Mutex::new(HashMap::new())),
+                request_errors: Arc::new(Mutex::new(HashMap::new())),
             }
         }
 
@@ -638,6 +683,23 @@ mod tests {
                 known_block,
             };
             self.responses.lock().unwrap().insert(key, responses);
+            self
+        }
+
+        fn with_request_errors(
+            self,
+            orphan_id: HeaderId,
+            known_block: Option<HeaderId>,
+            errors: Vec<ChainSyncErrorKind>,
+        ) -> Self {
+            let key = ResponseKey {
+                orphan_id,
+                known_block,
+            };
+            self.request_errors
+                .lock()
+                .unwrap()
+                .insert(key, errors.into());
             self
         }
     }
@@ -707,6 +769,12 @@ mod tests {
                 known_block: additional_blocks.iter().next().copied(),
             };
 
+            if let Some(errors) = self.request_errors.lock().unwrap().get_mut(&key)
+                && let Some(kind) = errors.pop_front()
+            {
+                return Err(Box::new(ChainSyncError::new(PeerId::random(), kind)));
+            }
+
             self.responses.lock().unwrap().remove(&key).map_or_else(
                 || Err("No response for this request".into()),
                 |blocks| {
@@ -726,6 +794,48 @@ mod tests {
 
     const TEST_TIP: [u8; 32] = [10u8; 32];
     const TEST_LIB: [u8; 32] = [11u8; 32];
+
+    #[tokio::test]
+    async fn test_transient_request_errors_are_retried_with_fresh_peer_selection() {
+        let chain = create_chain(3);
+        let network = MockNetworkAdapter::new()
+            .with_request_errors(
+                chain[2],
+                None,
+                vec![
+                    ChainSyncErrorKind::ChannelReceiveError("closed".to_owned()),
+                    ChainSyncErrorKind::BlockProviderUnavailable(
+                        BlocksUnavailableReason::StartBlockNotFound,
+                    ),
+                ],
+            )
+            .with_stream(
+                chain[2],
+                None,
+                vec![Ok(chain[0]), Ok(chain[1]), Ok(chain[2])],
+            );
+        let mut downloader: OrphanBlocksDownloader<_, usize> =
+            OrphanBlocksDownloader::new(network, ORPHAN_CACHE_SIZE, REJECTED_CACHE_SIZE);
+        downloader
+            .enqueue_orphan(chain[2], None, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+
+        let mut downloader = pin::pin!(downloader);
+        let received_blocks = receive_blocks(&mut downloader, chain.len()).await;
+
+        assert_eq!(received_blocks, chain);
+        assert_eq!(
+            downloader
+                .as_mut()
+                .get_mut()
+                .network_adapter
+                .requests
+                .lock()
+                .unwrap()
+                .len(),
+            MAX_BLOCKS_DOWNLOAD_ATTEMPTS
+        );
+    }
 
     #[tokio::test]
     async fn test_disabled_rejected_cache_is_noop() {

@@ -1,4 +1,12 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
+use std::{
+    collections::{HashSet, VecDeque},
+    fmt::Debug,
+    hash::Hash,
+    iter,
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_codec::BinaryDecodeExt as _;
@@ -40,6 +48,7 @@ type Relay<T, RuntimeServiceId> =
 type BlockStreamItem<Tx> = Result<(HeaderId, Block<Tx>), DynError>;
 type FirstBlockResponse<Tx> = Result<Option<BlockStreamItem<Tx>>, DynError>;
 type BlockDownloadStream<Tx> = BoxedStream<BlockStreamItem<Tx>>;
+const MAX_RETAINED_TIP_SOURCES: usize = 128;
 
 const LOG_TARGET: &str = chain::network::LIBP2P;
 
@@ -51,6 +60,9 @@ where
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
     settings: LibP2pAdapterSettings,
+    /// Peer identities that most recently advertised a tip, bounded so
+    /// repeated polls cannot grow memory without limit.
+    preferred_tip_sources: Arc<Mutex<VecDeque<(HeaderId, PeerId)>>>,
     _phantom_tx: PhantomData<Tx>,
 }
 
@@ -176,6 +188,35 @@ where
 
         Ok(discovered_peers)
     }
+
+    fn remember_tip_source(
+        preferred_tip_sources: &Arc<Mutex<VecDeque<(HeaderId, PeerId)>>>,
+        tip: HeaderId,
+        peer: PeerId,
+    ) {
+        let Ok(mut sources) = preferred_tip_sources.lock() else {
+            return;
+        };
+
+        if let Some(index) = sources.iter().position(|(known_tip, _)| *known_tip == tip) {
+            sources.remove(index);
+        }
+        sources.push_front((tip, peer));
+        if sources.len() > MAX_RETAINED_TIP_SOURCES {
+            sources.pop_back();
+        }
+    }
+
+    fn preferred_tip_source(
+        preferred_tip_sources: &Arc<Mutex<VecDeque<(HeaderId, PeerId)>>>,
+        tip: HeaderId,
+    ) -> Option<PeerId> {
+        preferred_tip_sources
+            .lock()
+            .ok()?
+            .iter()
+            .find_map(|(known_tip, peer)| (*known_tip == tip).then_some(*peer))
+    }
 }
 
 #[async_trait::async_trait]
@@ -213,6 +254,7 @@ where
         Self {
             network_relay,
             settings,
+            preferred_tip_sources: Arc::new(Mutex::new(VecDeque::new())),
             _phantom_tx: PhantomData,
         }
     }
@@ -304,33 +346,46 @@ where
             tracing::debug!(target: LOG_TARGET, "tip poll: no connected peers to sample");
             return Box::new(stream::empty::<GetTipResponse>());
         }
+        let preferred_tip_sources = Arc::clone(&self.preferred_tip_sources);
         let result_stream = FuturesStreamExt::filter_map(
             stream::iter(
                 sampled
                     .into_iter()
                     .zip(iter::repeat(self.network_relay.clone())),
             ),
-            async |(peer, relay)| {
-                let (reply_sender, receiver) = oneshot::channel();
-                if let Err((e, _)) = relay
-                    .send(NetworkMsg::Process(Command::ChainSync(
-                        ChainSyncCommand::RequestTip { peer, reply_sender },
-                    )))
-                    .await
-                {
-                    tracing::debug!(target: LOG_TARGET, "tip poll: failed to send GetTip to peer {peer:?}: {e}");
-                    None
-                } else {
-                    match receiver.await.ok() {
-                        None => None,
-                        Some(Err(e)) => {
-                            tracing::debug!(
-                                target: LOG_TARGET,
-                                "tip poll: GetTip request to peer {peer:?} failed: {e}"
-                            );
-                            None
+            move |(peer, relay)| {
+                let preferred_tip_sources = Arc::clone(&preferred_tip_sources);
+                async move {
+                    let (reply_sender, receiver) = oneshot::channel();
+                    if let Err((e, _)) = relay
+                        .send(NetworkMsg::Process(Command::ChainSync(
+                            ChainSyncCommand::RequestTip { peer, reply_sender },
+                        )))
+                        .await
+                    {
+                        tracing::debug!(target: LOG_TARGET, "tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                        None
+                    } else {
+                        match receiver.await.ok() {
+                            None => None,
+                            Some(Err(e)) => {
+                                tracing::debug!(
+                                    target: LOG_TARGET,
+                                    "tip poll: GetTip request to peer {peer:?} failed: {e}"
+                                );
+                                None
+                            }
+                            Some(Ok(tip)) => {
+                                if let GetTipResponse::Tip { tip: tip_id, .. } = &tip {
+                                    Self::remember_tip_source(
+                                        &preferred_tip_sources,
+                                        *tip_id,
+                                        peer,
+                                    );
+                                }
+                                Some(tip)
+                            }
                         }
-                        Some(Ok(tip)) => Some(tip),
                     }
                 }
             },
@@ -393,11 +448,13 @@ where
         // All peers we know about, including those that are not connected.
         let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
 
-        let peers_to_request: Vec<_> = choose_peers_to_request_download(
+        let preferred_peer = Self::preferred_tip_source(&self.preferred_tip_sources, target_block);
+        let peers_to_request: Vec<_> = choose_peers_to_request_download_with_preferred(
             &connected_peers,
             self.settings.max_connected_peers_to_try_download,
             &discovered_peers,
             self.settings.max_discovered_peers_to_try_download,
+            preferred_peer,
         )
         .collect();
         tracing::debug!(
@@ -451,6 +508,7 @@ where
 /// - at most `max_connected_peers` from the `connected_peers` set
 /// - at most `max_discovered_peers` from the `discovered_peers -
 ///   connected_peers` set
+#[cfg(test)]
 fn choose_peers_to_request_download<PeerId>(
     connected_peers: &HashSet<PeerId>,
     max_connected_peers: usize,
@@ -460,21 +518,64 @@ fn choose_peers_to_request_download<PeerId>(
 where
     PeerId: Eq + Hash + Copy,
 {
+    choose_peers_to_request_download_with_preferred(
+        connected_peers,
+        max_connected_peers,
+        discovered_peers,
+        max_discovered_peers,
+        None,
+    )
+}
+
+/// Selects peers for an ancestor download, putting the peer that advertised
+/// the target tip first when it is still eligible. The preferred peer consumes
+/// one slot from its source pool and is removed from the random candidates, so
+/// it is never requested twice.
+fn choose_peers_to_request_download_with_preferred<PeerId>(
+    connected_peers: &HashSet<PeerId>,
+    max_connected_peers: usize,
+    discovered_peers: &HashSet<PeerId>,
+    max_discovered_peers: usize,
+    preferred_peer: Option<PeerId>,
+) -> impl Iterator<Item = PeerId>
+where
+    PeerId: Eq + Hash + Copy,
+{
     let mut rng = thread_rng();
+
+    let preferred_from_connected =
+        preferred_peer.filter(|peer| max_connected_peers > 0 && connected_peers.contains(peer));
+    let preferred_from_discovered = preferred_peer.filter(|peer| {
+        preferred_from_connected.is_none()
+            && max_discovered_peers > 0
+            && discovered_peers.contains(peer)
+            && !connected_peers.contains(peer)
+    });
+    let preferred = preferred_from_connected.or(preferred_from_discovered);
+
+    let connected_limit =
+        max_connected_peers.saturating_sub(usize::from(preferred_from_connected.is_some()));
+    let discovered_limit =
+        max_discovered_peers.saturating_sub(usize::from(preferred_from_discovered.is_some()));
 
     // select from discovered-but-not-connected peers
     let discovered_selected = discovered_peers
         .difference(connected_peers)
+        .filter(|peer| Some(**peer) != preferred)
         .copied()
-        .choose_multiple(&mut rng, max_discovered_peers);
+        .choose_multiple(&mut rng, discovered_limit);
 
     // select from connected peers
     let connected_selected = connected_peers
         .iter()
+        .filter(|peer| Some(**peer) != preferred)
         .copied()
-        .choose_multiple(&mut rng, max_connected_peers);
+        .choose_multiple(&mut rng, connected_limit);
 
-    discovered_selected.into_iter().chain(connected_selected)
+    preferred
+        .into_iter()
+        .chain(discovered_selected)
+        .chain(connected_selected)
 }
 
 #[cfg(test)]
@@ -574,6 +675,53 @@ mod tests {
                 "must be selected from connected peers: id={id:?}"
             );
         }
+    }
+
+    #[test]
+    fn choose_peers_prefers_advertising_peer_without_duplicate() {
+        let preferred = PeerId::random();
+        let connected = HashSet::from_iter(vec![preferred, PeerId::random(), PeerId::random()]);
+        let discovered =
+            HashSet::from_iter(vec![PeerId::random(), PeerId::random(), PeerId::random()]);
+
+        let result = choose_peers_to_request_download_with_preferred(
+            &connected,
+            2,
+            &discovered,
+            2,
+            Some(preferred),
+        )
+        .collect::<Vec<_>>();
+
+        assert_eq!(result.first(), Some(&preferred));
+        assert_eq!(result.len(), 4);
+        assert_eq!(result.iter().filter(|peer| **peer == preferred).count(), 1);
+    }
+
+    #[test]
+    fn remember_tip_source_is_bounded_and_refreshes_existing_tip() {
+        let sources = Arc::new(Mutex::new(VecDeque::new()));
+        let tip = HeaderId::from([9; 32]);
+        let first_peer = PeerId::random();
+        let refreshed_peer = PeerId::random();
+
+        LibP2pAdapter::<(), ()>::remember_tip_source(&sources, tip, first_peer);
+        LibP2pAdapter::<(), ()>::remember_tip_source(&sources, tip, refreshed_peer);
+
+        let stored = LibP2pAdapter::<(), ()>::preferred_tip_source(&sources, tip);
+        assert_eq!(stored, Some(refreshed_peer));
+
+        for id in 0..=MAX_RETAINED_TIP_SOURCES {
+            LibP2pAdapter::<(), ()>::remember_tip_source(
+                &sources,
+                HeaderId::from([id as u8; 32]),
+                PeerId::random(),
+            );
+        }
+        assert_eq!(
+            sources.lock().expect("test mutex is not poisoned").len(),
+            MAX_RETAINED_TIP_SOURCES
+        );
     }
 
     #[test]

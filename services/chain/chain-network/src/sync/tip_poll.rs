@@ -15,8 +15,9 @@ use crate::{TipPollConfig, metrics, network::NetworkAdapter, sync::LOG_TARGET};
 /// Fires on a slot-tick cadence (`params.cadence_slots`, ≈ one expected
 /// block interval). When the local tip has fallen behind the current slot
 /// by more than `params.lag_threshold_slots`, it samples a handful of
-/// peers with `GetTip` and returns the most-advanced tip that is strictly
-/// ahead of the local height. The caller is expected to hand it to the
+/// peers with `GetTip` and returns the most-advanced tip that is ahead of
+/// the local chain. A competing tip at the same height is eligible when it
+/// has a different header ID. The caller is expected to hand it to the
 /// orphan downloader, which performs the actual catch-up download and
 /// full validation.
 ///
@@ -51,8 +52,10 @@ where
         .collect()
         .await;
 
-    // Pick the most-advanced reported tip that is strictly ahead of us.
-    let Some((height, _, tip)) = select_catchup_tip(tips, info.height) else {
+    // Pick the most-advanced reported tip that is ahead of us, or a competing
+    // tip at the same height. Equal-height branches must be prefetched before
+    // one branch becomes taller and the fork becomes harder to recover.
+    let Some((height, _, tip)) = select_catchup_tip(tips, info.height, info.tip) else {
         debug!(
             target: LOG_TARGET,
             local_height = info.height,
@@ -104,11 +107,15 @@ where
 }
 
 /// From a set of polled tip responses, pick the most-advanced tip that is
-/// strictly ahead of `local_height`. Ties on height are broken by the higher
-/// slot. `Failure` responses are ignored. Returns `(height, slot, tip)`.
+/// ahead of the local chain. A tip at the same height is eligible only when
+/// its header ID differs from `local_tip`, so the poll can prefetch a
+/// competing branch without re-enqueuing the local tip. Ties on height are
+/// broken by the higher slot. `Failure` responses are ignored. Returns
+/// `(height, slot, tip)`.
 fn select_catchup_tip(
     tips: impl IntoIterator<Item = GetTipResponse>,
     local_height: u64,
+    local_tip: HeaderId,
 ) -> Option<(u64, Slot, HeaderId)> {
     tips.into_iter()
         .filter_map(|resp| match resp {
@@ -118,7 +125,9 @@ fn select_catchup_tip(
                 None
             }
         })
-        .filter(|(height, _, _)| *height > local_height)
+        .filter(|(height, _, tip)| {
+            *height > local_height || (*height == local_height && *tip != local_tip)
+        })
         .max_by_key(|(height, slot, _)| (*height, u64::from(*slot)))
 }
 
@@ -195,7 +204,7 @@ mod tests {
     fn select_catchup_tip_ignores_tips_at_or_below_local_height() {
         let tips = vec![tip(10, 100, 1), tip(9, 200, 2)];
         // local height is 10: nothing strictly ahead.
-        assert!(select_catchup_tip(tips, 10).is_none());
+        assert!(select_catchup_tip(tips, 10, HeaderId::from([1; 32])).is_none());
     }
 
     #[test]
@@ -206,7 +215,8 @@ mod tests {
             tip(15, 400, 3), // same height, higher slot -> winner
             tip(14, 999, 4),
         ];
-        let (height, slot, id) = select_catchup_tip(tips, 11).expect("a tip ahead exists");
+        let (height, slot, id) =
+            select_catchup_tip(tips, 11, HeaderId::from([0; 32])).expect("a tip ahead exists");
         assert_eq!(height, 15);
         assert_eq!(slot, Slot::new(400));
         assert_eq!(id, HeaderId::from([3; 32]));
@@ -219,13 +229,38 @@ mod tests {
             tip(20, 500, 7),
             GetTipResponse::Failure("nope".to_owned()),
         ];
-        let (height, _, id) = select_catchup_tip(tips, 5).expect("a tip ahead exists");
+        let (height, _, id) =
+            select_catchup_tip(tips, 5, HeaderId::from([0; 32])).expect("a tip ahead exists");
         assert_eq!(height, 20);
         assert_eq!(id, HeaderId::from([7; 32]));
     }
 
     #[test]
     fn select_catchup_tip_empty_is_none() {
-        assert!(select_catchup_tip(Vec::new(), 0).is_none());
+        assert!(select_catchup_tip(Vec::new(), 0, HeaderId::from([0; 32])).is_none());
+    }
+
+    #[test]
+    fn select_catchup_tip_accepts_competing_tip_at_same_height() {
+        let local_tip = HeaderId::from([1; 32]);
+        let competing_tip = HeaderId::from([2; 32]);
+        let tips = vec![
+            GetTipResponse::Tip {
+                tip: local_tip,
+                slot: Slot::new(200),
+                height: 10,
+            },
+            GetTipResponse::Tip {
+                tip: competing_tip,
+                slot: Slot::new(100),
+                height: 10,
+            },
+        ];
+
+        let (height, slot, tip) =
+            select_catchup_tip(tips, 10, local_tip).expect("competing tip should be selected");
+        assert_eq!(height, 10);
+        assert_eq!(slot, Slot::new(100));
+        assert_eq!(tip, competing_tip);
     }
 }

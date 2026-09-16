@@ -427,7 +427,7 @@ where
         )
         .await?;
 
-        let mut slot_timer = {
+        let (_, mut slot_timer) = {
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()

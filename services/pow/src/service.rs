@@ -665,7 +665,7 @@ where
                 .send(TimeServiceMessage::Subscribe { sender })
                 .await
                 .map_err(|(relay_error, _)| PoWError::TimeRelay(relay_error))?;
-            let slot_ticks = receiver.await?;
+            let (_, slot_ticks) = receiver.await?;
 
             // The stream emits every slot, so thin it down to one item per
             // period. `None` fires on the first slot seen rather than waiting

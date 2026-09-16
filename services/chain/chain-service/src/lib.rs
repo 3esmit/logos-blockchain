@@ -868,22 +868,11 @@ where
                 .send(lb_time_service::TimeServiceMessage::Subscribe { sender })
                 .await
                 .expect("Request time subscription to time service should succeed");
-            receiver.await?
+            let (current_slot, slot_timer) = receiver.await?;
+            (current_slot.slot, slot_timer)
         };
 
-        // TODO: Improve Subscribe API to return current slot immediately,
-        // so we don't need to call CurrentSlot API separately.
-        let current_slot = {
-            let (sender, receiver) = oneshot::channel();
-            relays
-                .time_relay()
-                .send(lb_time_service::TimeServiceMessage::CurrentSlot { sender })
-                .await
-                .expect("Request current slot from time service should succeed");
-            receiver.await?.slot
-        };
-
-        Ok((current_slot, slot_timer))
+        Ok(slot_timer)
     }
 
     async fn load_recovery_blocks_from_storage(

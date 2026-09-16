@@ -387,9 +387,10 @@ where
                 .map_err(|(e, _)| {
                     DynError::from(format!("failed to subscribe to slot ticks: {e}"))
                 })?;
-            receiver
+            let (_, slot_ticks) = receiver
                 .await
-                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?
+                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?;
+            slot_ticks
         };
         let tip_poll_params = if sync_config.tip_poll.enabled {
             match TipPollParams::derive(&sync_config.tip_poll, relays.cryptarchia()).await {

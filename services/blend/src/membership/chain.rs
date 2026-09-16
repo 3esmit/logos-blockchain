@@ -128,9 +128,10 @@ where
             .send(TimeServiceMessage::Subscribe { sender })
             .await
             .expect("Failed to subscribe to slot clock.");
-        receiver
+        let (_, slot_ticks) = receiver
             .await
-            .expect("Should not fail to receive slot stream from time service.")
+            .expect("Should not fail to receive slot stream from time service.");
+        slot_ticks
     };
 
     // TODO: Refactor into a function or own type that replaces `EpochHandler`.

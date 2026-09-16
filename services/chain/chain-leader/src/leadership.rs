@@ -301,7 +301,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
 {
     // Subscribe to future slot ticks (used to detect epoch boundaries) and read
     // the current slot to start scanning from immediately.
-    let Some(mut slot_timer) = async {
+    let Some((current_slot_tick, mut slot_timer)) = async {
         let (sender, receiver) = oneshot::channel();
         time_relay
             .send(TimeServiceMessage::Subscribe { sender })
@@ -319,7 +319,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     // we subscribe. Each iteration handles a single epoch; the `tokio::select!`
     // at the end yields the first tick of the next epoch to process, or `None`
     // when the tick stream ends (which ends the loop).
-    let mut current_slot_tick = slot_timer.next().await;
+    let mut current_slot_tick = Some(current_slot_tick);
     while let Some(SlotTick { slot, epoch }) = current_slot_tick {
         let Some(slot_context) =
             fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await

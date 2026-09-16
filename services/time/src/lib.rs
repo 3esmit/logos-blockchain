@@ -48,8 +48,9 @@ pub enum TimeServiceMessage {
     Info {
         sender: oneshot::Sender<Result<TimeServiceInfo, String>>,
     },
+    /// Returns the current tick together with future slot-tick updates.
     Subscribe {
-        sender: oneshot::Sender<EpochSlotTickStream>,
+        sender: oneshot::Sender<(SlotTick, EpochSlotTickStream)>,
     },
     CurrentSlot {
         sender: oneshot::Sender<SlotTick>,
@@ -198,7 +199,7 @@ fn handle_service_message<BackendSettings>(
         }
         TimeServiceMessage::Subscribe { sender } => {
             let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));
-            if sender.send(stream).is_err() {
+            if sender.send((*current_slot_tick, stream)).is_err() {
                 error!(target: LOG_TARGET, "Couldn't send back a Subscribe response");
             }
         }
@@ -207,5 +208,57 @@ fn handle_service_message<BackendSettings>(
                 error!(target: LOG_TARGET, "Couldn't send back a CurrentSlot response");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{num::NonZero, time::Duration};
+
+    use futures::StreamExt as _;
+    use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
+    use time::OffsetDateTime;
+    use tokio::sync::{oneshot, watch};
+
+    use super::{SlotTick, TimeServiceMessage, TimeServiceSettings, handle_service_message};
+
+    #[tokio::test]
+    async fn subscribe_returns_current_tick_and_future_stream() {
+        let current = SlotTick {
+            epoch: Epoch::from(3),
+            slot: Slot::from(42),
+        };
+        let next = SlotTick {
+            epoch: Epoch::from(3),
+            slot: Slot::from(43),
+        };
+        let (watch_sender, watch_receiver) = watch::channel(current);
+        let (sender, receiver) = oneshot::channel();
+        let settings = TimeServiceSettings {
+            slot_config: SlotConfig {
+                slot_duration: Duration::from_secs(1),
+                genesis_time: OffsetDateTime::now_utc(),
+            },
+            epoch_config: EpochConfig {
+                epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
+            },
+            base_period_length: NonZero::new(1).unwrap(),
+            backend: (),
+        };
+
+        handle_service_message(
+            TimeServiceMessage::Subscribe { sender },
+            &watch_receiver,
+            &current,
+            &settings,
+        );
+
+        let (returned_current, mut stream) = receiver.await.unwrap();
+        assert_eq!(returned_current, current);
+
+        watch_sender.send(next).unwrap();
+        assert_eq!(stream.next().await, Some(next));
     }
 }

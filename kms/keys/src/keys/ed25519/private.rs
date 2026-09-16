@@ -1,3 +1,5 @@
+use core::fmt::{self, Debug, Formatter};
+
 use ed25519_dalek::{SECRET_KEY_LENGTH, SigningKey, ed25519::signature::Signer as _};
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use rand_core::CryptoRngCore;
@@ -13,8 +15,14 @@ pub const KEY_SIZE: usize = SECRET_KEY_LENGTH;
 ///
 /// To be used in contexts where a KMS-like key is required, but it's not
 /// possible to go through the KMS roundtrip of executing operators.
-#[derive(ZeroizeOnDrop, Clone, Debug)]
+#[derive(ZeroizeOnDrop, Clone)]
 pub struct UnsecuredEd25519Key(pub(super) SigningKey);
+
+impl Debug for UnsecuredEd25519Key {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("UnsecuredEd25519Key(<redacted>)")
+    }
+}
 
 impl UnsecuredEd25519Key {
     #[must_use]
@@ -91,5 +99,17 @@ impl From<SigningKey> for UnsecuredEd25519Key {
 impl From<UnsecuredEd25519Key> for SigningKey {
     fn from(value: UnsecuredEd25519Key) -> Self {
         value.0.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_secret_key() {
+        let key = UnsecuredEd25519Key::from_bytes(&[0xabu8; SECRET_KEY_LENGTH]);
+
+        assert_eq!(format!("{key:?}"), "UnsecuredEd25519Key(<redacted>)");
     }
 }

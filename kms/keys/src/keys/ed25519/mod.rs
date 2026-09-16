@@ -85,10 +85,6 @@ impl From<SigningKey> for Ed25519Key {
 
 impl Debug for Ed25519Key {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        #[cfg(feature = "unsafe")]
-        write!(f, "Ed25519Key({:?})", self.0)?;
-
-        #[cfg(not(feature = "unsafe"))]
         write!(f, "Ed25519Key(<redacted>)")?;
 
         Ok(())
@@ -145,5 +141,17 @@ impl SecuredKey for Ed25519Key {
 
     fn as_public_key(&self) -> Self::PublicKey {
         self.public_key()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_secret_key() {
+        let key = Ed25519Key::from_bytes(&[0xabu8; ED25519_SECRET_KEY_SIZE]);
+
+        assert_eq!(format!("{key:?}"), "Ed25519Key(<redacted>)");
     }
 }

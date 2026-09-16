@@ -75,10 +75,6 @@ impl Hash for ZkKey {
 
 impl Debug for ZkKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        #[cfg(feature = "unsafe")]
-        write!(f, "ZkKey({:?})", self.0)?;
-
-        #[cfg(not(feature = "unsafe"))]
         write!(f, "ZkKey(<redacted>)")?;
 
         Ok(())
@@ -148,5 +144,17 @@ impl SecuredKey for ZkKey {
 
     fn as_public_key(&self) -> Self::PublicKey {
         self.0.to_public_key()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_secret_key() {
+        let key = ZkKey::new(Fr::from(0xdead_beefu64));
+
+        assert_eq!(format!("{key:?}"), "ZkKey(<redacted>)");
     }
 }

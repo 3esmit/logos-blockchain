@@ -278,10 +278,16 @@ impl LeaderPublic {
 static LEAD_V1: LazyLock<Fr> =
     LazyLock::new(|| fr_from_bytes(b"LEAD_V1").expect("BigUint should load from constant string"));
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LeaderPrivate {
     input: lb_pol::PolWitnessInputsData,
     pk: Ed25519PublicKey,
+}
+
+impl Debug for LeaderPrivate {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("LeaderPrivate(<redacted>)")
+    }
 }
 
 impl LeaderPrivate {
@@ -471,5 +477,35 @@ mod tests {
             let (public, note_id, sk) = rand_inputs(&constants);
             public.check_winning(1, note_id, sk)
         });
+    }
+
+    #[test]
+    fn debug_redacts_private_inputs() {
+        let private = LeaderPrivate {
+            input: lb_pol::PolWitnessInputsData::from_chain_and_wallet_data(
+                lb_pol::PolChainInputsData {
+                    slot_number: 1,
+                    epoch_nonce: Fr::from(2u64),
+                    lottery_0: Fr::from(3u64),
+                    lottery_1: Fr::from(4u64),
+                    aged_root: Fr::from(5u64),
+                    latest_root: Fr::from(6u64),
+                    leader_pk: (Fr::from(7u64), Fr::from(8u64)),
+                },
+                lb_pol::PolWalletInputsData {
+                    note_value: 9,
+                    transaction_hash: Fr::from(10u64),
+                    output_number: 11,
+                    aged_path: [Fr::from(12u64); lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT],
+                    aged_selectors: [false; lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT],
+                    latest_path: [Fr::from(13u64); lb_pol::LATEST_NOTE_MERKLE_TREE_HEIGHT],
+                    latest_selectors: [true; lb_pol::LATEST_NOTE_MERKLE_TREE_HEIGHT],
+                    secret_key: Fr::from(0xdead_beefu64),
+                },
+            ),
+            pk: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+        };
+
+        assert_eq!(format!("{private:?}"), "LeaderPrivate(<redacted>)");
     }
 }

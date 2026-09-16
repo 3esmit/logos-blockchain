@@ -1,3 +1,4 @@
+use core::fmt::{self, Debug, Formatter};
 use std::sync::LazyLock;
 
 use lb_codec::{BinaryCodec, BinaryEncode as _};
@@ -42,8 +43,14 @@ static VOUCHER_NF: LazyLock<Fr> = LazyLock::new(|| {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, BinaryCodec)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
+
+impl Debug for VoucherSecret {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("VoucherSecret(<redacted>)")
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
@@ -496,5 +503,12 @@ mod tests {
             preverified_signed_operation_result,
             Err(LeaderClaimError::InvalidPoC)
         ));
+    }
+
+    #[test]
+    fn debug_redacts_voucher_secret() {
+        let secret = VoucherSecret::from(Fr::from(0xdead_beefu64));
+
+        assert_eq!(format!("{secret:?}"), "VoucherSecret(<redacted>)");
     }
 }

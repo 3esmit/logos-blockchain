@@ -11,7 +11,7 @@ pub type LatestNotePath = [Fr; LATEST_NOTE_MERKLE_TREE_HEIGHT];
 pub type LatestSelectorPath = [bool; LATEST_NOTE_MERKLE_TREE_HEIGHT];
 
 /// Public inputs of the POL cirmcom circuit as circuit field values.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PolWalletInputs {
     note_value: Groth16Input,
     transaction_hash: Groth16Input,
@@ -23,8 +23,14 @@ pub struct PolWalletInputs {
     secret_key: Groth16Input,
 }
 
+impl core::fmt::Debug for PolWalletInputs {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PolWalletInputs(<redacted>)")
+    }
+}
+
 /// Private inputs of the POL cirmcom circuit to be provided by the wallet.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PolWalletInputsData {
     pub note_value: u64,
     pub transaction_hash: Fr,
@@ -34,6 +40,12 @@ pub struct PolWalletInputsData {
     pub latest_path: LatestNotePath,          // leaf-to-root
     pub latest_selectors: LatestSelectorPath, // root-to-leaf
     pub secret_key: Fr,
+}
+
+impl core::fmt::Debug for PolWalletInputsData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PolWalletInputsData(<redacted>)")
+    }
 }
 
 #[derive(Serialize)]
@@ -105,5 +117,32 @@ impl From<PolWalletInputsData> for PolWalletInputs {
                 .map(|selector| Groth16Input::new(if selector { Fr::ONE } else { Fr::ZERO })),
             secret_key: secret_key.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn data() -> PolWalletInputsData {
+        PolWalletInputsData {
+            note_value: 1,
+            transaction_hash: Fr::from(2u64),
+            output_number: 3,
+            aged_path: [Fr::from(4u64); AGED_NOTE_MERKLE_TREE_HEIGHT],
+            aged_selectors: [false; AGED_NOTE_MERKLE_TREE_HEIGHT],
+            latest_path: [Fr::from(5u64); LATEST_NOTE_MERKLE_TREE_HEIGHT],
+            latest_selectors: [true; LATEST_NOTE_MERKLE_TREE_HEIGHT],
+            secret_key: Fr::from(0xdead_beefu64),
+        }
+    }
+
+    #[test]
+    fn debug_redacts_wallet_inputs() {
+        let data = data();
+        assert_eq!(format!("{data:?}"), "PolWalletInputsData(<redacted>)");
+
+        let inputs: PolWalletInputs = data.into();
+        assert_eq!(format!("{inputs:?}"), "PolWalletInputs(<redacted>)");
     }
 }

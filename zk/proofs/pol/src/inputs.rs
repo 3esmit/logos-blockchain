@@ -8,11 +8,17 @@ use crate::{
 };
 
 /// The inputs to the circuit prover.
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize)]
 #[serde(into = "PolInputsJson", rename_all = "snake_case")]
 pub struct PolWitnessInputs {
     pub wallet: PolWalletInputs,
     pub chain: PolChainInputs,
+}
+
+impl core::fmt::Debug for PolWitnessInputs {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PolWitnessInputs(<redacted>)")
+    }
 }
 
 impl TryFrom<PolWitnessInputs> for lbc_pol_sys::PolWitnessInput<'_> {
@@ -26,10 +32,16 @@ impl TryFrom<PolWitnessInputs> for lbc_pol_sys::PolWitnessInput<'_> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PolWitnessInputsData {
     pub wallet: PolWalletInputsData,
     pub chain: PolChainInputsData,
+}
+
+impl core::fmt::Debug for PolWitnessInputsData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PolWitnessInputsData(<redacted>)")
+    }
 }
 
 impl PolWitnessInputsData {
@@ -162,5 +174,41 @@ impl PolVerifierInput {
             leader_pk1: leader_pk.0.into(),
             leader_pk2: leader_pk.1.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wallet_inputs::{AGED_NOTE_MERKLE_TREE_HEIGHT, LATEST_NOTE_MERKLE_TREE_HEIGHT};
+
+    #[test]
+    fn debug_redacts_witness_inputs() {
+        let data = PolWitnessInputsData::from_chain_and_wallet_data(
+            PolChainInputsData {
+                slot_number: 1,
+                epoch_nonce: Fr::from(2u64),
+                lottery_0: Fr::from(3u64),
+                lottery_1: Fr::from(4u64),
+                aged_root: Fr::from(5u64),
+                latest_root: Fr::from(6u64),
+                leader_pk: (Fr::from(7u64), Fr::from(8u64)),
+            },
+            PolWalletInputsData {
+                note_value: 9,
+                transaction_hash: Fr::from(10u64),
+                output_number: 11,
+                aged_path: [Fr::from(12u64); AGED_NOTE_MERKLE_TREE_HEIGHT],
+                aged_selectors: [false; AGED_NOTE_MERKLE_TREE_HEIGHT],
+                latest_path: [Fr::from(13u64); LATEST_NOTE_MERKLE_TREE_HEIGHT],
+                latest_selectors: [true; LATEST_NOTE_MERKLE_TREE_HEIGHT],
+                secret_key: Fr::from(0xdead_beefu64),
+            },
+        );
+
+        assert_eq!(format!("{data:?}"), "PolWitnessInputsData(<redacted>)");
+
+        let inputs: PolWitnessInputs = data.into();
+        assert_eq!(format!("{inputs:?}"), "PolWitnessInputs(<redacted>)");
     }
 }

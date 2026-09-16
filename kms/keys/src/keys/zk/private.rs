@@ -1,3 +1,4 @@
+use core::fmt::{self, Debug, Formatter};
 use std::sync::LazyLock;
 
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked, fr_from_mod_bytes};
@@ -17,9 +18,15 @@ static KDF: LazyLock<Fr> = LazyLock::new(|| fr_from_bytes_unchecked(b"KDF"));
 ///
 /// To be used in contexts where a KMS-like key is required, but it's not
 /// possible to go through the KMS roundtrip of executing operators.
-#[derive(ZeroizeOnDrop, Clone, Debug, Serialize, Deserialize)]
+#[derive(ZeroizeOnDrop, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SecretKey(#[serde(with = "lb_groth16::serde::serde_fr")] Fr);
+
+impl Debug for SecretKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretKey(<redacted>)")
+    }
+}
 
 impl SecretKey {
     #[must_use]
@@ -96,4 +103,16 @@ fn try_from_secret_keys(keys: &[SecretKey]) -> Result<ZkSignPrivateKeysData, ZkS
         buff[i] = sk.clone().into_inner();
     }
     Ok(buff.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_secret_key() {
+        let key = SecretKey::new(Fr::from(0xdead_beefu64));
+
+        assert_eq!(format!("{key:?}"), "SecretKey(<redacted>)");
+    }
 }

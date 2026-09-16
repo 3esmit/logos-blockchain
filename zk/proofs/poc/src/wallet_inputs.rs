@@ -10,10 +10,16 @@ pub struct PoCWalletInputs {
     voucher_merkle_path_and_selectors: [(Groth16Input, Groth16Input); VOUCHER_MERKLE_PATH_LEN],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PoCWalletInputsData {
     pub secret_voucher: Fr,
     pub voucher_merkle_path_and_selectors: VoucherPathAndSelector,
+}
+
+impl core::fmt::Debug for PoCWalletInputsData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PoCWalletInputsData(<redacted>)")
+    }
 }
 
 #[derive(Serialize)]
@@ -61,5 +67,20 @@ impl From<PoCWalletInputsData> for PoCWalletInputs {
                 },
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_wallet_inputs() {
+        let data = PoCWalletInputsData {
+            secret_voucher: Fr::from(0xdead_beefu64),
+            voucher_merkle_path_and_selectors: [(Fr::from(1u64), false); VOUCHER_MERKLE_PATH_LEN],
+        };
+
+        assert_eq!(format!("{data:?}"), "PoCWalletInputsData(<redacted>)");
     }
 }

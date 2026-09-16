@@ -38,10 +38,16 @@ impl TryFrom<PoCWitnessInputs> for lbc_poc_sys::PocWitnessInput<'_> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PoCWitnessInputsData {
     pub wallet: PoCWalletInputsData,
     pub chain: PoCChainInputsData,
+}
+
+impl core::fmt::Debug for PoCWitnessInputsData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PoCWitnessInputsData(<redacted>)")
+    }
 }
 
 impl PoCWitnessInputsData {
@@ -131,5 +137,28 @@ impl PoCVerifierInput {
             voucher_root: voucher_root.into(),
             mantle_tx_hash: mantle_tx_hash.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wallet_inputs::VOUCHER_MERKLE_PATH_LEN;
+
+    #[test]
+    fn debug_redacts_witness_inputs() {
+        let data = PoCWitnessInputsData::from_chain_and_wallet_data(
+            PoCChainInputsData {
+                voucher_root: Fr::from(1u64),
+                mantle_tx_hash: Fr::from(2u64),
+            },
+            PoCWalletInputsData {
+                secret_voucher: Fr::from(0xdead_beefu64),
+                voucher_merkle_path_and_selectors: [(Fr::from(3u64), true);
+                    VOUCHER_MERKLE_PATH_LEN],
+            },
+        );
+
+        assert_eq!(format!("{data:?}"), "PoCWitnessInputsData(<redacted>)");
     }
 }

@@ -121,9 +121,15 @@ impl LeaderClaimPublic {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LeaderClaimPrivate {
     input: lb_poc::PoCWitnessInputsData,
+}
+
+impl core::fmt::Debug for LeaderClaimPrivate {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("LeaderClaimPrivate(<redacted>)")
+    }
 }
 
 impl LeaderClaimPrivate {
@@ -157,6 +163,30 @@ impl LeaderClaimPrivate {
 impl From<LeaderClaimPrivate> for lb_poc::PoCWitnessInputsData {
     fn from(value: LeaderClaimPrivate) -> Self {
         value.input
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_private_inputs() {
+        let private = LeaderClaimPrivate {
+            input: lb_poc::PoCWitnessInputsData::from_chain_and_wallet_data(
+                lb_poc::PoCChainInputsData {
+                    voucher_root: Fr::from(1u64),
+                    mantle_tx_hash: Fr::from(2u64),
+                },
+                lb_poc::PoCWalletInputsData {
+                    secret_voucher: Fr::from(0xdead_beefu64),
+                    voucher_merkle_path_and_selectors: [(Fr::from(3u64), true);
+                        lb_poc::VOUCHER_MERKLE_PATH_LEN],
+                },
+            ),
+        };
+
+        assert_eq!(format!("{private:?}"), "LeaderClaimPrivate(<redacted>)");
     }
 }
 

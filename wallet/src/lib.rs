@@ -282,8 +282,9 @@ impl WalletState {
                 )? {
                     return Ok(tx_with_change);
                 }
-                // The change note costs more than the surplus covers, so fall
-                // through and pull in more UTXO's below.
+                // The transaction is already fundable without a positive
+                // change output; leave the surplus as the execution tip.
+                return Ok(tx_builder.clone());
             }
             Ordering::Less => {}
         }
@@ -309,7 +310,7 @@ impl WalletState {
                     // We have enough balance, but we need to introduce a change note.
                     // The change note will slightly increase the storage cost of the tx so there is
                     // a chance that we will not be able to fund the tx with the change note.
-                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(
+                    if let Some(tx_with_change) = funded_tx_builder.clone().return_change::<G>(
                         context,
                         change_pk,
                         priority_fee_percent,
@@ -317,7 +318,9 @@ impl WalletState {
                         // We were able to fund the tx with change note added.
                         return Ok(tx_with_change);
                     }
-                    // Otherwise, need more UTXO's.
+                    // The transaction is already fundable without a positive
+                    // change output; leave the surplus as the execution tip.
+                    return Ok(funded_tx_builder);
                 }
             }
         }
@@ -1774,9 +1777,8 @@ mod tests {
         );
 
         for value in 755..=794 {
-            // this region of note values will fail to fund the tx.
-            // We can fund the tx if the note value is exactly the gas cost without change
-            // note
+            // The transaction is already fundable without a positive change
+            // output, so the surplus is retained as the execution tip.
             let wallet_state = WalletState::from_ledger(
                 &HashMap::from_iter([(alice, 1)]),
                 &LedgerState::from_utxos(
@@ -1794,10 +1796,16 @@ mod tests {
                 0,
             );
 
-            assert_eq!(
-                fund_attempt.unwrap_err(),
-                WalletError::InsufficientFunds { available: value }
-            );
+            let funded_tx = fund_attempt.unwrap().build().unwrap();
+            if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
+                assert_eq!(
+                    transfer_op.inputs,
+                    Inputs::new([Utxo::new(tx_hash(0), 0, Note::new(value, alice)).id()])
+                );
+                assert_eq!(transfer_op.outputs, Outputs::empty());
+            } else {
+                panic!("last op must be a transfer")
+            }
         }
 
         // We can fund the tx if the note value exceeds gas cost with change note

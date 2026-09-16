@@ -94,3 +94,32 @@ impl AsRef<[u8]> for PublicKey {
         self.0.as_ref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lb_codec::BinaryDecode as _;
+
+    use super::{KEY_SIZE, PublicKey};
+
+    const INVALID_KEY_BYTES: [u8; KEY_SIZE] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 1,
+    ];
+
+    #[test]
+    fn constructor_rejects_invalid_key_bytes() {
+        assert!(PublicKey::from_bytes(&INVALID_KEY_BYTES).is_err());
+    }
+
+    #[test]
+    fn serde_rejects_invalid_key_bytes() {
+        let value = serde_json::Value::String(hex::encode(INVALID_KEY_BYTES));
+        let error = serde_json::from_value::<PublicKey>(value).unwrap_err();
+        assert_eq!(error.to_string(), "Invalid Ed25519 public key bytes.");
+    }
+
+    #[test]
+    fn binary_decode_rejects_invalid_key_bytes() {
+        assert!(PublicKey::decode(&INVALID_KEY_BYTES, &()).is_err());
+    }
+}

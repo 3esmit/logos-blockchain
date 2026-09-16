@@ -6,6 +6,7 @@ use std::{
     str::FromStr as _,
 };
 
+use lb_libp2p::PeerId;
 use lb_node::cli::{EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, UpdateArgs};
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
@@ -24,6 +25,7 @@ pub(crate) unsafe fn cstr_to_path(pointer: *const c_char) -> PathBuf {
         .into()
 }
 
+#[derive(Default)]
 #[repr(C)]
 pub struct GenerateConfigArgs {
     pub initial_peers: *const *const c_char,
@@ -39,6 +41,9 @@ pub struct GenerateConfigArgs {
     pub skip_ibd: *const bool,
     pub log_filter: *const c_char,
     pub kms_file: *const c_char,
+    /// Optional bare libp2p peer IDs for Initial Block Download.
+    pub ibd_peers: *const *const c_char,
+    pub ibd_peers_count: *const u32,
 }
 
 impl From<GenerateConfigArgs> for EmbeddedInitArgs {
@@ -66,6 +71,28 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
                     })
                     .collect();
             }
+        }
+
+        // ---- ibd_peers ----
+        if !value.ibd_peers.is_null() && !value.ibd_peers_count.is_null() {
+            let count = unsafe { *value.ibd_peers_count } as usize;
+            let peers = unsafe { slice::from_raw_parts(value.ibd_peers, count) };
+
+            init_args.ibd_peers = Some(
+                peers
+                    .iter()
+                    .filter_map(|&pointer| {
+                        if pointer.is_null() {
+                            return None;
+                        }
+
+                        unsafe { CStr::from_ptr(pointer) }
+                            .to_str()
+                            .ok()
+                            .and_then(|string| string.parse::<PeerId>().ok())
+                    })
+                    .collect(),
+            );
         }
 
         // ---- output ----
@@ -471,5 +498,47 @@ mod test {
         let status = unsafe { migrate_user_config(migrated_c.as_ptr(), keystore_c.as_ptr()) };
         assert!(status.is_ok(), "Failed to migrate config: {status:?}");
         assert!(migrated_path.exists());
+    }
+
+    #[test]
+    fn explicit_ibd_peers_are_written_to_generated_config() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("user_config.yaml");
+        let keystore_path = temp_dir.path().join("keystore.yaml");
+        let peer_id = "12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X"
+            .parse::<PeerId>()
+            .expect("Peer ID should be valid");
+        let peer_text = CString::new(peer_id.to_string()).expect("Peer ID should be valid");
+        let peer_ptrs = [peer_text.as_ptr()];
+        let peer_count = 1u32;
+
+        let embedded = EmbeddedInitArgs::from(GenerateConfigArgs {
+            ibd_peers: peer_ptrs.as_ptr(),
+            ibd_peers_count: &raw const peer_count,
+            ..Default::default()
+        });
+        assert_eq!(
+            embedded.ibd_peers,
+            Some(std::collections::HashSet::from([peer_id]))
+        );
+
+        let status = generate_config_sync(EmbeddedInitArgs {
+            output: config_path.clone(),
+            kms_file: Some(keystore_path),
+            ibd_peers: embedded.ibd_peers,
+            ..Default::default()
+        });
+        assert!(status.is_ok(), "Failed to generate config: {status:?}");
+
+        let yaml =
+            std::fs::read_to_string(config_path).expect("Generated config should be readable");
+        let value: serde_yaml::Value =
+            serde_yaml::from_str(&yaml).expect("Config should be valid YAML");
+        let peers = value["cryptarchia"]["network"]["bootstrap"]["ibd"]["peers"]
+            .as_sequence()
+            .expect("Generated config should contain IBD peers");
+        let expected = peer_id.to_string();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].as_str(), Some(expected.as_str()));
     }
 }

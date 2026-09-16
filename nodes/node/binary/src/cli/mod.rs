@@ -4,12 +4,14 @@ pub mod keys;
 pub mod participate;
 
 use std::{
+    collections::HashSet,
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use lb_libp2p::PeerId;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
@@ -140,6 +142,14 @@ pub struct InitArgs {
     #[clap(flatten)]
     pub cryptarchia: CryptarchiaArgs,
 
+    /// Explicit peer IDs to query during Initial Block Download.
+    ///
+    /// This is populated by the embedded C API. The CLI keeps the field
+    /// hidden and derives IDs from `/p2p/<id>` suffixes in `initial_peers`
+    /// when it is absent.
+    #[clap(skip)]
+    pub ibd_peers: Option<HashSet<PeerId>>,
+
     #[clap(flatten)]
     pub sdp: SdpArgs,
 
@@ -161,6 +171,11 @@ pub struct EmbeddedInitArgs {
     /// If `--skip-ibd` is not set, peers whose multiaddrs include a `PeerId`
     /// are also used as IBD peers.
     pub initial_peers: Vec<Multiaddr>,
+
+    /// Bare libp2p peer IDs to query during Initial Block Download.
+    /// When omitted, IDs are derived from `/p2p/<id>` suffixes in
+    /// `initial_peers`.
+    pub ibd_peers: Option<HashSet<PeerId>>,
 
     /// Output file path for the generated config
     pub output: PathBuf,
@@ -210,6 +225,7 @@ impl From<EmbeddedInitArgs> for InitArgs {
             .external_address
             .clone_from(&args.external_address);
         init_args.network.initial_peers = Some(args.initial_peers.clone());
+        init_args.ibd_peers = args.ibd_peers;
 
         init_args.blend.blend_addr =
             Some(BlendCoreConfig::default_listening_address(args.blend_port));
@@ -228,6 +244,7 @@ impl Default for EmbeddedInitArgs {
     fn default() -> Self {
         Self {
             initial_peers: Vec::new(),
+            ibd_peers: None,
             output: PathBuf::from("user_config.yaml"),
             net_port: SwarmConfig::default_port(),
             blend_port: BlendCoreConfig::default_port(),
@@ -379,6 +396,7 @@ impl From<MigrateArgs> for InitArgs {
             network: migrate.network,
             blend: migrate.blend,
             cryptarchia: migrate.cryptarchia,
+            ibd_peers: None,
             sdp: migrate.sdp,
             api: migrate.api,
             state: migrate.state,

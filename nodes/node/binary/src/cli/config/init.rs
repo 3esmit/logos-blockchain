@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use color_eyre::eyre::Result;
@@ -68,6 +69,7 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
         network: network_args,
         blend: blend_args,
         cryptarchia: cryptarchia_args,
+        ibd_peers,
         sdp: sdp_args,
         api: api_args,
         state: state_args,
@@ -96,7 +98,8 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
 
     let blend_config = build_blend_config(keystore, blend_args);
 
-    let cryptarchia_config = build_cryptarchia_config(keystore, initial_peers, cryptarchia_args);
+    let cryptarchia_config =
+        build_cryptarchia_config(keystore, initial_peers, ibd_peers, cryptarchia_args);
 
     let sdp_config = build_sdp_config(keystore, sdp_args);
 
@@ -158,6 +161,7 @@ fn build_blend_config(keystore: &Keystore, blend_args: BlendArgs) -> BlendConfig
 fn build_cryptarchia_config(
     keystore: &Keystore,
     initial_peers: Option<Vec<Multiaddr>>,
+    ibd_peers: Option<HashSet<PeerId>>,
     cryptarchia_args: CryptarchiaArgs,
 ) -> CryptarchiaConfig {
     let (_, cryptarchia_funding_key) = keystore
@@ -167,16 +171,19 @@ fn build_cryptarchia_config(
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
             funding_pk: cryptarchia_funding_key.to_public_key(),
         });
-    if !cryptarchia_args.skip_ibd
-        && let Some(initial_peers) = initial_peers
-    {
-        cryptarchia_config.network.bootstrap.ibd.peers = initial_peers
-            .iter()
-            .filter_map(|addr| match addr.iter().last() {
-                Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
-                _ => None,
-            })
-            .collect();
+    if !cryptarchia_args.skip_ibd {
+        cryptarchia_config.network.bootstrap.ibd.peers = ibd_peers.unwrap_or_else(|| {
+            initial_peers
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|addr| match addr.iter().last() {
+                    Some(lb_libp2p::Protocol::P2p(bytes)) => {
+                        PeerId::from_multihash(bytes.into()).ok()
+                    }
+                    _ => None,
+                })
+                .collect()
+        });
     }
     update_cryptarchia(&mut cryptarchia_config, cryptarchia_args);
 

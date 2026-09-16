@@ -80,6 +80,7 @@ impl From<MigrateArgs> for InitArgs {
             network: migrate.network,
             blend: migrate.blend,
             cryptarchia: migrate.cryptarchia,
+            ibd_peers: None,
             sdp: migrate.sdp,
             api: migrate.api,
             state: migrate.state,

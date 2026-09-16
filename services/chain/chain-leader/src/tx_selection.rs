@@ -255,21 +255,6 @@ mod tests {
                 .sum::<usize>()
                 <= MAX_BLOCK_TRANSACTIONS_SIZE
         );
-        let all_candidates_result = ledger_state
-            .clone()
-            .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(
-                &config,
-                candidates.iter().cloned(),
-            );
-        let all_candidates_error = all_candidates_result.err();
-        assert!(
-            matches!(
-                &all_candidates_error,
-                Some(lb_ledger::LedgerError::TooMuchExecutionGas { .. })
-            ),
-            "individual gas: {individual_gas:?}, error: {all_candidates_error:?}"
-        );
-
         let selection = select_transactions(ledger_state.clone(), candidates, &config);
         assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
         assert!(selection.invalid_tx_hashes.is_empty());

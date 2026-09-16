@@ -1371,10 +1371,12 @@ where
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
+        + Send
         + Sync
         + Display
         + 'static
-        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     let api_blocks =
         mantle::get_immutable_blocks(&handle, query.slot_from, query.slot_to).map(|blocks| {

@@ -41,11 +41,14 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
 use crate::http::{
-    consensus::{Cryptarchia, cryptarchia_ledger_state},
+    consensus::{Cryptarchia, cryptarchia_info, cryptarchia_ledger_state},
     errors::BlockSlotRangeError,
 };
 
 const LOG_TARGET: &str = api::http::MANTLE;
+/// Bound parent lookups used to verify an immutable range against the current
+/// LIB. A corrupted index must fail closed without allowing an unbounded walk.
+const IMMUTABLE_ANCESTRY_CHECK_LIMIT: usize = 16_384;
 
 /// A block along with the current chain state (tip and LIB) at the time it was
 /// processed. This allows clients to track the canonical chain without needing
@@ -378,6 +381,113 @@ where
     Ok(blocks)
 }
 
+/// Check that indexed immutable IDs occur in one canonical child-to-parent
+/// path. Storage scans are ordered by slot, but the index can outlive a
+/// recovery or reorganisation; slot order alone does not prove ancestry.
+fn validate_immutable_ids_on_path(
+    indexed_ids: &[HeaderId],
+    canonical_path: &[HeaderId],
+    descending: bool,
+) -> Result<(), String> {
+    let expected_ids: Vec<HeaderId> = if descending {
+        indexed_ids.to_vec()
+    } else {
+        indexed_ids.iter().rev().copied().collect()
+    };
+
+    let mut expected_index = 0;
+    for id in canonical_path {
+        if expected_ids.get(expected_index) == Some(id) {
+            expected_index += 1;
+            if expected_index == expected_ids.len() {
+                return Ok(());
+            }
+        }
+    }
+
+    let missing_id = expected_ids
+        .get(expected_index)
+        .map_or_else(|| "<none>".to_owned(), |id| format!("{id:?}"));
+    Err(format!(
+        "immutable block index is not on one canonical chain; missing indexed header {missing_id}"
+    ))
+}
+
+/// Verify immutable IDs against the advertised LIB before loading or
+/// serializing their bodies. This turns stale/off-chain index entries into a
+/// terminal API error instead of returning contradictory ancestry to clients.
+async fn validate_immutable_block_ids<Transaction, StorageBackend, RuntimeServiceId>(
+    storage_adapter: &StorageAdapter<StorageBackend, Transaction, RuntimeServiceId>,
+    indexed_ids: &[HeaderId],
+    lib: HeaderId,
+    descending: bool,
+) -> Result<(), super::DynError>
+where
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
+    StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
+    <StorageBackend as StorageChainApi>::Block:
+        TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+{
+    if indexed_ids.is_empty() {
+        return Ok(());
+    }
+
+    let expected_ids: Vec<HeaderId> = if descending {
+        indexed_ids.to_vec()
+    } else {
+        indexed_ids.iter().rev().copied().collect()
+    };
+    let mut expected_index = 0;
+    let mut current = lib;
+    let mut canonical_path = Vec::with_capacity(expected_ids.len().min(1024));
+
+    for step in 0..=IMMUTABLE_ANCESTRY_CHECK_LIMIT {
+        canonical_path.push(current);
+        if expected_ids.get(expected_index) == Some(&current) {
+            expected_index += 1;
+            if expected_index == expected_ids.len() {
+                return validate_immutable_ids_on_path(indexed_ids, &canonical_path, descending)
+                    .map_err(Into::into);
+            }
+        }
+
+        if step == IMMUTABLE_ANCESTRY_CHECK_LIMIT {
+            break;
+        }
+
+        let Some(parent) = storage_adapter.get_block_parent(&current).await else {
+            return Err(format!(
+                "immutable block index is not anchored at LIB {lib:?}: missing parent for {current:?}"
+            )
+            .into());
+        };
+        if parent == current {
+            return Err(format!(
+                "immutable block index is not anchored at LIB {lib:?}: {current:?} is its own parent"
+            )
+            .into());
+        }
+        current = parent;
+    }
+
+    let missing_id = expected_ids
+        .get(expected_index)
+        .map_or_else(|| "<none>".to_owned(), |id| format!("{id:?}"));
+    Err(format!(
+        "immutable block index is not anchored at LIB {lib:?} within {IMMUTABLE_ANCESTRY_CHECK_LIMIT} parent links; missing indexed header {missing_id}"
+    )
+    .into())
+}
+
 fn validate_blocks_slot_range(
     slot_from: Slot,
     slot_to: Slot,
@@ -461,8 +571,7 @@ where
 
             // Retry once from the latest tip if the original tip is not yet available.
             // The original LIB remains the anchor for this request.
-            let refreshed_info =
-                crate::http::consensus::cryptarchia_info::<RuntimeServiceId>(handle).await?;
+            let refreshed_info = cryptarchia_info::<RuntimeServiceId>(handle).await?;
             current_id = refreshed_info.cryptarchia_info.tip;
             retried = true;
             blocks.clear();
@@ -545,6 +654,8 @@ where
         descending,
     )
     .await?;
+
+    validate_immutable_block_ids(storage_adapter, &header_ids, chain_info.lib, descending).await?;
 
     load_blocks_with_chain_state_by_ids(storage_adapter, header_ids, chain_info, remaining).await
 }
@@ -741,15 +852,24 @@ where
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
+        + Send
         + Sync
         + Display
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
     let header_ids = get_immutable_blocks_header_ids(handle, from_slot, to_slot).await?;
 
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<StorageService<StorageBackend, RuntimeServiceId>>()
+        .await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
+    let chain_info = cryptarchia_info::<RuntimeServiceId>(handle)
+        .await?
+        .cryptarchia_info;
+
+    validate_immutable_block_ids(&storage_adapter, &header_ids, chain_info.lib, false).await?;
 
     let blocks_futures = header_ids
         .iter()
@@ -931,4 +1051,72 @@ where
         .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
 
     Ok(receiver.await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header_id(value: u8) -> HeaderId {
+        HeaderId::from([value; 32])
+    }
+
+    #[test]
+    fn immutable_index_accepts_sparse_ascending_path() {
+        let lib = header_id(4);
+        let newest = header_id(3);
+        let oldest = header_id(1);
+
+        assert!(
+            validate_immutable_ids_on_path(
+                &[oldest, newest],
+                &[lib, newest, header_id(2), oldest],
+                false,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn immutable_index_accepts_sparse_descending_path() {
+        let lib = header_id(4);
+        let newest = header_id(3);
+        let oldest = header_id(1);
+
+        assert!(
+            validate_immutable_ids_on_path(
+                &[newest, oldest],
+                &[lib, newest, header_id(2), oldest],
+                true,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn immutable_index_rejects_conflicting_branch() {
+        let lib = header_id(4);
+        let canonical = header_id(1);
+        let stale = header_id(9);
+
+        let result = validate_immutable_ids_on_path(
+            &[canonical, stale],
+            &[lib, header_id(3), header_id(2), canonical],
+            false,
+        );
+
+        assert!(
+            result
+                .expect_err("off-chain immutable ID must fail validation")
+                .contains("missing indexed header")
+        );
+    }
+
+    #[test]
+    fn immutable_index_rejects_unanchored_single_block() {
+        let result =
+            validate_immutable_ids_on_path(&[header_id(9)], &[header_id(4), header_id(3)], false);
+
+        assert!(result.is_err());
+    }
 }

@@ -73,4 +73,4 @@ unused-allowed-org = "deny"
 unused-allowed-source = "deny"
 
 [sources.allow-org]
-github = ["3esmit", "logos-co"]
+github = ["3esmit"]

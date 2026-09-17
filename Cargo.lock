@@ -5389,7 +5389,6 @@ dependencies = [
  "logos-blockchain-utils",
  "logos-blockchain-wallet",
  "overwatch",
- "rpds",
  "serde",
  "thiserror 2.0.18",
  "tokio",

@@ -422,7 +422,7 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
         config,
-        lb_cryptarchia_engine::State::Bootstrapping,
+        State::Bootstrapping,
         Slot::new(0),
         0,
         UncleSlots::default(),

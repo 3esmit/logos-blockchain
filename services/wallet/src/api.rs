@@ -34,7 +34,7 @@ use crate::{
 #[derive(Debug, thiserror::Error)]
 pub enum WalletApiError {
     #[error("Failed to relay message with wallet: {0}")]
-    RelaySend(#[from] OutboundRelayError<WalletMsg>),
+    RelaySend(#[source] Box<OutboundRelayError<WalletMsg>>),
     #[error("Failed to recv message from wallet: {0}")]
     RelayRecv(#[from] RecvError),
     #[error(transparent)]
@@ -43,6 +43,12 @@ pub enum WalletApiError {
     TxBuilderError(#[from] TxBuilderError),
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
+}
+
+impl From<OutboundRelayError<WalletMsg>> for WalletApiError {
+    fn from(error: OutboundRelayError<WalletMsg>) -> Self {
+        Self::RelaySend(Box::new(error))
+    }
 }
 
 pub trait WalletServiceData:

@@ -346,7 +346,7 @@ where
                 .with_jitter(),
         )
         .notify(|_, delay| {
-            debug!(target: LOG_TARGET, "no connected peer returned a tip; retrying in {delay:?}")
+            debug!(target: LOG_TARGET, "no connected peer returned a tip; retrying in {delay:?}");
         })
         .await
 }
@@ -805,6 +805,8 @@ mod tests {
     fn config(peers: HashSet<NodeId>) -> IbdConfig<NodeId> {
         IbdConfig {
             peers,
+            discover_connected_peers: false,
+            max_connected_peers_to_sample: 0,
             tips_fetch_max_attempts: 3,
             tips_fetch_min_delay: Duration::from_millis(250),
             tips_fetch_max_delay: Duration::from_secs(1),

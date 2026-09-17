@@ -63,14 +63,14 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Enter the [logos-blockchain-module] repository locally.
 - [ ] Branch out from the latest `master` commit with a release branch named `release/X.Y.Z`. If this is not the first release candidate for this version, HARD reset the branch on top of `master` and force-push the new tip
 - [ ] Bump the `logos-blockchain.url` input in the `flake.nix` file: `logos-blockchain.url = "github:logos-blockchain/logos-blockchain?ref=X.Y.Z-rc.N";`
-- [ ] Set the version to `0.0.999` inside the `metadata.json` file
+- [ ] Set the version to `X.Y.Z-rc.N` inside the `metadata.json` file
 - [ ] Re-generate the `flake.lock` file using the command `nix flake lock`
 - [ ] Commit the changes and tag them with `X.Y.Z-rc.N`
 - [ ] Push the commit and the tag
-- [ ] Enter the [logos-modules-release] repository locally. If you just cloned the repository, run `git submodule update --init --recursive`
+- [ ] Enter the [blockchain-modules-release] repository locally. If you just cloned the repository, run `git submodule update --init --recursive`
 - [ ] Branch out from the latest `master` commit with a release branch named `blockchain-module-X.Y.Z-rc.N`
 - [ ] Navigate to the `submodules/logos-blockchain-module` directory and checkout the `X.Y.Z-rc.N` tag
-- [ ] Commit the changes to the [logos-modules-release] repository
+- [ ] Commit the changes to the [blockchain-modules-release] repository
 - [ ] Manually trigger the [logos-blockchain-module-workflow] workflow with the `Force build` option selected from the `blockchain-module-X.Y.Z-rc.N` branch
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next step
@@ -114,5 +114,5 @@ Most of the template content is the same or very similar to what is in `release.
 [github-release-candidate-section]: #release-candidate-publication
 [node-docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml
 [logos-blockchain-module]: https://github.com/logos-blockchain/logos-blockchain-module
-[logos-modules-release]: https://github.com/logos-co/logos-modules-release
+[blockchain-modules-release]: https://github.com/logos-blockchain/blockchain-modules-release
 [logos-blockchain-module-workflow]: https://github.com/logos-co/logos-modules-release/actions/workflows/release-logos-blockchain-module.yml

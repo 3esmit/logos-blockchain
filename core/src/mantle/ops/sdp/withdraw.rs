@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use lb_log_targets::mantle;
 use tracing::debug;
 
@@ -7,16 +7,20 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Value,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        batch::DeferredZkpVerification,
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
-            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
+            VerifiableOperation,
+            verification_mode::{StandardMode, VerificationMode},
         },
-        ops::SignedOp,
-        transactions::{hash::TxHashView, states::VerificationState},
+        ops::SignedOperation,
+        transactions::{
+            hash::TxHashView,
+            states::{Preverified, Unverified, Verified},
+        },
     },
-    sdp::{self, locked_notes::LockedNotes},
+    sdp::{self, service_notes::ServiceNotes},
 };
 
 const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
@@ -24,102 +28,113 @@ const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
 pub struct SDPWithdrawValidationContext<'a> {
     pub declarations: &'a Declarations,
     pub epoch: Epoch,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub tx_hash_view: &'a TxHashView,
 }
 
 pub struct SDPWithdrawExecutionContext {
     pub declarations: Declarations,
-    pub locked_notes: LockedNotes,
+    pub service_notes: ServiceNotes,
     pub epoch: Epoch,
 }
 
 impl ProvableOperation for SDPWithdrawOp {
     type Proof = ZkSignature;
+    const CODE: u8 = 0x21;
 }
 
 impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
     const GAS_COST: Gas = Gas::new(590);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
+impl OpGasCalculator<MainnetGasProfile> for SDPWithdrawOp {}
+
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<SDPWithdrawOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = SdpError;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
+impl VerifiableOperation<StandardMode>
+    for SignedOperation<SDPWithdrawOp, Preverified, StandardMode>
+{
     type Context<'a> = SDPWithdrawValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
         // Check that the declaration exists
-        let Some(declaration) = context.declarations.get(&self.declaration_id) else {
-            return Err(SdpError::DeclarationNotFound(self.declaration_id));
+        let Some(declaration) = context.declarations.get(&operation.declaration_id) else {
+            return Err(SdpError::DeclarationNotFound(operation.declaration_id));
         };
 
         // Check that the declaration hasn't been already scheduled to be withdrawn.
         if let Some(withdraw_at) = declaration.withdraw_at {
             return Err(SdpError::DeclarationWithdrawn {
-                declaration_id: self.declaration_id,
+                declaration_id: operation.declaration_id,
                 withdraw_at,
             });
         }
 
-        // Check that the locked note is locked for this service
+        // Check that the service note is used for this service
         if !context
-            .locked_notes
-            .is_locked_for_service(&self.locked_note_id, &declaration.service_type)
+            .service_notes
+            .is_used_for_service(&operation.service_note_id, &declaration.service_type)
         {
-            return Err(SdpError::NoteNotLockedForService {
-                note_id: self.locked_note_id,
+            return Err(SdpError::NoteNotUsedForService {
+                note_id: operation.service_note_id,
                 service_type: declaration.service_type,
             });
         }
 
-        // Check that the locked note exist (it corresponds to the declaration locked
+        // Check that the service note exists (it corresponds to the declaration service
         // note)
-        if declaration.locked_note_id != self.locked_note_id {
-            return Err(SdpError::InvalidLockedNote {
-                note_id: self.locked_note_id,
-                expected: declaration.locked_note_id,
+        if declaration.service_note_id != operation.service_note_id {
+            return Err(SdpError::InvalidServiceNote {
+                note_id: operation.service_note_id,
+                expected: declaration.service_note_id,
             });
         }
 
-        // Ensure locked note pk and zk_id attached to this declaration authorized this
-        // Operation.
-        let note = context
-            .locked_notes
-            .get(&self.locked_note_id)
-            .expect("The Operation has been checked above");
-        if !ZkPublicKey::verify_multi(
-            &[note.pk, declaration.zk_id],
-            context.tx_hash_view.as_fr(),
-            proof,
-        ) {
-            return Err(SdpError::InvalidZkSignature);
-        }
-
         // Check that the nonce is greater than the previous one
-        if self.nonce <= declaration.nonce {
+        if operation.nonce <= declaration.nonce {
             return Err(SdpError::InvalidNonce {
-                message_nonce: self.nonce,
+                message_nonce: operation.nonce,
                 declaration_nonce: declaration.nonce,
             });
         }
 
-        Ok(())
+        // Defer the proof verification so that the caller can batch it.
+        // Ensure service note pk and zk_id attached to this declaration authorized this
+        // Operation.
+        let note = context
+            .service_notes
+            .get(&operation.service_note_id)
+            .expect("The Operation has been checked above");
+        let inputs = public_inputs_from_pks(
+            (*context.tx_hash_view.as_fr()).into(),
+            &[note.pk, declaration.zk_id],
+        )
+        .map_err(|_| SdpError::InvalidZkSignature)?;
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *self.proof().as_proof(),
+            inputs,
+        )))
     }
 }
 
-impl ExecutableOperation for SDPWithdrawOp {
+impl<Mode: VerificationMode> ExecutableOperation
+    for SignedOperation<SDPWithdrawOp, Verified, Mode>
+{
     type Context<'a> = SDPWithdrawExecutionContext;
     type Error = SdpError;
 
@@ -127,9 +142,11 @@ impl ExecutableOperation for SDPWithdrawOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         let declaration = context
             .declarations
-            .get_mut(&self.declaration_id)
+            .get_mut(&operation.declaration_id)
             .expect("The operation should have been validated");
 
         // Delay the withdrawal by `SNAPSHOT_FINALIZATION_DELAY` epochs
@@ -139,7 +156,7 @@ impl ExecutableOperation for SDPWithdrawOp {
         // epochs ago.
         // The note will be unlocked once the withdrawn epoch set here is reached.
         declaration.withdraw_at = Some(context.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
-        declaration.nonce = self.nonce;
+        declaration.nonce = operation.nonce;
 
         debug!(
             target: LOG_TARGET,
@@ -150,13 +167,5 @@ impl ExecutableOperation for SDPWithdrawOp {
         );
 
         Ok((context, Vec::new()))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<SDPWithdrawOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }

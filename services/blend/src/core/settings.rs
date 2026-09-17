@@ -1,13 +1,14 @@
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
 use lb_core::blend::core_quota;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
-use lb_utils::math::NonNegativeF64;
+use lb_utils::math::PositiveF64;
+use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
 
-use crate::settings::TimingSettings;
+use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
 
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
@@ -23,6 +24,7 @@ pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
+    pub abstain_on_failure: bool,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -38,6 +40,8 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub minimum_network_size: NonZeroU64,
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
+    pub pow_mining_pool: Arc<ThreadPool>,
+    pub abstain_on_failure: bool,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
@@ -82,6 +86,14 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             num_blend_layers: self.num_blend_layers,
         }
     }
+
+    #[must_use]
+    pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
+        max_data_message_delay_in_rounds(
+            self.num_blend_layers,
+            self.scheduler.delayer.maximum_release_delay_in_rounds,
+        )
+    }
 }
 
 impl<BackendSettings, NetworkSettings> StorageRecoverySettings
@@ -103,7 +115,7 @@ pub struct SchedulerSettings {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
-    pub message_frequency_per_round: NonNegativeF64,
+    pub message_frequency_per_round: PositiveF64,
 }
 
 #[cfg(test)]

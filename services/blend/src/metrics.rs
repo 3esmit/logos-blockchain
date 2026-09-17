@@ -1,4 +1,6 @@
 mod imp {
+    use crate::message::DataPayloadType;
+
     const ACTION_PUBLISH: &str = "publish";
     const ACTION_FORWARD: &str = "forward";
 
@@ -45,14 +47,6 @@ mod imp {
         lb_tracing::increase_counter_u64!(blend_messages_sent_total, 1, action = ACTION_FORWARD);
     }
 
-    pub fn outbound_forward_err() {
-        lb_tracing::increase_counter_u64!(
-            blend_outbound_messages_failed_total,
-            1,
-            action = ACTION_FORWARD
-        );
-    }
-
     pub fn inbound_message_ok() {
         lb_tracing::increase_counter_u64!(blend_messages_received_total, 1);
     }
@@ -75,6 +69,16 @@ mod imp {
     /// caught doing — an invalid `PoQ` among the reasons.
     pub fn core_peer_blocked(reason: &'static str) {
         lb_tracing::increase_counter_u64!(blend_core_peers_blocked_total, 1, reason = reason);
+    }
+
+    /// Reports a data payload the Blend network failed to deliver within the
+    /// delivery deadline, and that this node therefore broadcast in the clear.
+    pub fn data_payload_bypassed_blend(payload_type: DataPayloadType) {
+        lb_tracing::increase_counter_u64!(
+            blend_payloads_bypassed_total,
+            1,
+            payload_type = payload_type.as_ref()
+        );
     }
 }
 

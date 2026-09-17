@@ -15,10 +15,12 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::TxEvent,
     mantle::{
+        batch::DeferredZkpVerification,
         channel::Channels,
+        ledger::verification_mode::VerificationMode,
         ops::{OpId, channel::ChannelId},
     },
-    sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
+    sdp::{Declaration, DeclarationId, service_notes::ServiceNotes},
 };
 
 // ==============================================================================
@@ -40,37 +42,35 @@ pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 pub mod verification_mode {
     pub trait VerificationMode {}
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct GenesisMode;
     impl VerificationMode for GenesisMode {}
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct StandardMode;
     impl VerificationMode for StandardMode {}
 }
 
 pub trait ProvableOperation {
     type Proof;
+    const CODE: u8;
 }
 
-pub trait PreverifiableOperation<Mode: verification_mode::VerificationMode>:
-    ProvableOperation
-{
+pub trait PreverifiableOperation<Mode: VerificationMode> {
     type Context<'a>;
     type Error;
 
-    fn preverify(
+    fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error>;
+}
+
+pub trait VerifiableOperation<Mode: VerificationMode> {
+    type Context<'a>;
+    type Error;
+
+    fn verify(
         &self,
-        proof: &Self::Proof,
         context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error>;
-}
-
-pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
-    ProvableOperation
-{
-    type Context<'a>;
-    type Error;
-
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error>;
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error>;
 }
 
 pub trait ExecutableOperation {
@@ -83,21 +83,6 @@ pub trait ExecutableOperation {
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error>;
 }
 
-pub trait Operation<Mode: verification_mode::VerificationMode>:
-    ProvableOperation + PreverifiableOperation<Mode> + VerifiableOperation<Mode> + ExecutableOperation
-{
-}
-
-impl<
-    T: ProvableOperation
-        + PreverifiableOperation<Mode>
-        + VerifiableOperation<Mode>
-        + ExecutableOperation,
-    Mode: verification_mode::VerificationMode,
-> Operation<Mode> for T
-{
-}
-
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
 pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
@@ -107,8 +92,8 @@ pub type Value = u64;
 pub enum InputsError {
     #[error("Note: {0:?} isn't in the ledger")]
     InexistingNote(NoteId),
-    #[error("Locked note: {0:?}")]
-    LockedNote(NoteId),
+    #[error("Service note: {0:?}")]
+    ServiceNote(NoteId),
     #[error("Channel note: {0:?}")]
     ChannelNote(NoteId),
     #[error("Note is not a channel note of the expected channel: {0:?}")]
@@ -311,17 +296,17 @@ impl Inputs {
     }
 
     /// Validates that every input is spendable as a regular note: unique,
-    /// unlocked, not owned by a channel, and present in the ledger.
+    /// not in service, not owned by a channel, and present in the ledger.
     ///
     /// This is the `assert_spendable(inputs, None)` case of the spec.
     pub fn validate_not_in_channel(
         &self,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         channels: &Channels,
         utxos: &Utxos,
     ) -> Result<(), InputsError> {
         self.validate_uniqueness()?;
-        self.validate_unlocked_and_present(locked_notes, utxos)?;
+        self.validate_not_in_service_and_present(service_notes, utxos)?;
         for input in &self.0 {
             // A channel note is owned by a channel and cannot be spent directly.
             if channels.is_channel_note(input) {
@@ -332,19 +317,19 @@ impl Inputs {
     }
 
     /// Validates that every input is spendable as a channel note of
-    /// `channel_id`: unique, unlocked, present in the ledger, and registered as
-    /// a channel note owned by `channel_id`.
+    /// `channel_id`: unique, not in service, present in the ledger, and
+    /// registered as a channel note owned by `channel_id`.
     ///
     /// This is the `assert_spendable(inputs, channel_id)` case of the spec.
     pub fn validate_in_channel(
         &self,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         channels: &Channels,
         channel_id: &ChannelId,
         utxos: &Utxos,
     ) -> Result<(), InputsError> {
         self.validate_uniqueness()?;
-        self.validate_unlocked_and_present(locked_notes, utxos)?;
+        self.validate_not_in_service_and_present(service_notes, utxos)?;
         for input in &self.0 {
             if !channels.is_channel_note_of(input, channel_id) {
                 return Err(InputsError::NotAChannelNote(*input));
@@ -361,15 +346,15 @@ impl Inputs {
         Ok(())
     }
 
-    fn validate_unlocked_and_present(
+    fn validate_not_in_service_and_present(
         &self,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         utxos: &Utxos,
     ) -> Result<(), InputsError> {
         for input in &self.0 {
-            // Check the note isn't locked
-            if locked_notes.contains(input) {
-                return Err(InputsError::LockedNote(*input));
+            // Check the note isn't a service note
+            if service_notes.contains(input) {
+                return Err(InputsError::ServiceNote(*input));
             }
             // Check the note exist in the ledger
             if !utxos.contains(input) {
@@ -454,6 +439,16 @@ impl<'input> IntoIterator for &'input Inputs {
 )]
 #[serde(transparent)]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for NoteId {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        lb_utils::openapi::hex_bytes_schema(size_of::<lb_groth16::FrBytes>())
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for NoteId {}
 
 impl NoteId {
     #[must_use]

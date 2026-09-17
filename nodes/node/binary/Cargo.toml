@@ -26,9 +26,9 @@ lb-blend-service                 = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
 lb-chain-network-service         = { workspace = true }
-lb-chain-service                 = { workspace = true }
-lb-core                          = { workspace = true }
-lb-cryptarchia-engine            = { workspace = true }
+lb-chain-service                 = { features = ["openapi"], workspace = true }
+lb-core                          = { features = ["openapi"], workspace = true }
+lb-cryptarchia-engine            = { features = ["openapi"], workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
@@ -37,6 +37,7 @@ lb-libp2p                        = { workspace = true }
 lb-log-targets                   = { workspace = true }
 lb-network-service               = { workspace = true }
 lb-pol                           = { workspace = true }
+lb-pow-service                   = { workspace = true }
 lb-sdp-service                   = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-storage-service               = { workspace = true }
@@ -44,9 +45,9 @@ lb-system-sig-service            = { workspace = true }
 lb-time-service                  = { features = ["ntp"], workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
-lb-tui-zone                      = { workspace = true }
 lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
 lb-utils                         = { features = ["time"], workspace = true }
+lb-version                       = { workspace = true }
 lb-wallet-service                = { workspace = true }
 libp2p                           = { features = ["autonat", "gossipsub", "identify", "kad", "macros"], workspace = true }
 num-bigint                       = { workspace = true }
@@ -64,7 +65,7 @@ tracing                          = { workspace = true }
 url                              = { workspace = true }
 
 # openapi related dependencies
-utoipa = { workspace = true }
+utoipa = { features = ["macros"], workspace = true }
 # XCompiling from Unix has issues downloading assets. Also, building with Nix can't download assets.
 utoipa-swagger-ui = { features = ["axum", "vendored"], workspace = true }
 
@@ -80,6 +81,7 @@ validator  = { features = ["derive"], workspace = true }
 tikv-jemallocator = { optional = true, workspace = true }
 
 [dev-dependencies]
+boon             = { workspace = true }
 bytes            = { workspace = true }
 rand             = { workspace = true }
 serde_urlencoded = { workspace = true }

@@ -1,7 +1,4 @@
-use core::{
-    cell::{Cell, RefCell},
-    convert::Infallible,
-};
+use core::cell::{Cell, RefCell};
 
 use async_trait::async_trait;
 use lb_blend::{
@@ -10,7 +7,7 @@ use lb_blend::{
         encap::ProofsVerifier,
     },
     proofs::{
-        quota::{ProofOfQuota, VerifiedProofOfQuota},
+        quota::{KeyIndex, ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     },
     scheduling::message_blend::provers::{
@@ -22,6 +19,27 @@ use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use tokio::sync::watch;
 
+thread_local! {
+    /// Records the core key index each [`MockCoreAndLeaderProofsGenerator`] was
+    /// built to start from, so tests can assert that a recovered quota reaches
+    /// the generator rather than it silently restarting at zero. Reliable
+    /// because `#[tokio::test]` uses a single-threaded runtime, so the value is
+    /// test-isolated.
+    static STARTING_CORE_KEY_INDICES: RefCell<Vec<KeyIndex>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Clears the record of generator starting key indices. Call before the code
+/// under test to isolate the constructions of interest.
+pub fn reset_starting_core_key_indices() {
+    STARTING_CORE_KEY_INDICES.with(|indices| indices.borrow_mut().clear());
+}
+
+/// Returns the starting key index of every generator built since the last
+/// reset, in construction order.
+pub fn recorded_starting_core_key_indices() -> Vec<KeyIndex> {
+    STARTING_CORE_KEY_INDICES.with(|indices| indices.borrow().clone())
+}
+
 pub struct MockCoreAndLeaderProofsGenerator;
 
 #[async_trait]
@@ -30,8 +48,10 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 {
     fn new(
         _settings: ProofsGeneratorSettings,
+        starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
+        STARTING_CORE_KEY_INDICES.with(|indices| indices.borrow_mut().push(starting_key_index));
         Self
     }
 
@@ -41,8 +61,6 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         _target_epoch: Epoch,
     ) {
     }
-
-    fn drop_pow_proofs_stream(&mut self) {}
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
@@ -54,35 +72,6 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 
     async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MockProofsVerifier;
-
-impl ProofsVerifier for MockProofsVerifier {
-    type Error = Infallible;
-
-    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self
-    }
-
-    fn verify_proof_of_quota(
-        &self,
-        proof: ProofOfQuota,
-        _signing_key: &Ed25519PublicKey,
-    ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        Ok(VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
-    }
-
-    fn verify_proof_of_selection(
-        &self,
-        proof: ProofOfSelection,
-        _inputs: &VerifyInputs,
-    ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        Ok(VerifiedProofOfSelection::from_proof_of_selection_unchecked(
-            proof,
-        ))
     }
 }
 
@@ -142,7 +131,7 @@ pub fn mock_blend_proof() -> BlendLayerProof {
     BlendLayerProof {
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
         proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
-        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_chacha_rng(),
     }
 }
 
@@ -186,6 +175,7 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 {
     fn new(
         _settings: ProofsGeneratorSettings,
+        _starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
         Self
@@ -197,8 +187,6 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         _target_epoch: Epoch,
     ) {
     }
-
-    fn drop_pow_proofs_stream(&mut self) {}
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
@@ -213,6 +201,48 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         gate.wait_for(|open| *open)
             .await
             .expect("the gate should outlive the generator");
+        Some(mock_blend_proof())
+    }
+}
+
+/// A generator whose leadership branch, like the real one, has nothing to give
+/// until this epoch's secret `PoL` info arrives.
+///
+/// `RealCoreAndLeaderProofsGenerator` holds its leader generator behind an
+/// `Option` that `set_epoch_private` fills, and returns `None` until then — so
+/// a proposal encapsulated before that point fails outright rather than
+/// waiting.
+pub struct PolAwareProofsGenerator {
+    leadership_available: bool,
+}
+
+#[async_trait]
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
+    for PolAwareProofsGenerator
+{
+    fn new(
+        _settings: ProofsGeneratorSettings,
+        _starting_key_index: KeyIndex,
+        _core_proof_of_quota_generator: CorePoQGenerator,
+    ) -> Self {
+        Self {
+            leadership_available: false,
+        }
+    }
+
+    fn set_epoch_private(&mut self, _: WinningPolInfoStream, _: Epoch) {
+        self.leadership_available = true;
+    }
+
+    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
+    }
+
+    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        self.leadership_available.then(mock_blend_proof)
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
     }
 }

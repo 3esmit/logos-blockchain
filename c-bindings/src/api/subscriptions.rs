@@ -6,6 +6,7 @@ use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
     mantle::{
+        ledger::verification_mode::StandardMode,
         traits::{Hashable, StorageSize, hashable},
         transactions::{
             hash::TxHash,
@@ -14,7 +15,7 @@ use lb_core::{
     },
 };
 use lb_node::{
-    ApiStorageAdapter, RocksBackend, RuntimeServiceId, SignedMantleTx, StorageService,
+    ApiStorageAdapter, RocksBackend, RuntimeServiceId, SignedOps, StorageService,
     api::serializers::blocks::ApiProcessedBlockEventOwned, generic_services::CryptarchiaService,
 };
 use serde::Serialize;
@@ -33,11 +34,11 @@ use crate::{
 pub struct TxWithId {
     id: TxHash,
     #[serde(flatten)]
-    tx: SignedMantleTx<Unverified>,
+    tx: SignedOps<Unverified, StandardMode>,
 }
 
 impl TxWithId {
-    pub(crate) fn new(tx: SignedMantleTx<Unverified>) -> Self {
+    pub(crate) fn new(tx: SignedOps<Unverified, StandardMode>) -> Self {
         let id = tx.hash();
         Self { id, tx }
     }
@@ -47,8 +48,8 @@ impl Hashable for TxWithId {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
     const HASHER: hashable::Hasher<Self> =
-        |tx| <SignedMantleTx<Unverified> as Hashable>::HASHER(&tx.tx);
-    type Hash = <SignedMantleTx<Unverified> as Hashable>::Hash;
+        |tx| <SignedOps<Unverified, StandardMode> as Hashable>::HASHER(&tx.tx);
+    type Hash = <SignedOps<Unverified, StandardMode> as Hashable>::Hash;
 
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()
@@ -69,15 +70,6 @@ pub fn subscribe_to_new_blocks_sync(
     let runtime_handler = node.get_runtime_handle();
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
-        let Ok(relay) = overwatch
-            .relay::<CryptarchiaService<RuntimeServiceId>>()
-            .await
-        else {
-            return OperationStatus::error(
-                OperationStatusCode::RelayError,
-                "Failed to get relay to CryptarchiaService.",
-            );
-        };
         let Ok(storage_relay) = overwatch.relay::<StorageService>().await else {
             return OperationStatus::error(
                 OperationStatusCode::RelayError,
@@ -85,15 +77,16 @@ pub fn subscribe_to_new_blocks_sync(
             );
         };
         let api =
-            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>::new(
-                relay,
-            );
+            CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>>::from_overwatch_handle(
+                overwatch,
+            )
+            .await;
         match api.subscribe_new_blocks().await {
             Ok(mut block_stream) => {
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
                         let relay = storage_relay.clone();
-                        let res: Result<Option<CoreBlock<SignedMantleTx<Unverified>>>, _> =
+                        let res: Result<Option<CoreBlock<SignedOps<Unverified, StandardMode>>>, _> =
                             ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
                                 .await;
                         if let Ok(Some(block)) = res {
@@ -191,7 +184,7 @@ pub fn subscribe_to_processed_blocks_sync(
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
-            SignedMantleTx<Preverified>,
+            SignedOps<Preverified, StandardMode>,
             RocksBackend,
             CryptarchiaService<RuntimeServiceId>,
             RuntimeServiceId,
@@ -328,17 +321,21 @@ pub unsafe extern "C" fn subscribe_to_lib_blocks(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{traits::Hashable as _, transactions::states::Unverified};
+    use lb_core::mantle::{
+        ledger::verification_mode::StandardMode, traits::Hashable as _,
+        transactions::states::Unverified,
+    };
 
-    use super::{SignedMantleTx, TxHash, TxWithId};
+    use super::{SignedOps, TxHash, TxWithId};
 
     #[test]
     fn transaction_with_id_serializes_the_hash_accepted_by_get_transaction() {
-        let transaction = serde_json::from_value::<SignedMantleTx<Unverified>>(serde_json::json!({
-            "mantle_tx": { "ops": [] },
-            "ops_proofs": []
-        }))
-        .expect("empty transaction should deserialize");
+        let transaction =
+            serde_json::from_value::<SignedOps<Unverified, StandardMode>>(serde_json::json!({
+                "mantle_tx": { "ops": [] },
+                "ops_proofs": []
+            }))
+            .expect("empty transaction should deserialize");
         let expected_hash = transaction.hash();
         let original =
             serde_json::to_value(&transaction).expect("signed transaction should serialize");

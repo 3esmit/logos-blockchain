@@ -9,9 +9,20 @@ use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions, UncleHeaders},
     mantle::{
-        Note, SignedMantleTx, Utxo,
-        ops::leader_claim::{VoucherCm, VoucherSecret},
-        transactions::states::Preverified,
+        Note, Op, OpProof, SignedOps, Utxo,
+        channel::Channels,
+        gas::{MainnetGasProfile, TxGasCalculator as _},
+        ledger::{Inputs, Outputs, verification_mode::StandardMode},
+        ops::{
+            leader_claim::{VoucherCm, VoucherSecret},
+            transfer::TransferOp,
+        },
+        traits::Hashable as _,
+        transactions::{
+            GasPrices, OpProofs, Ops,
+            states::{Preverified, Unverified},
+            tx_list::ops::OpsGasContext,
+        },
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
@@ -22,7 +33,7 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     LedgerState,
-    config::{BlendPoWConfig, ModulusShift, PoWConfig},
+    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_storage_service::{
@@ -82,15 +93,17 @@ fn cryptarchia_switch_to_online() {
         )
         .expect("should find a winning slot");
 
+        let block_header_id = block.header().id();
+        let block_header_slot = block.header().slot();
         let (pruned_blocks, reorged_blocks, _) = cryptarchia
-            .try_apply_block(&block, block.header().slot())
+            .try_apply_block(block, block_header_slot)
             .unwrap();
         // No block should be pruned since LIB is not updated during Bootstrapping
         assert!(pruned_blocks.is_empty());
         assert!(reorged_blocks.is_empty());
 
-        block_ids.push(block.header().id());
-        slot = block.header().slot().strict_add(1.into());
+        block_ids.push(block_header_id);
+        slot = block_header_slot.strict_add(1.into());
     }
 
     // Now, the chain is [G, B1, B2, B3].
@@ -327,7 +340,7 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
     let relays = CryptarchiaConsensusRelays::<
-        SignedMantleTx<Preverified>,
+        SignedOps<Preverified, StandardMode>,
         RocksBackend,
         TestRuntimeServiceId,
     >::new(
@@ -363,7 +376,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     drop(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
     let relays = CryptarchiaConsensusRelays::<
-        SignedMantleTx<Preverified>,
+        SignedOps<Preverified, StandardMode>,
         RocksBackend,
         TestRuntimeServiceId,
     >::new(
@@ -399,7 +412,70 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
-fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverified>>) {
+#[test]
+fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
+    let config = ledger_config(NonZero::<u32>::new(1).unwrap());
+    let (zk_key, utxo) = utxo();
+    let genesis_id: HeaderId = [0; 32].into();
+    let mut cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        State::Bootstrapping,
+        Slot::new(0),
+        0,
+        UncleSlots::default(),
+    );
+
+    let fake_key = ZkKey::from(Fr::from(42u64));
+    assert_ne!(fake_key.to_public_key(), utxo.note.pk);
+    let (block, _) = try_build_block_with_transactions(
+        &cryptarchia,
+        genesis_id,
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+        BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
+    )
+    .expect("should find a winning slot");
+
+    let block_header = block.header().clone();
+    let result = cryptarchia.try_apply_block(block, block_header.slot());
+    assert!(matches!(result, Err(Error::BatchZkpVerification(_))));
+    assert!(
+        cryptarchia.ledger.state(&block_header.id()).is_none(),
+        "ledger state should not be committed"
+    );
+    assert_eq!(cryptarchia.tip(), genesis_id, "tip should not advance");
+}
+
+/// Creates a transfer tx with a fake sig.
+fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
+    let mut output_note = Note::new(1, fake_key.to_public_key());
+    let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
+    let fees = transfer_tx(utxo, output_note, fake_key)
+        .op_refs()
+        .total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .unwrap();
+    output_note.value = utxo.note.value - fees.into_inner();
+
+    transfer_tx(utxo, output_note, fake_key)
+        .preverify()
+        .expect("a fake signature is only caught by the stateful checks")
+}
+
+fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedOps<Unverified, StandardMode> {
+    let transfer_op = TransferOp::new(Inputs::new([utxo.id()]), Outputs::new([output_note]));
+    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let op_proofs = OpProofs::from([OpProof::ZkSig(
+        ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
+    )]);
+    SignedOps::from_parts(ops, op_proofs).expect("")
+}
+
+fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, StandardMode>>) {
     let k = 3.try_into().unwrap();
     let config = ledger_config(k);
     let genesis_id = [0; 32].into();
@@ -425,6 +501,25 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverifie
     .unwrap();
 
     (cryptarchia, block)
+}
+
+/// A reward config with claiming disabled, standing in for a real deployment
+/// config in tests.
+fn disabled_reward_config() -> RewardPoWConfig {
+    RewardPoWConfig {
+        reward_pool_genesis: 1_000_000_000,
+        epoch_reward_genesis: 1_000_000,
+        initial_difficulty: ModulusShift::new::<26>(),
+        ema_smoothing_factor: 9,
+        ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
+        target_claims_per_block: 100,
+        rate_num: 0,
+        rate_den: core::num::NonZeroU64::MIN,
+        target_claim_per_block: core::num::NonZeroU64::MIN,
+        pow_share: 0,
+        share_den: core::num::NonZeroU64::MIN,
+        slot_window: core::num::NonZeroU64::new(100).unwrap(),
+    }
 }
 
 #[must_use]
@@ -479,11 +574,12 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
                 max_step: 1.try_into().unwrap(),
                 target_transactions_per_block: 1.try_into().unwrap(),
             },
+            reward: disabled_reward_config(),
         },
     }
 }
 
-/// Builds a block by grinding through slots
+/// Builds a block with no trasaction by grinding through slots
 pub fn try_build_block(
     cryptarchia: &Cryptarchia,
     parent: HeaderId,
@@ -491,7 +587,28 @@ pub fn try_build_block(
     key: &ZkKey,
     start_slot: Slot,
     uncle_headers: UncleHeaders,
-) -> Option<(Block<SignedMantleTx<Preverified>>, Ed25519Key)> {
+) -> Option<(Block<SignedOps<Preverified, StandardMode>>, Ed25519Key)> {
+    try_build_block_with_transactions(
+        cryptarchia,
+        parent,
+        utxo,
+        key,
+        start_slot,
+        uncle_headers,
+        BlockTransactions::empty(),
+    )
+}
+
+/// Builds a block carrying `transactions` by grinding through slots
+pub fn try_build_block_with_transactions(
+    cryptarchia: &Cryptarchia,
+    parent: HeaderId,
+    utxo: Utxo,
+    key: &ZkKey,
+    start_slot: Slot,
+    uncle_headers: UncleHeaders,
+    transactions: BlockTransactions<SignedOps<Preverified, StandardMode>>,
+) -> Option<(Block<SignedOps<Preverified, StandardMode>>, Ed25519Key)> {
     let start_slot: u64 = start_slot.into();
     for slot in start_slot..=(start_slot + 1000) {
         let epoch_state = cryptarchia.epoch_state_for_slot(slot.into()).unwrap();
@@ -529,7 +646,7 @@ pub fn try_build_block(
             slot.into(),
             uncle_headers,
             proof,
-            BlockTransactions::empty(),
+            transactions,
             &signing_key,
         )
         .unwrap();
@@ -579,7 +696,12 @@ pub struct TestRuntimeServiceId;
 
 impl
     AsServiceId<
-        CryptarchiaConsensus<SignedMantleTx<Preverified>, RocksBackend, SystemTimeBackend, Self>,
+        CryptarchiaConsensus<
+            SignedOps<Preverified, StandardMode>,
+            RocksBackend,
+            SystemTimeBackend,
+            Self,
+        >,
     > for TestRuntimeServiceId
 {
     const SERVICE_ID: Self = Self;

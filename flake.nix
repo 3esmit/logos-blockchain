@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     rust-overlay = {
-      url = "github:oxalica/rust-overlay/b99d48435bc3e34309d2c7ae6f7d45e77a156c38";
+      url = "github:oxalica/rust-overlay/9eccf73c5b810052f08aa77ae0548c383259f17f";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -13,7 +13,7 @@
 
     # Must stay in sync with the lbc-* tags in Cargo.toml.
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits/v0.5.6";
+      url = "github:logos-blockchain/logos-blockchain-circuits/v0.5.7";
     };
 
     # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.
@@ -24,6 +24,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       rust-overlay,
       crane,
@@ -48,7 +49,7 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
-      rustVersion = "1.97.1";
+      rustVersion = "1.98.1";
     in
     {
       packages = forAll (
@@ -57,11 +58,18 @@
           pkgs = mkPkgs system;
           rustToolchain = pkgs.rust-bin.stable.${rustVersion}.default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+          # `craneLib.filterCargoSources` keeps only *.rs, *.toml, Cargo.lock and
+          # .cargo/config, so any non-Rust file pulled in with include_str!/
+          # include_bytes! has to be allowed through explicitly or the build
+          # fails with "couldn't read ...: No such file or directory".
+          assetSuffixes = [
+            ".hex"
+            "nodes/node/binary/src/config/deployment/settings.yaml"
+          ];
           src = pkgs.lib.cleanSourceWith {
             src = craneLib.path ./.;
             filter = path: type:
-              (pkgs.lib.hasSuffix "nodes/node/binary/src/config/deployment/settings.yaml" path) ||
-              (pkgs.lib.hasSuffix ".hex" path) ||
+              (pkgs.lib.any (suffix: pkgs.lib.hasSuffix suffix path) assetSuffixes) ||
               (craneLib.filterCargoSources path type);
           };
           crateName = craneLib.crateNameFromCargoToml { inherit src; };
@@ -80,7 +88,15 @@
               pkgs.pkg-config
               pkgs.clang
               pkgs.llvmPackages.libclang.lib
+              pkgs.git
             ];
+            # The source is a git-less snapshot; give `git rev-parse HEAD` the flake's rev.
+            preBuild = pkgs.lib.optionalString (self ? rev) ''
+              if [ ! -e .git ]; then
+                git init -q
+                echo ${self.rev} > .git/HEAD
+              fi
+            '';
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             LBC_ROOT_DIR = logos-blockchain-circuits.packages.${system}.default;
             RAPIDSNARK_LIB_DIR = rust-rapidsnark.packages.${system}.rapidsnark;
@@ -88,12 +104,12 @@
             RUSTFLAGS = "-L ${pkgs.libiconv}/lib";
           };
 
-          logosBlockchainDependencies = craneLib.buildDepsOnly (commonArgs);
+          logosBlockchainDependencies = craneLib.buildDepsOnly commonArgs;
 
           logosBlockChainC = craneLib.buildPackage (
             commonArgs
             // {
-              inherit logosBlockchainDependencies;
+              cargoArtifacts = logosBlockchainDependencies;
 
               postInstall = ''
                 mkdir -p $out/include

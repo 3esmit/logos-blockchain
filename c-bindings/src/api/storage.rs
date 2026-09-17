@@ -2,9 +2,9 @@ use std::ffi::{CString, c_char};
 
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
-    mantle::transactions::states::Unverified,
+    mantle::{ledger::verification_mode::StandardMode, transactions::states::Unverified},
 };
-use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx};
+use lb_node::{RocksBackend, RuntimeServiceId, SignedOps};
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
@@ -18,7 +18,7 @@ use crate::{
 };
 
 fn block_with_transaction_ids(
-    block: &CoreBlock<SignedMantleTx<Unverified>>,
+    block: &CoreBlock<SignedOps<Unverified, StandardMode>>,
 ) -> Result<CoreBlock<TxWithId>, lb_core::block::Error> {
     let header = block.header().clone();
     let signature = *block.signature();
@@ -50,9 +50,7 @@ fn block_with_transaction_ids(
 /// A `Result` containing a JSON string representation of `Block` on success,
 /// or an [`OperationStatus`] error on failure. Returns
 /// [`OperationStatusCode::NotFound`] if no block with the given header ID
-/// exists. Each serialized transaction includes its canonical `id` as a
-/// 64-character hexadecimal string. Decode that string into a 32-byte
-/// [`TxHash`] before passing it to [`get_transaction`].
+/// exists.
 pub(crate) fn get_block_sync(
     node: &LogosBlockchainNode,
     header_id: HeaderId,
@@ -62,7 +60,7 @@ pub(crate) fn get_block_sync(
 
     let block = runtime_handle
         .block_on(lb_api_service::http::mantle::get_block::<
-            SignedMantleTx<Unverified>,
+            SignedOps<Unverified, StandardMode>,
             RocksBackend,
             RuntimeServiceId,
         >(
@@ -174,7 +172,7 @@ pub(crate) fn get_transaction_sync(
 
     let tx = runtime_handle
         .block_on(lb_api_service::http::mantle::get_transaction::<
-            SignedMantleTx<Unverified>,
+            SignedOps<Unverified, StandardMode>,
             RocksBackend,
             RuntimeServiceId,
         >(overwatch_handle, tx_hash))
@@ -277,7 +275,7 @@ pub(crate) fn get_blocks_sync(
 
     let blocks = runtime_handle
         .block_on(lb_api_service::http::mantle::get_immutable_blocks::<
-            SignedMantleTx<Unverified>,
+            SignedOps<Unverified, StandardMode>,
             RocksBackend,
             RuntimeServiceId,
         >(overwatch_handle, from_slot, to_slot))
@@ -320,10 +318,8 @@ pub type FfiGetBlocksResult = FfiStatusResult<*mut c_char>;
 
 /// Get blocks in a slot range as a JSON array string.
 ///
-/// Returns a JSON array of blocks for the specified slot range. The response
-/// is compatible with the server's block serialization and adds a canonical
-/// `id` field to each transaction as a 64-character hexadecimal string. Decode
-/// it into a 32-byte [`TxHash`] before passing it to [`get_transaction`].
+/// Returns a JSON array of blocks for the specified slot range.
+/// The JSON format matches the server's block serialization.
 ///
 /// # Arguments
 ///

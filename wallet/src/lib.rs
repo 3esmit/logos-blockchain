@@ -16,8 +16,9 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         GasProfile, NoteId, TxHash, Utxo, Value,
+        ledger::verification_mode::StandardMode,
         ops::{
-            Op, OpId as _,
+            OpId as _, OpRef,
             channel::{
                 channel_transfer::ChannelTransferOp, deposit::DepositOp,
                 withdraw::ChannelWithdrawOp,
@@ -25,9 +26,9 @@ use lb_core::{
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
-        traits::MantleTxWithProofs,
+        traits::SignedMantleTx,
         transactions::{
-            MAX_OPS_PER_TX, MantleTxContext, builder::MantleTxBuilder, mantle_tx::MantleTx as _,
+            MAX_OPS_PER_TX, builder::MantleTxBuilder, states::Preverified, tx_list::ops::OpsContext,
         },
     },
     proofs::leader_proof::LeaderProof as _,
@@ -46,7 +47,7 @@ pub use crate::voucher::{Voucher, Vouchers};
 const LOG_TARGET: &str = wallet::CORE;
 
 /// A lightweight projection of a `Block<Tx>` carrying only what the wallet
-/// needs to mirror the ledger's effect on UTXOs and the SDP lock set.
+/// needs to mirror the ledger's effect on UTXOs and the SDP service notes.
 ///
 /// `header_ops` are applied first, then `txs`, matching the ledger's
 /// header -> contents processing order.
@@ -68,7 +69,7 @@ pub struct WalletTx {
 /// A wallet-relevant effect produced by the block header processing.
 #[derive(Clone, Debug)]
 pub enum HeaderOp {
-    /// An SDP-locked note has been unlocked.
+    /// A service note has been unlocked.
     Unlock(NoteId),
     /// An SDP reward UTXO was minted.
     SdpReward(Utxo),
@@ -115,7 +116,7 @@ impl WalletBlock {
     #[must_use]
     pub fn from_block<Tx>(block: &Block<Tx>, epoch: Epoch, events: &Events) -> Self
     where
-        Tx: MantleTxWithProofs + Clone,
+        Tx: SignedMantleTx<Preverified, StandardMode, Hash = TxHash> + Clone,
     {
         // TODO: devise a better way to mirror ledger's execution always correctly: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let (header_events, tx_events) = group_events(events);
@@ -152,7 +153,7 @@ impl WalletBlock {
 pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
     pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
-    pub locked_notes: rpds::HashTrieSetSync<NoteId>,
+    pub service_notes: rpds::HashTrieSetSync<NoteId>,
     /// Notes known by the wallet but currently owned by a channel. They stay
     /// in `utxos` and are still eligible for `PoL`, but must be gated out of
     /// wallet-driven spending.
@@ -177,10 +178,10 @@ impl WalletState {
     ) -> Self {
         let mut utxos = rpds::HashTrieMapSync::new_sync();
         let mut pk_index = rpds::HashTrieMapSync::new_sync();
-        let mut locked_notes = rpds::HashTrieSetSync::new_sync();
+        let mut service_notes = rpds::HashTrieSetSync::new_sync();
         let mut channel_notes = rpds::HashTrieSetSync::new_sync();
 
-        let all_locked_notes = ledger.mantle_ledger().sdp_ledger().locked_notes();
+        let all_service_notes = ledger.mantle_ledger().sdp_ledger().service_notes();
         let channels = ledger.mantle_ledger().channels();
         for (_, (utxo, _)) in ledger.latest_utxos().utxos().iter() {
             if known_keys.contains_key(&utxo.note.pk) {
@@ -195,8 +196,8 @@ impl WalletState {
                     .insert(note_id);
                 pk_index = pk_index.insert(utxo.note.pk, note_set);
 
-                if all_locked_notes.contains(&note_id) {
-                    locked_notes = locked_notes.insert(note_id);
+                if all_service_notes.contains(&note_id) {
+                    service_notes = service_notes.insert(note_id);
                 }
 
                 // A channel note keeps the depositor's key but is owned by the channel:
@@ -211,7 +212,7 @@ impl WalletState {
         Self {
             utxos,
             pk_index,
-            locked_notes,
+            service_notes,
             channel_notes,
             epoch: ledger.epoch_state().epoch,
             vouchers: ledger.mantle_ledger().vouchers().clone(),
@@ -240,18 +241,18 @@ impl WalletState {
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-        context: &MantleTxContext,
+        context: &OpsContext,
         excluded_notes: &HashSet<NoteId>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
         // Get all UTXOs owned by the provided PKs, excluding the following notes:
         // - Notes that are being consumed/locked by the tx
-        // - Notes that are already locked in Ledger
+        // - Notes that are already service notes in Ledger
         // - Notes currently owned by a channel (deposited)
         // - Notes excluded by the caller (e.g. reserved for in-flight txs)
         let excluded_notes = tx_builder
-            .consumed_or_locked_notes()
-            .chain(self.locked_notes.iter().copied())
+            .notes_consumed_or_used_in_service()
+            .chain(self.service_notes.iter().copied())
             .chain(self.channel_notes.iter().copied())
             .chain(excluded_notes.iter().copied())
             .collect::<HashSet<_>>();
@@ -354,7 +355,7 @@ impl WalletState {
     ) -> Result<Self, WalletError> {
         let mut utxos = self.utxos.clone();
         let mut pk_index = self.pk_index.clone();
-        let mut locked_notes = self.locked_notes.clone();
+        let mut service_notes = self.service_notes.clone();
         let mut channel_notes = self.channel_notes.clone();
 
         // Header-level effects come first, matching the ledger's
@@ -364,7 +365,7 @@ impl WalletState {
                 HeaderOp::Unlock(note_id) => {
                     // When unlocking notes, we don't check if the notes are owned
                     // by the wallet because they will be ignored automatically.
-                    locked_notes.remove_mut(note_id);
+                    service_notes.remove_mut(note_id);
                 }
                 HeaderOp::SdpReward(utxo) => {
                     insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
@@ -421,7 +422,7 @@ impl WalletState {
                     }
                     WalletOp::Lock(note_id) => {
                         if utxos.contains_key(note_id) {
-                            locked_notes.insert_mut(*note_id);
+                            service_notes.insert_mut(*note_id);
                         }
                     }
                     WalletOp::LeaderClaim(utxo) | WalletOp::ClaimPoW(utxo) => {
@@ -437,7 +438,7 @@ impl WalletState {
         Ok(Self {
             utxos,
             pk_index,
-            locked_notes,
+            service_notes,
             channel_notes,
             epoch: block.epoch,
             vouchers,
@@ -534,14 +535,14 @@ fn transform_txs<Tx>(
     mut events_by_tx: HashMap<TxHash, HashMap<Hash, TxEventPayload>>,
 ) -> BlockTransactions<WalletTx>
 where
-    Tx: MantleTxWithProofs,
+    Tx: SignedMantleTx<Preverified, StandardMode, Hash = TxHash>,
 {
     txs.map_ref(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
 
-        let ops = tx.mantle_tx().ops().filter_map_ref(|op| {
-            let event = op_id(op).and_then(|id| events_by_op.remove(&id));
-            transform_op(op, event)
+        let ops = tx.op_refs().into_inner().filter_map_ref(|op_ref| {
+            let event = op_id_ref(op_ref).and_then(|id| events_by_op.remove(&id));
+            transform_op(op_ref, event)
         });
 
         WalletTx { ops }
@@ -577,43 +578,43 @@ fn group_events(
     (header_events, tx_events)
 }
 
-// TODO: move this to Op after implementing OpId for all operations
-fn op_id(op: &Op) -> Option<Hash> {
-    match op {
-        Op::LeaderClaim(o) => Some(o.op_id()),
-        Op::ChannelWithdraw(o) => Some(o.op_id()),
-        Op::ChannelDeposit(o) => Some(o.op_id()),
-        Op::Transfer(o) => Some(o.op_id()),
+fn op_id_ref(op_ref: &OpRef) -> Option<Hash> {
+    match op_ref {
+        OpRef::LeaderClaim(o) => Some(o.op_id()),
+        OpRef::ChannelWithdraw(o) => Some(o.op_id()),
+        OpRef::ChannelDeposit(o) => Some(o.op_id()),
+        OpRef::Transfer(o) => Some(o.op_id()),
         _ => None,
     }
 }
 
 /// Build a [`WalletOp`] for an op together with the event (if any) it
 /// emitted in this block. Returns `None` for ops the wallet doesn't track.
-fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
-    match op {
-        Op::Transfer(transfer) => Some(WalletOp::Transfer(transfer.clone())),
-        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(deposit.clone())),
-        Op::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
-        Op::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
-        Op::SDPDeclare(declaration) => Some(WalletOp::Lock(declaration.locked_note_id)),
-        Op::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
+fn transform_op(op: &OpRef<'_>, event: Option<TxEventPayload>) -> Option<WalletOp> {
+    match *op {
+        OpRef::Transfer(op) => Some(WalletOp::Transfer(op.clone())),
+        OpRef::ChannelDeposit(op) => Some(WalletOp::ChannelDeposit(op.clone())),
+        OpRef::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
+        OpRef::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
+        OpRef::SDPDeclare(op) => Some(WalletOp::Lock(op.service_note_id)),
+        OpRef::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
             TxEventPayload::LeaderRewardClaimed { utxo, .. } => Some(WalletOp::LeaderClaim(utxo)),
             TxEventPayload::Deposit { .. } => {
                 panic!("event for LeaderClaim op must be LeaderRewardClaimed")
             }
             TxEventPayload::PoWRewardClaimed { utxo, .. } => Some(WalletOp::ClaimPoW(utxo)),
         },
-        Op::ClaimPowReward(_) => {
+        OpRef::ClaimPowReward(_) => {
             // TODO: something to track here?
             None
         }
         // `Op::SDPWithdraw` is ignored here — the note will be unlocked
         // after the delay and the corresponding event will be handled by
         // [`HeaderOp::from`].
-        Op::ChannelInscribe(_) | Op::ChannelConfig(_) | Op::SDPWithdraw(_) | Op::SDPActive(_) => {
-            None
-        }
+        OpRef::ChannelInscribe(_)
+        | OpRef::ChannelConfig(_)
+        | OpRef::SDPWithdraw(_)
+        | OpRef::SDPActive(_) => None,
     }
 }
 
@@ -800,7 +801,7 @@ where
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-        context: &MantleTxContext,
+        context: &OpsContext,
         excluded_notes: &HashSet<NoteId>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
@@ -874,7 +875,7 @@ mod tests {
     use lb_core::{
         crypto::ZkDigest as _,
         mantle::{
-            Note, OpProof, RawMantleTx, SignedMantleTx,
+            Note, Op, OpProof, SignedOps,
             channel::Channels,
             gas::MainnetGasProfile as Gas,
             ledger::{Inputs, Outputs},
@@ -883,7 +884,7 @@ mod tests {
                 deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp},
             },
-            transactions::{GasPrices, MantleTxGasContext, Ops, OpsProofs, states::Unverified},
+            transactions::{GasPrices, OpProofs, Ops, tx_list::ops::OpsGasContext},
         },
         proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -894,11 +895,11 @@ mod tests {
         Ed25519Key, Ed25519Signature, UnsecuredZkKey, ZkSignature,
     };
     use lb_ledger::{
-        config::{BlendPoWConfig, ModulusShift, PoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_pol::LotteryConstants;
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
     use rpds::HashTrieSetSync;
@@ -1070,7 +1071,7 @@ mod tests {
             outputs: Outputs::new([Note::new(100, alice), Note::new(4, alice)]),
         };
         // immediately lock the 2nd note from `transfer1`
-        let locked_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
+        let service_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
 
         let block_1 = WalletBlock {
             id: HeaderId::from([1; 32]),
@@ -1082,7 +1083,7 @@ mod tests {
             txs: [WalletTx {
                 ops: [
                     WalletOp::Transfer(transfer1.clone()),
-                    WalletOp::Lock(locked_note),
+                    WalletOp::Lock(service_note),
                 ]
                 .into(),
             }]
@@ -1090,7 +1091,7 @@ mod tests {
         };
 
         wallet.apply_block(&block_1).unwrap();
-        assert_locked_notes(&wallet, block_1.id, [locked_note]);
+        assert_service_notes(&wallet, block_1.id, [service_note]);
         // v1 is tracked but not yet claimable (no epoch transition yet)
         assert_tracked_but_not_snapshotted_voucher(&wallet, block_1.id, &v1_cm);
 
@@ -1109,11 +1110,11 @@ mod tests {
             epoch: 2.into(),
             voucher_cm: v2_cm,
             // Unlock the previously locked note
-            header_ops: vec![HeaderOp::Unlock(locked_note)],
+            header_ops: vec![HeaderOp::Unlock(service_note)],
             txs: [WalletTx {
                 ops: [
                     WalletOp::Transfer(transfer2.clone()),
-                    // Unknown locked note that will be ignored
+                    // Unknown service note that will be ignored
                     WalletOp::Lock(NoteId::from(Fr::ONE)),
                 ]
                 .into(),
@@ -1121,7 +1122,7 @@ mod tests {
             .into(),
         };
         wallet.apply_block(&block_2).unwrap();
-        assert_locked_notes(&wallet, block_2.id, []);
+        assert_service_notes(&wallet, block_2.id, []);
         // v1 is now claimable after epoch transition
         assert_snapshotted_voucher(&wallet, block_2.id, &v1_cm);
         // v2 is ours, but not yet snapshotted
@@ -1417,14 +1418,11 @@ mod tests {
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        // Lock `utxo1` deliberately to ensure that `fund_tx` excludes locked notes
-        wallet_state.locked_notes = wallet_state.locked_notes.insert(utxo1.id());
+        // Lock `utxo1` deliberately to ensure that `fund_tx` excludes service notes
+        wallet_state.service_notes = wallet_state.service_notes.insert(utxo1.id());
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1451,7 +1449,7 @@ mod tests {
 
         let funded_tx = funded_tx_builder.build().unwrap();
 
-        if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
+        if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             // ensure alices utxo was used to pay the fee
             assert_eq!(transfer_op.inputs, Inputs::new([utxo2.id()]));
             // ensure change was returned to alice
@@ -1475,11 +1473,8 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1525,7 +1520,7 @@ mod tests {
 
         // The change output shrank by the mandatory fee and percentage tip.
         let funded_tx = funded_tx_builder.build().unwrap();
-        if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
+        if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             assert_eq!(
                 transfer_op.outputs,
                 Outputs::new([Note {
@@ -1549,11 +1544,8 @@ mod tests {
 
         // ...but with zero gas prices a transfer-less transaction owes no fee,
         // so it needs no funding at all.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(0, 0),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(0, 0)),
             leader_reward_amount: 0,
         };
         let mut tx_builder = MantleTxBuilder::new();
@@ -1581,10 +1573,7 @@ mod tests {
         // The empty transfer is dropped, so the built tx carries no transfer op.
         let funded_tx = funded_tx_builder.build().unwrap();
         assert!(
-            !funded_tx
-                .ops()
-                .iter()
-                .any(|op| matches!(op, Op::Transfer(_))),
+            !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
             "a fee-less transaction must not contain a transfer op"
         );
     }
@@ -1602,8 +1591,8 @@ mod tests {
             &ledger_config(),
         );
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(
                 ledger_state.mantle_ledger().channels(),
                 GasPrices::new(1, 1),
             ),
@@ -1645,11 +1634,8 @@ mod tests {
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1665,23 +1651,20 @@ mod tests {
     }
 
     #[test]
-    fn test_fund_tx_all_locked_notes() {
+    fn test_fund_tx_all_service_notes() {
         let alice = pk(1);
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
         let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        // Lock `utxo` deliberately to ensure that `fund_tx` excludes locked notes
-        wallet_state.locked_notes = wallet_state.locked_notes.insert(utxo.id());
+        // Lock `utxo` deliberately to ensure that `fund_tx` excludes service notes
+        wallet_state.service_notes = wallet_state.service_notes.insert(utxo.id());
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1710,11 +1693,8 @@ mod tests {
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1738,11 +1718,8 @@ mod tests {
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1776,9 +1753,7 @@ mod tests {
             .unwrap(); // successfully funded the tx
 
         // verify that no change output was used.
-        if let Op::Transfer(transfer_op) =
-            &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
-        {
+        if let Some(Op::Transfer(transfer_op)) = funded_tx_wo_change.last() {
             assert_eq!(transfer_op.outputs, Outputs::empty());
         } else {
             panic!("last op must be a transfer")
@@ -1841,12 +1816,29 @@ mod tests {
             .unwrap(); // successfully funded the tx
 
         // verify that indeed a change output was used.
-        if let Op::Transfer(transfer_op) =
-            &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
-        {
+        if let Some(Op::Transfer(transfer_op)) = funded_tx_wo_change.last() {
             assert_eq!(transfer_op.outputs, Outputs::new([Note::new(1, alice)]));
         } else {
             panic!("the last operation must be a transfer")
+        }
+    }
+
+    /// A reward config with claiming disabled, standing in for a real
+    /// deployment config in tests.
+    fn disabled_reward_config() -> RewardPoWConfig {
+        RewardPoWConfig {
+            reward_pool_genesis: 1_000_000_000,
+            epoch_reward_genesis: 1_000_000,
+            initial_difficulty: ModulusShift::new::<26>(),
+            ema_smoothing_factor: 9,
+            ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
+            target_claims_per_block: 100,
+            rate_num: 0,
+            rate_den: NonZeroU64::MIN,
+            target_claim_per_block: NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: NonZeroU64::MIN,
+            slot_window: NonZeroU64::new(100).unwrap(),
         }
     }
 
@@ -1882,7 +1874,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -1903,17 +1895,21 @@ mod tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         }
     }
 
-    fn assert_locked_notes<KeyId>(
+    fn assert_service_notes<KeyId>(
         wallet: &Wallet<KeyId, TestVoucherId>,
         tip: HeaderId,
         notes: impl IntoIterator<Item = NoteId>,
     ) {
         let wallet_state = wallet.wallet_state_at(tip).unwrap();
-        assert_eq!(wallet_state.locked_notes, HashTrieSetSync::from_iter(notes));
+        assert_eq!(
+            wallet_state.service_notes,
+            HashTrieSetSync::from_iter(notes)
+        );
     }
 
     fn assert_snapshotted_voucher<KeyId>(
@@ -1999,11 +1995,8 @@ mod tests {
 
         // `fund_tx` must also exclude the channel note: with no other
         // UTXOs available, funding a fee-paying tx must fail.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let err = state
@@ -2255,11 +2248,8 @@ mod tests {
         assert_eq!(state.balance(alice).unwrap().balance, 100);
 
         // `fund_tx` can now use the released note.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let err = state
@@ -2296,7 +2286,7 @@ mod tests {
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         });
 
-        let source_transactions: BlockTransactions<SignedMantleTx<Unverified>> = [
+        let source_transactions: BlockTransactions<SignedOps<Preverified, StandardMode>> = [
             signed_test_tx(vec![transfer, deposit]),
             signed_test_tx(vec![ignored_inscription]),
         ]
@@ -2340,19 +2330,22 @@ mod tests {
         assert!(second_wallet_tx.ops.is_empty());
     }
 
-    fn signed_test_tx(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
-        let proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
-            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-                &[0; 128],
-            ))),
-        }))
-        .expect("test proofs should fit");
+    fn signed_test_tx(ops: Vec<Op>) -> SignedOps<Preverified, StandardMode> {
+        let ops = Ops::try_from(ops).expect("test operations should fit");
+        let proofs = ops
+            .iter()
+            .map(|op| match op {
+                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+                _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                    &[0; 128],
+                ))),
+            })
+            .collect::<Vec<_>>();
+        let op_proofs = OpProofs::new_unchecked(proofs);
 
-        SignedMantleTx::new(
-            RawMantleTx(Ops::try_from(ops).expect("test operations should fit")),
-            proofs,
-        )
+        SignedOps::from_parts(ops, op_proofs)
+            .unwrap()
+            .into_preverified_trusted_standard()
     }
 
     fn test_leader_proof() -> Groth16LeaderProof {

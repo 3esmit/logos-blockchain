@@ -3,7 +3,6 @@ pub mod cli;
 pub mod config;
 pub mod generic_services;
 pub mod panic;
-pub mod version;
 
 pub mod global_allocators;
 
@@ -11,11 +10,11 @@ use std::panic::set_hook;
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
-use lb_core::mantle::transactions::states::Preverified;
+use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
 pub use lb_core::{
     codec,
     header::HeaderId,
-    mantle::{SignedMantleTx, traits::Hashable, transactions::hash::TxHash},
+    mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{
@@ -46,8 +45,9 @@ use crate::{
         RunConfig, api::ServiceConfig as ApiConfig, blend::ServiceConfig as BlendConfig,
         cryptarchia::ServiceConfig as CryptarchiaConfig, kms::ServiceConfig as KmsConfig,
         mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
-        sdp::ServiceConfig as SdpConfig, storage::ServiceConfig as StorageConfig,
-        time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
+        pow::ServiceConfig as PoWConfig, sdp::ServiceConfig as SdpConfig,
+        storage::ServiceConfig as StorageConfig, time::ServiceConfig as TimeConfig,
+        wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
@@ -64,6 +64,8 @@ pub(crate) type NetworkService =
 
 pub(crate) type BlendCoreService = generic_services::blend::BlendCoreService<RuntimeServiceId>;
 pub(crate) type BlendEdgeService = generic_services::blend::BlendEdgeService<RuntimeServiceId>;
+pub(crate) type BlendBroadcastService =
+    generic_services::blend::BlendBroadcastService<RuntimeServiceId>;
 pub(crate) type BlendService = generic_services::blend::BlendService<RuntimeServiceId>;
 
 pub(crate) type BlockBroadcastService =
@@ -89,6 +91,8 @@ pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderSe
 
 pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
+pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
+
 pub type ApiStorageAdapter<RuntimeServiceId> =
     lb_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
 
@@ -96,7 +100,7 @@ pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
         ApiStorageAdapter<RuntimeServiceId>,
-        RocksStorageAdapter<SignedMantleTx<Preverified>, TxHash>,
+        RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
         SdpRecoveryBackend<RuntimeServiceId>,
@@ -115,12 +119,14 @@ pub struct LogosBlockchain {
     blend: BlendService,
     blend_core: BlendCoreService,
     blend_edge: BlendEdgeService,
+    blend_broadcast: BlendBroadcastService,
     mempool: MempoolService,
     cryptarchia: CryptarchiaService,
     chain_network: ChainNetworkService,
     cryptarchia_leader: CryptarchiaLeaderService,
     block_broadcast: BlockBroadcastService,
     sdp: SdpService<RuntimeServiceId>,
+    pow: PoWService,
     time: TimeService,
     http: ApiService,
     storage: StorageService,
@@ -135,7 +141,18 @@ pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,
 ) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+    // Read before the deployment settings are consumed piecewise below. The
+    // chain ID is fixed by the deployment, so the API backend is handed it up
+    // front rather than querying a service for a value that cannot change.
+    let chain_id = config.deployment.chain_id();
+
     let blend_rewards_params = config.deployment.blend_reward_params();
+
+    // The PoW mining service must use the same acceptance window as consensus;
+    // read it from the cryptarchia deployment config before that config is
+    // moved into the cryptarchia service settings below.
+    let pow_slot_window = config.deployment.cryptarchia.pow_config.reward.slot_window;
+    let pow_rewards_enabled = config.deployment.cryptarchia.pow_config.reward.rate_num > 0;
 
     let storage_config = StorageConfig {
         user: config.user.storage,
@@ -190,7 +207,12 @@ pub fn run_node_from_config(
     let sdp_config = SdpConfig {
         user: config.user.sdp,
     }
-    .into_sdp_service_settings(recovery_data);
+    .into_sdp_service_settings(recovery_data.clone());
+
+    let pow_config = PoWConfig {
+        user: config.user.pow,
+    }
+    .into_pow_service_settings(recovery_data, pow_slot_window, pow_rewards_enabled);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
@@ -199,6 +221,7 @@ pub fn run_node_from_config(
 
     let api_config = ApiConfig {
         user: config.user.api,
+        chain_id,
     };
 
     let http_config = api_config.backend_settings();
@@ -208,9 +231,10 @@ pub fn run_node_from_config(
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {
             network: network_service_config,
-            blend: blend_config,
+            blend: blend_config.clone(),
             blend_core: blend_core_config,
             blend_edge: blend_edge_config,
+            blend_broadcast: blend_config.into(),
             block_broadcast: (),
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,
@@ -222,6 +246,7 @@ pub fn run_node_from_config(
             system_sig: (),
             key_management: kms_config,
             sdp: sdp_config,
+            pow: pow_config,
             wallet: wallet_config,
 
             tracing: tracing_config,
@@ -237,9 +262,13 @@ pub async fn get_services_to_start(
 ) -> Result<Vec<RuntimeServiceId>, OverwatchError> {
     let mut service_ids = app.handle().retrieve_service_ids().await?;
 
-    // Exclude core and edge blend services, which will be started
-    // on demand by the blend service.
-    let blend_inner_service_ids = [RuntimeServiceId::BlendCore, RuntimeServiceId::BlendEdge];
+    // Exclude core, edge and broadcast blend services, which will be started
+    // on demand by the blend orchestrator service.
+    let blend_inner_service_ids = [
+        RuntimeServiceId::BlendCore,
+        RuntimeServiceId::BlendEdge,
+        RuntimeServiceId::BlendBroadcast,
+    ];
     service_ids.retain(|value| !blend_inner_service_ids.contains(value));
 
     // Start tracing first so the global subscriber is installed before the

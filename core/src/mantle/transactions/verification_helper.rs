@@ -1,9 +1,11 @@
+use std::num::NonZeroU64;
+
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use rpds::HashTrieMapSync;
 
 use crate::{
-    crypto::Hash,
+    crypto::{Hash, ZkHash},
     mantle::{
         VerificationError,
         channel::Channels,
@@ -14,13 +16,13 @@ use crate::{
             pow::{PowNullifier, PowReward, PowTarget},
         },
     },
-    sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 
 pub trait OperationVerificationHelper {
     fn get_channels(&self) -> &Channels;
 
-    fn get_locked_notes(&self) -> &LockedNotes;
+    fn get_service_notes(&self) -> &ServiceNotes;
 
     fn get_utxos(&self) -> &Utxos;
 
@@ -56,9 +58,8 @@ pub trait OperationVerificationHelper {
     ) -> Result<Ed25519PublicKey, VerificationError>;
 
     // `PoW` claim validation inputs, one per
-    // [`ClaimPoWRewardVerificationContext`] field. The current epoch comes from
-    // [`Self::get_epoch`] and the current block slot from
-    // [`Self::get_block_slot`].
+    // [`ClaimPoWRewardVerificationContext`] field. The current block slot comes
+    // from [`Self::get_block_slot`].
     //
     // [`ClaimPoWRewardVerificationContext`]: crate::mantle::ops::pow::ClaimPoWRewardVerificationContext
 
@@ -75,24 +76,32 @@ pub trait OperationVerificationHelper {
     /// `R_PoW`: current balance of the `PoW` reward pool.
     fn get_pow_reward_pool(&self) -> PowReward;
 
-    /// The epoch preceding [`Self::get_epoch`], whose nonce is also accepted
-    /// for claims mined just before an epoch boundary.
-    fn get_previous_epoch(&self) -> Epoch;
+    /// Randomness nonce of the current epoch, against which a claim's
+    /// `epoch_nonce` is matched.
+    fn get_current_epoch_nonce(&self) -> ZkHash;
+
+    /// Randomness nonce of the epoch preceding [`Self::get_epoch`], also
+    /// accepted for claims mined just before an epoch boundary.
+    fn get_previous_epoch_nonce(&self) -> ZkHash;
 
     /// Slots of the blocks a claim may anchor to, keyed by block hash;
     /// used for the window-of-acceptance check.
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
+
+    /// Acceptance window, in slots, for the window-of-acceptance check.
+    /// Configured per-deployment.
+    fn get_pow_slot_window(&self) -> NonZeroU64;
 }
 
 #[cfg(test)]
 pub mod test_utils {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, num::NonZeroU64};
 
     use lb_cryptarchia_engine::{Epoch, Slot};
     use rpds::{HashTrieMapSync, HashTrieSetSync};
 
     use crate::{
-        crypto::Hash,
+        crypto::{Hash, ZkHash},
         mantle::{
             Utxo, VerificationError,
             channel::Channels,
@@ -104,13 +113,13 @@ pub mod test_utils {
             },
             transactions::OperationVerificationHelper,
         },
-        sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+        sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
     };
 
     pub struct TestOperationVerificationHelper {
         channels: Channels,
         keys: HashMap<(ChannelId, ChannelKeyIndex), Ed25519PublicKey>,
-        locked_notes: LockedNotes,
+        service_notes: ServiceNotes,
         utxos: Utxos,
         declarations: Declarations,
         min_stake: MinStake,
@@ -122,8 +131,10 @@ pub mod test_utils {
         pow_nullifiers: HashTrieMapSync<PowNullifier, Slot>,
         epoch_pow_reward: PowReward,
         pow_reward_pool: PowReward,
-        previous_epoch: Epoch,
+        current_epoch_nonce: ZkHash,
+        previous_epoch_nonce: ZkHash,
         blocks_slot: HashTrieMapSync<Hash, Slot>,
+        pow_slot_window: NonZeroU64,
     }
 
     impl TestOperationVerificationHelper {
@@ -135,7 +146,7 @@ pub mod test_utils {
             Self {
                 channels,
                 keys: keys.into_iter().collect(),
-                locked_notes: LockedNotes::new(),
+                service_notes: ServiceNotes::new(),
                 utxos: Utxos::new(),
                 declarations: Declarations::new_sync(),
                 min_stake: MinStake {
@@ -150,8 +161,10 @@ pub mod test_utils {
                 pow_nullifiers: HashTrieMapSync::new_sync(),
                 epoch_pow_reward: 0,
                 pow_reward_pool: 0,
-                previous_epoch: Epoch::from(0u32),
+                current_epoch_nonce: ZkHash::default(),
+                previous_epoch_nonce: ZkHash::default(),
                 blocks_slot: HashTrieMapSync::new_sync(),
+                pow_slot_window: NonZeroU64::new(100).expect("100 is not 0"),
             }
         }
 
@@ -196,9 +209,15 @@ pub mod test_utils {
         }
 
         #[must_use]
-        pub fn with_epochs(mut self, previous: Epoch, current: Epoch) -> Self {
-            self.previous_epoch = previous;
-            self.epoch = current;
+        pub const fn with_epoch(mut self, epoch: Epoch) -> Self {
+            self.epoch = epoch;
+            self
+        }
+
+        #[must_use]
+        pub const fn with_epoch_nonces(mut self, previous: ZkHash, current: ZkHash) -> Self {
+            self.previous_epoch_nonce = previous;
+            self.current_epoch_nonce = current;
             self
         }
 
@@ -210,6 +229,12 @@ pub mod test_utils {
             self.blocks_slot = blocks_slot.into_iter().collect();
             self
         }
+
+        #[must_use]
+        pub const fn with_pow_slot_window(mut self, slot_window: NonZeroU64) -> Self {
+            self.pow_slot_window = slot_window;
+            self
+        }
     }
 
     impl OperationVerificationHelper for TestOperationVerificationHelper {
@@ -217,8 +242,8 @@ pub mod test_utils {
             &self.channels
         }
 
-        fn get_locked_notes(&self) -> &LockedNotes {
-            &self.locked_notes
+        fn get_service_notes(&self) -> &ServiceNotes {
+            &self.service_notes
         }
 
         fn get_utxos(&self) -> &Utxos {
@@ -301,12 +326,20 @@ pub mod test_utils {
             self.pow_reward_pool
         }
 
-        fn get_previous_epoch(&self) -> Epoch {
-            self.previous_epoch
+        fn get_current_epoch_nonce(&self) -> ZkHash {
+            self.current_epoch_nonce
+        }
+
+        fn get_previous_epoch_nonce(&self) -> ZkHash {
+            self.previous_epoch_nonce
         }
 
         fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {
             self.blocks_slot.clone()
+        }
+
+        fn get_pow_slot_window(&self) -> NonZeroU64 {
+            self.pow_slot_window
         }
     }
 }

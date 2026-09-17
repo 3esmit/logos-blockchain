@@ -7,7 +7,7 @@ use lb_key_management_system_service::{
 use lb_node::{
     UserConfig,
     config::{
-        ApiConfig, CryptarchiaConfig, SdpConfig, StorageConfig, WalletConfig,
+        ApiConfig, CryptarchiaConfig, PoWConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
         sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
@@ -49,6 +49,9 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
         storage: StorageConfig::default(),
         sdp: sdp_config,
         wallet: create_wallet_config(&config.consensus_config, &config.kms_config.backend.keys),
+        // Mining defaults, auto-claim off: generated nodes mine and claim on
+        // demand, naming the destination key on each claim request.
+        pow: PoWConfig::default(),
         kms: config.kms_config,
         state: StateConfig::default(),
     }

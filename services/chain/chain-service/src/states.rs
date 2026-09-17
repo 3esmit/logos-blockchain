@@ -82,14 +82,12 @@ impl ServiceState for CryptarchiaConsensusState {
         let (lib_id, genesis_id, lib_ledger_state) = match &settings.starting_state {
             StartingState::Genesis { genesis_block } => {
                 let lib_id = genesis_block.header().id();
-                let genesis_tx = genesis_block
-                    .transactions_iter()
-                    .next()
-                    .expect("Genesis block should be valid");
+                let genesis_tx = genesis_block.genesis_tx();
+                let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
                 let (ledger, _events) = LedgerState::from_genesis_tx(
-                    genesis_tx,
+                    genesis_tx.clone(),
                     &settings.config,
-                    genesis_tx.cryptarchia_parameter().epoch_nonce,
+                    epoch_nonce,
                 )?;
                 (lib_id, lib_id, ledger)
             }
@@ -133,12 +131,31 @@ mod tests {
     };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, ModulusShift, PoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;
+
+    /// A reward config with claiming disabled, standing in for a real
+    /// deployment config in tests.
+    fn disabled_reward_config() -> RewardPoWConfig {
+        RewardPoWConfig {
+            reward_pool_genesis: 1_000_000_000,
+            epoch_reward_genesis: 1_000_000,
+            initial_difficulty: ModulusShift::new::<26>(),
+            ema_smoothing_factor: 9,
+            ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
+            target_claims_per_block: 100,
+            rate_num: 0,
+            rate_den: NonZeroU64::MIN,
+            target_claim_per_block: NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: NonZeroU64::MIN,
+            slot_window: NonZeroU64::new(100).unwrap(),
+        }
+    }
 
     #[test]
     #[expect(clippy::too_many_lines, reason = "Test function")]
@@ -177,7 +194,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -198,6 +215,7 @@ mod tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         };
 
@@ -360,7 +378,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -381,6 +399,7 @@ mod tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         };
 

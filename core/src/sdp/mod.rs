@@ -1,5 +1,5 @@
 pub mod blend;
-pub mod locked_notes;
+pub mod service_notes;
 
 use core::{
     fmt::{self, Display, Formatter},
@@ -112,6 +112,24 @@ type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LO
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
 pub struct Locator(BoundedMultiaddr);
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for Locator {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::schema::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .max_length(Some(MAX_LOCATOR_BYTE_SIZE))
+            .description(Some(
+                "Multiaddress, e.g. `/ip4/127.0.0.1/tcp/3000`.".to_owned(),
+            ))
+            .examples(["/ip4/127.0.0.1/tcp/3000"])
+            .build()
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for Locator {}
 
 impl Locator {
     #[must_use]
@@ -363,7 +381,7 @@ display_hex_bytes_newtype!(DeclarationId);
 pub struct Declaration {
     pub service_type: ServiceType,
     pub provider_id: ProviderId,
-    pub locked_note_id: NoteId,
+    pub service_note_id: NoteId,
     pub locators: Locators,
     pub zk_id: ZkPublicKey,
     /// The epoch of the block that contained the declaration
@@ -395,7 +413,7 @@ impl Declaration {
         Self {
             service_type: declaration_msg.service_type,
             provider_id: declaration_msg.provider_id,
-            locked_note_id: declaration_msg.locked_note_id,
+            service_note_id: declaration_msg.service_note_id,
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
             created: epoch,
@@ -464,7 +482,7 @@ pub struct DeclarationMessage {
     pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
-    pub locked_note_id: NoteId,
+    pub service_note_id: NoteId,
 }
 
 impl DeclarationMessage {
@@ -507,7 +525,7 @@ impl DeclarationMessage {
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
-    pub locked_note_id: NoteId,
+    pub service_note_id: NoteId,
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
@@ -521,6 +539,24 @@ pub struct ActiveMessage {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ActivityMetadata {
     Blend(Box<blend::ActivityProof>),
+}
+
+impl ActivityMetadata {
+    /// Returns the epoch whose activity is proven by this metadata.
+    #[must_use]
+    pub const fn origin_epoch(&self) -> Epoch {
+        match self {
+            Self::Blend(proof) => proof.epoch,
+        }
+    }
+
+    /// The epoch during which this activity must be submitted/accepted.
+    #[must_use]
+    pub fn submission_epoch(&self) -> Epoch {
+        match self {
+            Self::Blend(proof) => proof.epoch.strict_add(1.into()),
+        }
+    }
 }
 
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
@@ -626,11 +662,12 @@ mod tests {
     fn empty_locators_fail_to_deserialize() {
         let empty_locators = Vec::<Locator>::new();
         let serialized = serde_json::to_string(&empty_locators).unwrap();
-        assert_eq!(
+        assert!(
             serde_json::from_str::<Locators>(&serialized)
                 .unwrap_err()
-                .to_string(),
-            "Input cannot be empty."
+                .to_string()
+                .contains("Input cannot be empty."),
+            "empty locators should be rejected"
         );
     }
 
@@ -643,13 +680,13 @@ mod tests {
                 .unwrap(),
             provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
             zk_id: ZkPublicKey::zero(),
-            locked_note_id: Fr::ZERO.into(),
+            service_note_id: Fr::ZERO.into(),
         };
 
         let declaration = Declaration::new(Epoch::new(10), &msg);
         assert_eq!(declaration.service_type, msg.service_type);
         assert_eq!(declaration.provider_id, msg.provider_id);
-        assert_eq!(declaration.locked_note_id, msg.locked_note_id);
+        assert_eq!(declaration.service_note_id, msg.service_note_id);
         assert_eq!(declaration.locators, msg.locators);
         assert_eq!(declaration.zk_id, msg.zk_id);
         assert_eq!(declaration.created, Epoch::new(10));
@@ -664,7 +701,7 @@ mod tests {
             locators: locators.try_into().unwrap(),
             provider_id: Ed25519Key::from_bytes(&[1; _]).public_key().into(),
             zk_id: ZkPublicKey::new(Fr::from(3u64)),
-            locked_note_id: Fr::from(2u64).into(),
+            service_note_id: Fr::from(2u64).into(),
         }
     }
 

@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
@@ -36,12 +36,15 @@ use lb_core::crypto::ZkHash;
 use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
-use lb_poq::CorePathAndSelectors;
+use lb_poq::{CorePathAndSelectors, KeyIndex};
 use lb_sdp_service::SdpMessage;
 use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
 };
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
+use rayon::ThreadPoolBuilder;
 use tokio::sync::{
     broadcast::{self},
     mpsc, watch,
@@ -62,10 +65,10 @@ use crate::{
         tests::RuntimeServiceId,
     },
     epoch::CoreEpochPublicInfo,
-    message::{BlendPayload, NetworkInfo},
+    message::{DataPayload, NetworkInfo},
     settings::TimingSettings,
     test_utils,
-    test_utils::mempool::TestMempoolService,
+    test_utils::mocks::{TestChainNetworkService, TestMempoolService},
 };
 
 pub type NodeId = [u8; 32];
@@ -108,7 +111,25 @@ pub fn settings<BackendSettings>(
         minimum_network_size,
         data_replication_factor,
         activity_threshold_sensitivity: 1,
+        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        abstain_on_failure: false,
     }
+}
+
+/// The seed every test's release delayer is built from.
+const RELEASE_DELAY_SEED: u64 = 1;
+
+/// A release delayer that draws the same delays on every run.
+///
+/// `initialize` takes this rather than drawing from entropy so that how many
+/// rounds a message waits is a fixed property of a test rather than a fresh
+/// draw each time. Note what this does *not* buy: the delay is in whole rounds
+/// (`release_delayer` picks from `[1, max]`, never zero), so it fixes which
+/// round a message goes out on, not how that round falls against events driven
+/// from elsewhere — an epoch rotation arriving over a channel, say. A test that
+/// depends on such an ordering needs more than this.
+pub fn seeded_release_delay_rng() -> ChaCha20Rng {
+    ChaCha20Rng::seed_from_u64(RELEASE_DELAY_SEED)
 }
 
 pub fn timing_settings() -> TimingSettings {
@@ -167,9 +188,10 @@ where
     async fn publish(
         &self,
         _msg: EncapsulatedMessageWithVerifiedPublicHeader,
-        _intended_epoch: Epoch,
+        intended_epoch: Epoch,
     ) {
         note_outgoing_message();
+        note_published_epoch(intended_epoch);
     }
 
     async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>) {
@@ -246,6 +268,10 @@ thread_local! {
     /// Installed by [`record_outgoing_messages`] for the duration of a test.
     static OUTGOING_MESSAGES: RefCell<Option<mpsc::UnboundedSender<()>>> =
         const { RefCell::new(None) };
+
+    /// Installed by [`published_epochs_recorder`] for the duration of a test.
+    static PUBLISHED_EPOCHS: RefCell<Option<mpsc::UnboundedSender<Epoch>>> =
+        const { RefCell::new(None) };
 }
 
 /// Starts recording every message the service sends onwards, whether it goes
@@ -265,6 +291,24 @@ fn note_outgoing_message() {
     });
 }
 
+/// Records the epoch each message is published under, which is what tells a
+/// transitioning epoch's release apart from the current one's. Separate from
+/// [`outgoing_messages_recorder`], which also counts payloads handed to the
+/// local dispatcher and so has no epoch to report.
+pub fn published_epochs_recorder() -> mpsc::UnboundedReceiver<Epoch> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    PUBLISHED_EPOCHS.with_borrow_mut(|recorder| *recorder = Some(sender));
+    receiver
+}
+
+fn note_published_epoch(intended_epoch: Epoch) {
+    PUBLISHED_EPOCHS.with_borrow(|recorder| {
+        if let Some(sender) = recorder.as_ref() {
+            let _ = sender.send(intended_epoch);
+        }
+    });
+}
+
 pub struct TestPayloadDispatcher;
 
 #[async_trait]
@@ -273,6 +317,7 @@ where
     RuntimeServiceId: Send + 'static,
 {
     type Backend = TestNetworkBackend;
+    type ChainNetworkService = TestChainNetworkService<RuntimeServiceId>;
     type MempoolService = TestMempoolService<RuntimeServiceId>;
     type Settings = ();
 
@@ -281,13 +326,18 @@ where
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
         _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
+        _chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         _settings: Self::Settings,
     ) -> Self {
         Self
     }
 
-    async fn dispatch(&self, _payload: BlendPayload) {
+    async fn dispatch(&self, _payload: DataPayload) {
         note_outgoing_message();
+    }
+
+    async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload> {
+        stream::empty().boxed()
     }
 }
 
@@ -351,13 +401,8 @@ pub fn new_crypto_processor<CorePoQGenerator>(
     MockCoreAndLeaderProofsGenerator,
     MockProofsVerifier,
 > {
-    let minimum_network_size = u64::try_from(epoch_info.membership.size())
-        .expect("membership size must fit into u64")
-        .try_into()
-        .expect("minimum_network_size must be non-zero");
-    CoreCryptographicProcessor::try_new_with_core_condition_check(
+    CoreCryptographicProcessor::new(
         epoch_info.membership.clone(),
-        minimum_network_size,
         settings,
         PoQVerificationInputsMinusSigningKey {
             core: epoch_info.poq_core_public_inputs,
@@ -367,7 +412,6 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         core_poq_generator,
         epoch_info.epoch,
     )
-    .expect("crypto processor must be created successfully")
 }
 
 /// The [`BackendEpochInfo`] the service hands to the backend for an epoch,
@@ -453,25 +497,6 @@ thread_local! {
     static SET_EPOCH_PRIVATE_CALLS: RefCell<Vec<Epoch>> = const { RefCell::new(Vec::new()) };
 }
 
-thread_local! {
-    /// Counts the calls to
-    /// [`MockCoreAndLeaderProofsGenerator::stop_proof_generation`], so tests
-    /// can assert that an epoch rotation stops the outgoing epoch's proof
-    /// generation. Test-isolated for the same reason as above.
-    static STOP_PROOF_GENERATION_CALLS: RefCell<usize> = const { RefCell::new(0) };
-}
-
-/// Clears the count of `stop_proof_generation` calls.
-pub fn reset_stop_proof_generation_calls() {
-    STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() = 0);
-}
-
-/// How many times `stop_proof_generation` has been called since the last
-/// reset.
-pub fn recorded_stop_proof_generation_calls() -> usize {
-    STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow())
-}
-
 /// Clears the record of `set_epoch_private` calls. Call before the code under
 /// test to isolate the calls of interest.
 pub fn reset_set_epoch_private_calls() {
@@ -492,6 +517,7 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 {
     fn new(
         settings: ProofsGeneratorSettings,
+        _starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
         Self(settings.public_inputs.leader.pol_epoch_nonce)
@@ -499,10 +525,6 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 
     fn set_epoch_private(&mut self, _: WinningPolInfoStream, target_epoch: Epoch) {
         SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
-    }
-
-    fn drop_pow_proofs_stream(&mut self) {
-        STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() += 1);
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
@@ -568,7 +590,7 @@ fn epoch_based_dummy_proofs(epoch: ZkHash) -> BlendLayerProof {
             bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
             bytes
         }),
-        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_chacha_rng(),
     }
 }
 

@@ -2,10 +2,11 @@ use core::fmt::Debug;
 use std::{collections::HashMap, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _, future::join_all};
+use futures::{Stream, StreamExt as _};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
-    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Query, Slot,
+    CryptarchiaInfo, ProcessedBlockEvent, Slot,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
@@ -13,8 +14,9 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        SignedOps,
         channel::ChannelState,
+        ledger::verification_mode::StandardMode,
         ops::channel::ChannelId,
         traits::Hashable,
         transactions::{hash::TxHash, states::Preverified},
@@ -34,7 +36,7 @@ use lb_tx_service::{
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
     tx::service::openapi::Status,
 };
-use overwatch::services::{AsServiceId, ServiceData};
+use overwatch::services::AsServiceId;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
@@ -66,14 +68,14 @@ pub struct BlockWithChainState<Tx> {
 
 pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         RuntimeServiceId,
     >,
     Mempool<
         HeaderId,
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        SignedOps<Preverified, StandardMode>,
+        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         StorageAdapter,
         RuntimeServiceId,
     >,
@@ -116,8 +118,8 @@ pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
-            Item = SignedMantleTx<Preverified>,
+            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = SignedOps<Preverified, StandardMode>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -139,20 +141,20 @@ where
             reply_channel: sender,
         })
         .await
-        .map_err(|_| std::io::Error::other("mempool service relay is closed"))?;
+        .map_err(|e| e)?;
 
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
 
 pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    items: Vec<<SignedMantleTx<Preverified> as Hashable>::Hash>,
+    items: Vec<<SignedOps<Preverified, StandardMode> as Hashable>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
-            Item = SignedMantleTx<Preverified>,
+            Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
+            Item = SignedOps<Preverified, StandardMode>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -175,7 +177,7 @@ where
             reply_channel: sender,
         })
         .await
-        .map_err(|_| std::io::Error::other("mempool service relay is closed"))?;
+        .map_err(|e| e)?;
 
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
@@ -196,7 +198,7 @@ where
             result_sender: sender,
         })
         .await
-        .map_err(|_| std::io::Error::other("mempool service relay is closed"))?;
+        .map_err(|e| e)?;
 
     let broadcast_receiver = receiver.await.map_err(|e| Box::new(e) as super::DynError)?;
     let stream = BroadcastStream::new(broadcast_receiver)
@@ -216,20 +218,13 @@ pub async fn get_processed_blocks_event_stream<Transaction, Service, RuntimeServ
 >
 where
     Transaction: Send + 'static,
-    Service: ServiceData<Message = ConsensusMsg<Transaction>>,
+    Service: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug + Sync + Display + AsServiceId<Service>,
 {
-    let relay = handle.relay().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(Query::NewBlockSubscribe { sender }.into())
+    let new_blocks_receiver = CryptarchiaServiceApi::<Service>::from_overwatch_handle(handle)
         .await
-        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
-
-    let new_blocks_receiver = receiver
-        .await
-        .map_err(|error| Box::new(error) as super::DynError)?;
+        .subscribe_new_blocks()
+        .await?;
 
     let processed_blocks_stream = BroadcastStream::new(new_blocks_receiver)
         .map(|item| item.map_err(|error| Box::new(error) as crate::http::DynError));
@@ -258,7 +253,7 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    ConsensusService: ServiceData<Message = ConsensusMsg<Transaction>>,
+    ConsensusService: CryptarchiaServiceData<Tx = Transaction>,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -329,7 +324,7 @@ where
             request: StorageApiRequest::Chain(request),
         })
         .await
-        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
+        .map_err(|error| error)?;
 
     response_rx
         .await
@@ -382,8 +377,8 @@ where
 }
 
 /// Check that indexed immutable IDs occur in one canonical child-to-parent
-/// path. Storage scans are ordered by slot, but the index can outlive a
-/// recovery or reorganisation; slot order alone does not prove ancestry.
+/// path. Slot ordering alone does not prove ancestry after recovery or a
+/// reorganisation, so stale index entries must fail closed.
 fn validate_immutable_ids_on_path(
     indexed_ids: &[HeaderId],
     canonical_path: &[HeaderId],
@@ -414,8 +409,8 @@ fn validate_immutable_ids_on_path(
 }
 
 /// Verify immutable IDs against the advertised LIB before loading or
-/// serializing their bodies. This turns stale/off-chain index entries into a
-/// terminal API error instead of returning contradictory ancestry to clients.
+/// serializing their bodies. This prevents contradictory ancestry from being
+/// returned when the index is stale or corrupted.
 async fn validate_immutable_block_ids<Transaction, StorageBackend, RuntimeServiceId>(
     storage_adapter: &StorageAdapter<StorageBackend, Transaction, RuntimeServiceId>,
     indexed_ids: &[HeaderId],
@@ -763,23 +758,11 @@ where
     Ok(blocks)
 }
 
-/// Fetch immutable block header ids in range.
+/// Fetch immutable block header IDs in a slot range.
 ///
-/// # Arguments
-///
-/// - `handle`: A reference to the `OverwatchHandle` to interact with the
-///   runtime and storage service.
-/// - `from_slot`: A non-zero starting slot (inclusive) indicating the starting
-///   point of the desired slot range.
-/// - `to_slot`: A non-zero ending slot (inclusive) indicating the endpoint of
-///   the desired slot range. If the range spans across the LIB block, only
-///   header IDs up to LIB will be returned.
-///
-/// # Returns
-///
-/// If successful, returns a `Vec<HeaderId>` containing the block header IDs for
-/// the specified slot range. If any error occurs during processing, returns a
-/// boxed `DynError`.
+/// Kept as a compatibility helper for consumers that need to inspect headers
+/// before fetching block bodies. The storage scan remains bounded by the
+/// requested slot span and rejects reversed ranges.
 pub async fn get_immutable_blocks_header_ids<Backend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     from_slot: usize,
@@ -790,35 +773,31 @@ where
     RuntimeServiceId:
         Debug + Sync + Display + AsServiceId<StorageService<Backend, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
-    let (response_tx, response_rx) = oneshot::channel();
+    if to_slot < from_slot {
+        return Err("to_slot must be greater or equal to from_slot".into());
+    }
+    let span = to_slot
+        .checked_sub(from_slot)
+        .and_then(|difference| difference.checked_add(1))
+        .and_then(NonZeroUsize::new)
+        .ok_or_else(|| "immutable block range is too large".to_owned())?;
+    get_immutable_block_ids_in_slot_range::<Backend, RuntimeServiceId>(
+        handle,
+        Slot::new(from_slot as u64),
+        Slot::new(to_slot as u64),
+        span,
+        false,
+    )
+    .await
+}
 
-    let limit = {
-        // Since this request requires a limit, let's calculate it based on the slot
-        // range. Add 1 to the difference to ensure that limit makes sense.
-        let diff = to_slot - from_slot + 1;
-        NonZeroUsize::new(diff)
-            .ok_or_else(|| String::from("to_slot must be greater or equal to from_slot"))
-    }?;
-
-    let start = Slot::new(from_slot as u64);
-    let end = Slot::new(to_slot as u64);
-    let slot_range = RangeInclusive::new(start, end);
-
-    relay
-        .send(StorageMsg::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIds {
-                slot_range,
-                limit,
-                response_tx,
-            }),
-        })
-        .await
-        .map_err(|_| std::io::Error::other("storage service relay is closed"))?;
-
-    response_rx
-        .await
-        .map_err(|error| Box::new(error) as super::DynError)
+fn slot_range_limit(slot_from: Slot, slot_to: Slot) -> Option<NonZeroUsize> {
+    slot_to
+        .into_inner()
+        .checked_sub(slot_from.into_inner())
+        .and_then(|diff| diff.checked_add(1))
+        .and_then(|diff| usize::try_from(diff).ok())
+        .and_then(NonZeroUsize::new)
 }
 
 /// Fetch immutable blocks in range
@@ -859,29 +838,33 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let header_ids = get_immutable_blocks_header_ids(handle, from_slot, to_slot).await?;
+    if to_slot < from_slot {
+        return Err("to_slot must be greater or equal to from_slot".into());
+    }
 
-    let relay = handle
-        .relay::<StorageService<StorageBackend, RuntimeServiceId>>()
-        .await?;
-    let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
     let chain_info = cryptarchia_info::<RuntimeServiceId>(handle)
         .await?
         .cryptarchia_info;
+    let slot_from = Slot::new(from_slot as u64);
+    if slot_from > chain_info.lib_slot {
+        return Ok(Vec::new());
+    }
 
-    validate_immutable_block_ids(&storage_adapter, &header_ids, chain_info.lib, false).await?;
+    let slot_to = Slot::new(to_slot as u64).min(chain_info.lib_slot);
+    let blocks_limit = slot_range_limit(slot_from, slot_to)
+        .ok_or_else(|| "legacy immutable block range is too large".to_owned())?;
+    let blocks = get_blocks_in_slot_range_with_snapshot::<_, _, RuntimeServiceId>(
+        handle,
+        slot_from,
+        slot_to,
+        false,
+        blocks_limit,
+        true,
+        &chain_info,
+    )
+    .await?;
 
-    let blocks_futures = header_ids
-        .iter()
-        .map(|header_id| storage_adapter.get_block(header_id));
-
-    let blocks = join_all(blocks_futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-    Ok(blocks)
+    Ok(blocks.into_iter().map(|block| block.block).collect())
 }
 
 /// Fetch a single block by its header ID.
@@ -1009,20 +992,9 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpDeclarations {
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
-
-    Ok(receiver.await?)
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api.get_sdp_declarations().await?)
 }
 
 pub async fn get_sdp_snapshot<RuntimeServiceId>(
@@ -1037,20 +1009,9 @@ where
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + 'static,
 {
-    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
-    let (sender, receiver) = oneshot::channel();
-
-    relay
-        .send(
-            Query::GetSdpSnapshot {
-                reply_channel: sender,
-            }
-            .into(),
-        )
-        .await
-        .map_err(|_| std::io::Error::other("consensus service relay is closed"))?;
-
-    Ok(receiver.await?)
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api.get_sdp_snapshot().await?)
 }
 
 #[cfg(test)]
@@ -1063,48 +1024,31 @@ mod tests {
 
     #[test]
     fn immutable_index_accepts_sparse_ascending_path() {
-        let lib = header_id(4);
-        let newest = header_id(3);
-        let oldest = header_id(1);
-
-        assert!(
-            validate_immutable_ids_on_path(
-                &[oldest, newest],
-                &[lib, newest, header_id(2), oldest],
-                false,
-            )
-            .is_ok()
+        let result = validate_immutable_ids_on_path(
+            &[header_id(1), header_id(3)],
+            &[header_id(4), header_id(3), header_id(2), header_id(1)],
+            false,
         );
+        assert!(result.is_ok());
     }
 
     #[test]
     fn immutable_index_accepts_sparse_descending_path() {
-        let lib = header_id(4);
-        let newest = header_id(3);
-        let oldest = header_id(1);
-
-        assert!(
-            validate_immutable_ids_on_path(
-                &[newest, oldest],
-                &[lib, newest, header_id(2), oldest],
-                true,
-            )
-            .is_ok()
+        let result = validate_immutable_ids_on_path(
+            &[header_id(3), header_id(1)],
+            &[header_id(4), header_id(3), header_id(2), header_id(1)],
+            true,
         );
+        assert!(result.is_ok());
     }
 
     #[test]
     fn immutable_index_rejects_conflicting_branch() {
-        let lib = header_id(4);
-        let canonical = header_id(1);
-        let stale = header_id(9);
-
         let result = validate_immutable_ids_on_path(
-            &[canonical, stale],
-            &[lib, header_id(3), header_id(2), canonical],
+            &[header_id(1), header_id(9)],
+            &[header_id(4), header_id(3), header_id(2), header_id(1)],
             false,
         );
-
         assert!(
             result
                 .expect_err("off-chain immutable ID must fail validation")
@@ -1114,9 +1058,9 @@ mod tests {
 
     #[test]
     fn immutable_index_rejects_unanchored_single_block() {
-        let result =
-            validate_immutable_ids_on_path(&[header_id(9)], &[header_id(4), header_id(3)], false);
-
-        assert!(result.is_err());
+        assert!(
+            validate_immutable_ids_on_path(&[header_id(9)], &[header_id(4), header_id(3)], false,)
+                .is_err()
+        );
     }
 }

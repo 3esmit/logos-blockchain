@@ -26,8 +26,9 @@ use std::{num::NonZero, sync::Arc};
 use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        Note, SignedMantleTx, Utxo, Value,
+        Note, SignedOps, Utxo, Value,
         gas::MainnetGasProfile,
+        ledger::verification_mode::StandardMode,
         transactions::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
         },
@@ -49,7 +50,7 @@ use crate::{
         stake::StakeInference,
         tests::{config, generate_proof},
     },
-    mantle::{pow::PowState, sdp::SdpLedger},
+    mantle::sdp::SdpLedger,
 };
 
 type HeaderId = [u8; 32];
@@ -225,6 +226,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
     let cryptarchia_ledger = LedgerState {
         utxos,
         nonce: Fr::ZERO,
+        previous_epoch_nonce: Fr::ZERO,
         slot: 0.into(),
         next_epoch_state: EpochState {
             epoch: 1.into(),
@@ -371,22 +373,24 @@ fn apply_block_to_ledger(
         .update_epoch_state::<HeaderId>(
             slot,
             &SdpLedger::new(0.into()),
-            &PowState::new(),
+            &crate::cryptarchia::tests::pow_state(),
             ledger.config(),
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);
     let proof = generate_proof(&parent_state, &utxo, slot);
-    let (_, state, _) = ledger
+    let update = ledger
         .prepare_update::<_, _, MainnetGasProfile>(
             id,
             parent,
             slot,
             &proof,
             uncle_slots,
-            std::iter::empty::<&SignedMantleTx<Preverified>>(),
+            std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
         )
-        .expect("ledger update");
-    ledger.commit_update(id, state);
+        .expect("ledger update")
+        .verify_batch_proofs()
+        .expect("batch proof verification");
+    ledger.commit_update(update);
     id
 }

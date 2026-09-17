@@ -7,7 +7,11 @@ use std::{
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     header::HeaderId,
-    mantle::{traits::MantleTxWithProofs, transactions::hash::TxHash},
+    mantle::{
+        ledger::verification_mode::StandardMode,
+        traits::SignedMantleTx,
+        transactions::{hash::TxHash, states::Preverified},
+    },
 };
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_storage_service::StorageService;
@@ -35,12 +39,12 @@ pub struct ChainNetworkRelays<
     NetworkAdapter,
     RuntimeServiceId,
 > where
-    Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
     MempoolNetAdapter: lb_tx_service::network::NetworkAdapter<RuntimeServiceId>,
     NetworkAdapter: network::NetworkAdapter<RuntimeServiceId>,
 {
-    cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    cryptarchia: CryptarchiaServiceApi<Cryptarchia>,
     network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
     mempool_adapter: MempoolAdapter<Mempool::Item>,
     time_relay: TimeRelay,
@@ -50,7 +54,7 @@ pub struct ChainNetworkRelays<
 impl<Cryptarchia, Mempool, MempoolNetAdapter, NetworkAdapter, RuntimeServiceId>
     ChainNetworkRelays<Cryptarchia, Mempool, MempoolNetAdapter, NetworkAdapter, RuntimeServiceId>
 where
-    Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
+    Cryptarchia: CryptarchiaServiceData<Tx: Send>,
     Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash> + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Item: Debug
@@ -61,7 +65,7 @@ where
         + Send
         + Sync
         + 'static
-        + MantleTxWithProofs,
+        + SignedMantleTx<Preverified, StandardMode>,
     Mempool::Settings: Clone + Send + Sync,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
@@ -73,7 +77,7 @@ where
     NetworkAdapter::PeerId: Clone + Eq + Hash + Send + Sync,
 {
     pub const fn new(
-        cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        cryptarchia: CryptarchiaServiceApi<Cryptarchia>,
         network_relay: NetworkRelay<NetworkAdapter::Backend, RuntimeServiceId>,
         mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Mempool::Item, Mempool::Item, TxHash>>,
         time_relay: TimeRelay,
@@ -127,13 +131,10 @@ where
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>,
     {
-        let cryptarchia = CryptarchiaServiceApi::<Cryptarchia, _>::new(
-            service_resources_handle
-                .overwatch_handle
-                .relay::<Cryptarchia>()
-                .await
-                .expect("Relay connection with Cryptarchia should succeed"),
-        );
+        let cryptarchia = CryptarchiaServiceApi::<Cryptarchia>::from_overwatch_handle(
+            &service_resources_handle.overwatch_handle,
+        )
+        .await;
         let network_relay = service_resources_handle
             .overwatch_handle
             .relay::<NetworkService<_, _>>()
@@ -155,7 +156,7 @@ where
         Self::new(cryptarchia, network_relay, mempool_relay, time_relay)
     }
 
-    pub const fn cryptarchia(&self) -> &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId> {
+    pub const fn cryptarchia(&self) -> &CryptarchiaServiceApi<Cryptarchia> {
         &self.cryptarchia
     }
 

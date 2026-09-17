@@ -8,10 +8,14 @@ use thiserror::Error;
 use crate::{
     mantle::{
         GasProfile, Note, NoteId, Op, Utxo, Value,
-        gas::{GasCost, GasOverflow},
+        gas::{GasCost, GasOverflow, TxGasCalculator as _},
         ledger::{BoundedUtxos, Inputs, Outputs},
-        ops::{channel::ChannelId, transfer::TransferOp},
-        transactions::mantle_tx::{MantleTx as _, MantleTxContext, RawMantleTx},
+        ops::{OpRef, channel::ChannelId, transfer::TransferOp},
+        traits::MantleTx as _,
+        transactions::{
+            Ops,
+            tx_list::ops::{OpsContext, mantle_spec},
+        },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -49,9 +53,9 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
     }
 }
 
-/// Builds a [`RawMantleTx`] incrementally.
+/// Builds an [`Ops`] incrementally.
 ///
-/// The builder is intentionally free of any [`MantleTxContext`]: gas prices are
+/// The builder is intentionally free of any [`OpsContext`]: gas prices are
 /// tip-dependent, so the context is supplied as a parameter to the fee-aware
 /// methods ([`Self::minimum_gas_cost`], [`Self::funding_delta`],
 /// [`Self::return_change`]) at the moment they run. This keeps the builder
@@ -59,7 +63,8 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
 /// HTTP) to be funded against a freshly fetched context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MantleTxBuilder {
-    mantle_tx: RawMantleTx,
+    #[serde(rename = "mantle_tx", with = "mantle_spec")] // Shape as per spec
+    ops: Ops,
     ledger_inputs: BoundedUtxos,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
@@ -77,7 +82,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            mantle_tx: RawMantleTx([].into()),
+            ops: Ops::empty(),
             ledger_inputs: BoundedUtxos::default(),
             pending_transfer: TransferOp::new(Inputs::empty(), Outputs::empty()),
             channel_multi_sig_proofs: HashMap::new(),
@@ -92,7 +97,7 @@ impl MantleTxBuilder {
     // block.
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Result<Self, TxBuilderError> {
         for op in ops {
-            self.mantle_tx
+            self.ops
                 .0
                 .try_push(op)
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
@@ -143,7 +148,7 @@ impl MantleTxBuilder {
     /// percentage of the final transaction's mandatory fee.
     pub fn return_change<G: GasProfile>(
         self,
-        context: &MantleTxContext,
+        context: &OpsContext,
         change_pk: ZkPublicKey,
         priority_fee_percent: u64,
     ) -> Result<Option<Self>, TxBuilderError> {
@@ -211,16 +216,16 @@ impl MantleTxBuilder {
     }
 
     /// Predicts the minimum gas cost of the transaction once signed.
-    /// See [`RawMantleTx::minimum_total_gas_cost`] to understand why this is
+    /// See [`TxGasCalculator::total_gas_cost`] to understand why this is
     /// only a minimum, not an exact cost.
     pub fn minimum_gas_cost<G: GasProfile>(
         &self,
-        context: &MantleTxContext,
+        context: &OpsContext,
     ) -> Result<GasCost, TxBuilderError> {
-        for op in self.mantle_tx.ops() {
-            let channel_id = match op {
-                Op::ChannelWithdraw(operation) => Some(operation.channel_id),
-                Op::ChannelTransfer(operation) => Some(operation.channel_id),
+        for op_ref in self.ops.op_refs() {
+            let channel_id = match op_ref {
+                OpRef::ChannelWithdraw(operation) => Some(operation.channel_id),
+                OpRef::ChannelTransfer(operation) => Some(operation.channel_id),
                 _ => None,
             };
             if let Some(channel_id) = channel_id
@@ -234,12 +239,12 @@ impl MantleTxBuilder {
         }
 
         let build = self.clone().build()?;
-        Ok(build.minimum_total_gas_cost::<G>(&context.gas_context)?)
+        Ok(build.by_ref().total_gas_cost::<G>(&context.gas_context)?)
     }
 
     pub fn funding_delta<G: GasProfile>(
         &self,
-        context: &MantleTxContext,
+        context: &OpsContext,
     ) -> Result<i128, TxBuilderError> {
         Ok(self.net_balance() - i128::from(self.minimum_gas_cost::<G>(context)?.into_inner()))
     }
@@ -248,7 +253,7 @@ impl MantleTxBuilder {
     /// percentage-based priority fee reserve.
     pub fn funding_delta_with_priority_fee<G: GasProfile>(
         &self,
-        context: &MantleTxContext,
+        context: &OpsContext,
         priority_fee_percent: u64,
     ) -> Result<i128, TxBuilderError> {
         let mandatory_fee = self.minimum_gas_cost::<G>(context)?.into_inner();
@@ -279,12 +284,11 @@ impl MantleTxBuilder {
         Value::try_from(numerator / 100).map_err(|_| GasOverflow.into())
     }
 
-    /// Returns all note IDs already consumed or locked by this transaction,
-    /// plus the funding inputs that will be appended as a transfer during
-    /// build.
-    pub fn consumed_or_locked_notes(&self) -> impl Iterator<Item = NoteId> {
-        self.mantle_tx
-            .ops()
+    /// Returns all note IDs already consumed or used in a service by this
+    /// transaction, plus the funding inputs that will be appended as a
+    /// transfer during build.
+    pub fn notes_consumed_or_used_in_service(&self) -> impl Iterator<Item = NoteId> {
+        self.ops
             .iter()
             .flat_map(|op| {
                 let inputs: &[NoteId] = match op {
@@ -293,8 +297,8 @@ impl MantleTxBuilder {
                     _ => &[],
                 };
                 let locked = match op {
-                    Op::SDPDeclare(declare) => Some(declare.locked_note_id),
-                    Op::SDPWithdraw(withdraw) => Some(withdraw.locked_note_id),
+                    Op::SDPDeclare(declare) => Some(declare.service_note_id),
+                    Op::SDPWithdraw(withdraw) => Some(withdraw.service_note_id),
                     _ => None,
                 };
                 inputs.iter().copied().chain(locked)
@@ -314,14 +318,14 @@ impl MantleTxBuilder {
 
     // TODO: Change this to a `Result` if genesis tx already contains max number of
     // ops.
-    pub fn build(mut self) -> Result<RawMantleTx, TxBuilderError> {
+    pub fn build(mut self) -> Result<Ops, TxBuilderError> {
         if !self.pending_transfer.is_empty() {
-            self.mantle_tx
+            self.ops
                 .0
                 .try_push(Op::Transfer(self.pending_transfer))
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
-        Ok(self.mantle_tx)
+        Ok(self.ops)
     }
 }
 
@@ -343,7 +347,7 @@ mod tests {
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
             },
-            transactions::{GasPrices, MantleTxGasContext},
+            transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
         sdp::{DeclarationId, Locator, ProviderId, ServiceType},
     };
@@ -386,12 +390,8 @@ mod tests {
         };
 
         // Init a tx builder
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new(
-                HashMap::new(),
-                HashMap::new(),
-                GasPrices::new(0, 0),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -418,12 +418,8 @@ mod tests {
         };
 
         // Init a tx builder
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new(
-                HashMap::new(),
-                HashMap::new(),
-                GasPrices::new(0, 0),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -449,8 +445,8 @@ mod tests {
         };
 
         // Init a tx builder
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new(
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(
                 [(op.channel_id, 1)].into(),
                 HashMap::new(),
                 GasPrices::new(0, 0),
@@ -484,12 +480,8 @@ mod tests {
             .push_op(Op::ChannelWithdraw(withdraw_op))
             .unwrap();
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new(
-                HashMap::new(),
-                HashMap::new(),
-                GasPrices::new(1, 0),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(1, 0)),
             leader_reward_amount: 0,
         };
 
@@ -513,12 +505,8 @@ mod tests {
         };
 
         // Init a tx builder
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new(
-                HashMap::new(),
-                HashMap::new(),
-                GasPrices::new(0, 0),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(op)).unwrap();
@@ -536,12 +524,8 @@ mod tests {
     #[test]
     fn transfer_op() {
         // Init a tx builder for sending 30 to the recipient
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new(
-                HashMap::new(),
-                HashMap::new(),
-                GasPrices::new(0, 0),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -579,8 +563,8 @@ mod tests {
     fn all_ops() {
         // Init a tx builder for sending 30 to the recipient
         let channel_id = ChannelId::from([0; 32]);
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new(
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(
                 [(channel_id, 1)].into(),
                 HashMap::new(),
                 GasPrices::new(0, 0),
@@ -640,10 +624,10 @@ mod tests {
     }
 
     #[test]
-    fn consumed_or_locked_notes() {
+    fn notes_consumed_or_used_in_service() {
         let deposit_input = NoteId(Fr::from(1u64));
-        let declare_locked = NoteId(Fr::from(2u64));
-        let withdraw_locked = NoteId(Fr::from(3u64));
+        let declare_service_note = NoteId(Fr::from(2u64));
+        let withdraw_service_note = NoteId(Fr::from(3u64));
         let transfer_input = Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero()));
 
         let builder = MantleTxBuilder::new()
@@ -658,36 +642,36 @@ mod tests {
                 locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 provider_id: ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key()),
                 zk_id: ZkPublicKey::zero(),
-                locked_note_id: declare_locked,
+                service_note_id: declare_service_note,
             }))
             .unwrap()
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 declaration_id: DeclarationId([0; 32]),
-                locked_note_id: withdraw_locked,
+                service_note_id: withdraw_service_note,
                 nonce: 1,
             }))
             .unwrap()
             .add_ledger_input(transfer_input)
             .unwrap();
 
-        let consumed_or_locked: Vec<_> = builder.consumed_or_locked_notes().collect();
+        let consumed_or_used: Vec<_> = builder.notes_consumed_or_used_in_service().collect();
         assert!(
-            consumed_or_locked.contains(&deposit_input),
+            consumed_or_used.contains(&deposit_input),
             "should contain deposit input"
         );
         assert!(
-            consumed_or_locked.contains(&declare_locked),
-            "should contain declare locked note"
+            consumed_or_used.contains(&declare_service_note),
+            "should contain declare service note"
         );
         assert!(
-            consumed_or_locked.contains(&withdraw_locked),
-            "should contain withdraw locked note"
+            consumed_or_used.contains(&withdraw_service_note),
+            "should contain withdraw service note"
         );
         assert!(
-            consumed_or_locked.contains(&transfer_input.id()),
+            consumed_or_used.contains(&transfer_input.id()),
             "should contain transfer input"
         );
-        assert_eq!(consumed_or_locked.len(), 4);
+        assert_eq!(consumed_or_used.len(), 4);
     }
 
     #[test]

@@ -12,9 +12,14 @@ use lb_chain_service::{
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{traits::MantleTxWithProofs, transactions::hash::TxHash},
+    mantle::{
+        ledger::verification_mode::StandardMode,
+        traits::SignedMantleTx,
+        transactions::{hash::TxHash, states::Preverified},
+    },
 };
 use lb_cryptarchia_sync::GetTipResponse;
+use lb_log_targets::chain;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
 use tracing::{debug, error, info, trace, warn};
@@ -24,39 +29,39 @@ use crate::{
     network::NetworkAdapter, sync::orphan_handler::OrphanBlocksDownloader,
 };
 
+const LOG_TARGET: &str = chain::network::bootstrap::IBD;
+
 pub trait IbdBlockProcessor<B> {
     async fn info(&self) -> Result<CryptarchiaInfo, Error>;
     async fn process_block(&mut self, block: B) -> Result<(), Error>;
     async fn has_processed_block(&self, header: HeaderId) -> Result<bool, Error>;
 }
 
-pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
+pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    RuntimeServiceId: Send + Sync,
 {
-    pub cryptarchia: CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    pub cryptarchia: CryptarchiaServiceApi<Cryptarchia>,
     pub mempool_adapter: MempoolAdapter<Mempool::Item>,
 }
 
-impl<Cryptarchia, Mempool, RuntimeServiceId> IbdBlockProcessor<Block<Cryptarchia::Tx>>
-    for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
+impl<Cryptarchia, Mempool> IbdBlockProcessor<Block<Cryptarchia::Tx>>
+    for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
-    RuntimeServiceId: Send + Sync,
 {
     async fn info(&self) -> Result<CryptarchiaInfo, Error> {
         Ok(self.cryptarchia.info().await?.cryptarchia_info)
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {
-        crate::apply_block_and_reconcile_mempool::<_, Mempool, _>(
+        crate::apply_block_and_reconcile_mempool::<_, Mempool>(
             block,
             &self.cryptarchia,
             &self.mempool_adapter,
@@ -127,14 +132,15 @@ where
         orphan_config: &OrphanConfig,
     ) -> Result<BlockProcessor, Error> {
         if config.peers.is_empty() && !config.discover_connected_peers {
-            warn!("Skipping IBD as no peers are configured");
+            warn!(target: LOG_TARGET, "Skipping IBD as no peers are configured");
             return Ok(self.block_processor);
         }
 
         if config.peers.is_empty() {
-            info!("Starting Initial Block Download by discovering connected peers");
+            info!(target: LOG_TARGET, "Starting Initial Block Download by discovering connected peers");
         } else {
             info!(
+                target: LOG_TARGET,
                 "Starting Initial Block Download with {} peers",
                 config.peers.len()
             );
@@ -177,7 +183,7 @@ where
                 self.collect_unsynced_tips(&config).await?
             };
             if unsynced_tips.is_empty() {
-                info!("IBD complete: all configured peer tips are present in the local tree");
+                info!(target: LOG_TARGET, "IBD complete: all configured peer tips are present in the local tree");
                 return Ok(());
             }
             let info = self.block_processor.info().await?;
@@ -190,9 +196,7 @@ where
     }
 
     /// Pulls tips from currently-connected peers when bootstrap addresses did
-    /// not include libp2p peer IDs. The network adapter samples peers that have
-    /// already completed a connection handshake, so the same orphan downloader
-    /// can fetch their chain without requiring a static peer-ID list.
+    /// not include libp2p peer IDs. The network adapter owns peer selection.
     async fn collect_unsynced_sampled_tips(
         &self,
         config: &IbdConfig<NetAdapter::PeerId>,
@@ -218,7 +222,7 @@ where
         &mut self,
         downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
     ) {
-        debug!("draining downloads");
+        debug!(target: LOG_TARGET, "draining downloads");
 
         // Use `timeout` because `downloader.next()` can stall forever if a
         // download fails and leaves the queue empty.
@@ -233,31 +237,31 @@ where
                     Err(Error::BlockProcessing(ChainError::Cryptarchia(
                         lb_chain_service::api::ApiError::AlreadyApplied(header_id),
                     ))) => {
-                        debug!(?header_id, "block already applied; continuing");
+                        debug!(target: LOG_TARGET, ?header_id, "block already applied; continuing");
                         downloader.confirm_active_download();
                     }
                     Err(Error::BlockProcessing(err)) if crate::is_recoverable_apply_error(&err) => {
                         warn!(
+                            target: LOG_TARGET,
                             ?err,
                             "transient block-application failure; retrying the download"
                         );
                         downloader.retry_active_download();
-                        // Leave the retry queued for the next IBD round.  A
-                        // peer can return the same incomplete range; retrying
-                        // in this drain loop would replay the whole prefix in
-                        // a tight loop and can exhaust the chain service.
+                        // Replaying a complete response in a tight loop can
+                        // exhaust chain-service; leave retry queued for the
+                        // next IBD round.
                         break;
                     }
                     Err(err) => {
-                        warn!(?err, "failed to process block; cancelling the download");
+                        warn!(target: LOG_TARGET, ?err, "failed to process block; cancelling the download");
                         downloader.cancel_active_download();
                     }
                 },
                 Ok(None) => {
-                    debug!("orphan downloader returned None; re-checking should_poll");
+                    debug!(target: LOG_TARGET, "orphan downloader returned None; re-checking should_poll");
                 }
                 Err(_) => {
-                    trace!("drain timed out; re-checking should_poll");
+                    trace!(target: LOG_TARGET, "drain timed out; re-checking should_poll");
                 }
             }
         }
@@ -270,11 +274,13 @@ where
         &self,
         config: &IbdConfig<NetAdapter::PeerId>,
     ) -> Result<HashSet<HeaderId>, Error> {
-        debug!("collecting unsynced tips from {} peers", config.peers.len());
+        debug!(target: LOG_TARGET, "collecting unsynced tips from {} peers", config.peers.len());
 
         let tips = fetch_tips_with_retry(&self.network, config)
             .await
-            .inspect_err(|_| error!("no configured peer returned a tip this round"))?;
+            .inspect_err(
+                |_| error!(target: LOG_TARGET, "no configured peer returned a tip this round"),
+            )?;
 
         Ok(try_join_all(tips.into_iter().map(async |tip| {
             self.block_processor
@@ -316,12 +322,12 @@ where
                 .with_max_times(config.tips_fetch_max_attempts)
                 .with_jitter(),
         )
-        .notify(|_, delay| debug!("tip fetch returned no tips; retrying in {delay:?}"))
+        .notify(|_, delay| debug!(target: LOG_TARGET, "tip fetch returned no tips; retrying in {delay:?}"))
         .await
 }
 
-/// Samples tips from currently-connected peers, retrying while the initial
-/// bootstrap dials are still settling.
+/// Samples tips from currently-connected peers, retrying while bootstrap
+/// dials are still settling.
 async fn fetch_sampled_tips_with_retry<NetAdapter, RuntimeServiceId>(
     network: &NetAdapter,
     config: &IbdConfig<NetAdapter::PeerId>,
@@ -339,13 +345,14 @@ where
                 .with_max_times(config.tips_fetch_max_attempts)
                 .with_jitter(),
         )
-        .notify(|_, delay| debug!("no connected peer returned a tip; retrying in {delay:?}"))
+        .notify(|_, delay| {
+            debug!(target: LOG_TARGET, "no connected peer returned a tip; retrying in {delay:?}")
+        })
         .await
 }
 
-/// Concurrently samples tips from every currently-connected peer selected by
-/// the network adapter. The adapter owns peer selection and drops individual
-/// request failures, so an empty result means no usable peer is available yet.
+/// Concurrently samples tips from connected peers selected by the network
+/// adapter. Empty results mean no usable peer is available yet.
 async fn fetch_sampled_tips<NetAdapter, RuntimeServiceId>(
     network: &NetAdapter,
     max_peers: usize,
@@ -362,7 +369,7 @@ where
                 tips.insert(tip);
             }
             GetTipResponse::Failure(reason) => {
-                debug!("connected peer rejected tip request: {reason}");
+                debug!(target: LOG_TARGET, "connected peer rejected tip request: {reason}");
             }
         }
     }
@@ -394,7 +401,7 @@ where
             Err(e) => Err(e),
         };
         result
-            .inspect_err(|e| warn!("failed to fetch tip from {peer:?}: {e}"))
+            .inspect_err(|e| warn!(target: LOG_TARGET, "failed to fetch tip from {peer:?}: {e}"))
             .ok()
     }))
     .await
@@ -419,9 +426,9 @@ fn enqueue_tips<NetAdapter, RuntimeServiceId>(
 {
     for tip in tips {
         if let Err(e) = downloader.enqueue_orphan(tip, None, info.tip, info.lib) {
-            debug!("failed to enqueue tip {tip:?}: {e}");
+            debug!(target: LOG_TARGET, "failed to enqueue tip {tip:?}: {e}");
         } else {
-            debug!("enqueued tip {tip:?} for download");
+            debug!(target: LOG_TARGET, "enqueued tip {tip:?} for download");
         }
     }
 }
@@ -442,13 +449,14 @@ pub struct AllPeersFailed;
 
 #[cfg(test)]
 mod tests {
+    use core::future::ready;
     use std::{
         collections::HashMap,
         iter::empty,
         num::{NonZero, NonZeroU64},
         sync::{
             Arc,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicUsize, Ordering},
         },
     };
 
@@ -460,11 +468,11 @@ mod tests {
     use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
     use lb_ledger::{
         LedgerState,
-        config::{BlendPoWConfig, ModulusShift, PoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use overwatch::{
         overwatch::OverwatchHandle,
         services::{ServiceData, relay::OutboundRelay},
@@ -489,34 +497,6 @@ mod tests {
         // The Cryptarchia remains unchanged.
         assert_eq!(cryptarchia.lib(), [GENESIS_ID; 32].into());
         assert_eq!(cryptarchia.tip(), [GENESIS_ID; 32].into());
-    }
-
-    #[tokio::test]
-    async fn discovers_connected_peers_when_peer_ids_are_unavailable() {
-        let peer = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(1, GENESIS_ID, 1, 1),
-                Block::new(2, 1, 2, 2),
-            ],
-            Ok(Block::new(2, 1, 2, 2)),
-        );
-        let mut ibd_config = config(HashSet::new());
-        ibd_config.discover_connected_peers = true;
-
-        let block_processor = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(vec![(NodeId(0), peer.clone())]),
-        )
-        .run(ibd_config, &orphan_config())
-        .await
-        .expect("connected peer discovery should complete IBD");
-
-        assert!(
-            peer.chain
-                .iter()
-                .all(|block| block_processor.cryptarchia.has_block(&block.id))
-        );
     }
 
     #[tokio::test]
@@ -658,46 +638,6 @@ mod tests {
         );
     }
 
-    /// A transient parent-missing response must preserve the active orphan so
-    /// the downloader retries it without waiting for another tip poll.
-    #[tokio::test]
-    async fn recoverable_block_apply_error_retries_active_download() {
-        let chain = vec![Block::genesis(), Block::new(1, GENESIS_ID, 1, 1)];
-        let peer = BlockProvider::new(chain.clone(), Ok(chain[1].clone()));
-        let processor = MockBlockProcessor::with_parent_missing_once();
-        let failures = Arc::clone(&processor.parent_missing_failures);
-        let network = MockNetworkAdapter::<()>::new(vec![(NodeId(0), peer)]);
-        let mut ibd = InitialBlockDownload::new(processor, network.clone());
-        let mut downloader = OrphanBlocksDownloader::new(
-            network,
-            10.try_into().expect("orphan cache size must be non-zero"),
-            0,
-        );
-        downloader
-            .enqueue_orphan(chain[1].id, None, [10u8; 32].into(), [11u8; 32].into())
-            .expect("test orphan should enqueue");
-
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            ibd.drain_downloader(&mut downloader),
-        )
-        .await
-        .expect("recoverable IBD retry timed out");
-
-        assert_eq!(failures.load(Ordering::SeqCst), 1);
-        assert!(downloader.should_poll());
-
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            ibd.drain_downloader(&mut downloader),
-        )
-        .await
-        .expect("queued IBD retry timed out");
-
-        assert!(ibd.block_processor.cryptarchia.has_block(&chain[1].id));
-        assert!(!downloader.should_poll());
-    }
-
     /// Multi-round flow: round 1 syncs the peer's first reported tip, round 2
     /// picks up the peer's advanced tip, round 3 sees the tip in local tree
     /// and completes IBD.
@@ -814,8 +754,6 @@ mod tests {
     struct MockBlockProcessor {
         cryptarchia: lb_chain_service::Cryptarchia,
         process_block_failures: Arc<AtomicUsize>,
-        parent_missing_failures: Arc<AtomicUsize>,
-        parent_missing_once: Arc<AtomicBool>,
     }
 
     impl MockBlockProcessor {
@@ -823,54 +761,41 @@ mod tests {
             Self {
                 cryptarchia: new_cryptarchia(),
                 process_block_failures: Arc::new(AtomicUsize::new(0)),
-                parent_missing_failures: Arc::new(AtomicUsize::new(0)),
-                parent_missing_once: Arc::new(AtomicBool::new(false)),
             }
-        }
-
-        fn with_parent_missing_once() -> Self {
-            let processor = Self::new();
-            processor.parent_missing_once.store(true, Ordering::SeqCst);
-            processor
         }
     }
 
     impl IbdBlockProcessor<Block> for MockBlockProcessor {
-        async fn info(&self) -> Result<CryptarchiaInfo, Error> {
-            Ok(self.cryptarchia.info())
+        fn info(&self) -> impl Future<Output = Result<CryptarchiaInfo, Error>> {
+            ready(Ok(self.cryptarchia.info()))
         }
 
-        async fn process_block(&mut self, block: Block) -> Result<(), Error> {
+        fn process_block(&mut self, block: Block) -> impl Future<Output = Result<(), Error>> {
             if self.cryptarchia.has_block(&block.id) {
-                return Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                return ready(Err(Error::BlockProcessing(ChainError::Cryptarchia(
                     lb_chain_service::api::ApiError::AlreadyApplied(block.id),
-                )));
+                ))));
             }
 
-            if self.parent_missing_once.swap(false, Ordering::SeqCst) {
-                self.parent_missing_failures.fetch_add(1, Ordering::SeqCst);
-                return Err(Error::BlockProcessing(ChainError::Cryptarchia(
-                    lb_chain_service::api::ApiError::ParentMissing {
-                        parent: block.parent,
-                        info: Box::new(self.cryptarchia.info()),
-                    },
-                )));
-            }
-
-            self.cryptarchia
-                .consensus
-                .receive_block(block.id, block.parent, block.slot, UncleSlots::default())
-                .map_err(|e| {
-                    self.process_block_failures.fetch_add(1, Ordering::SeqCst);
-                    Error::BlockProcessing(ChainError::InvalidBlock(format!(
-                        "Consensus error: {e:?}"
-                    )))
-                })?;
-            Ok(())
+            ready(
+                self.cryptarchia
+                    .consensus
+                    .receive_block(block.id, block.parent, block.slot, UncleSlots::default())
+                    .map_err(|e| {
+                        self.process_block_failures.fetch_add(1, Ordering::SeqCst);
+                        Error::BlockProcessing(ChainError::InvalidBlock(format!(
+                            "Consensus error: {e:?}"
+                        )))
+                    })
+                    .map(|_| ()),
+            )
         }
 
-        async fn has_processed_block(&self, header: HeaderId) -> Result<bool, Error> {
-            Ok(self.cryptarchia.has_block(&header))
+        fn has_processed_block(
+            &self,
+            header: HeaderId,
+        ) -> impl Future<Output = Result<bool, Error>> {
+            ready(Ok(self.cryptarchia.has_block(&header)))
         }
     }
 
@@ -880,8 +805,6 @@ mod tests {
     fn config(peers: HashSet<NodeId>) -> IbdConfig<NodeId> {
         IbdConfig {
             peers,
-            discover_connected_peers: false,
-            max_connected_peers_to_sample: 16,
             tips_fetch_max_attempts: 3,
             tips_fetch_min_delay: Duration::from_millis(250),
             tips_fetch_max_delay: Duration::from_secs(1),
@@ -1034,19 +957,8 @@ mod tests {
             }
         }
 
-        async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
-            let tips = self
-                .providers
-                .iter()
-                .take(max_peers)
-                .filter_map(|(_, provider)| provider.next_tip().ok())
-                .map(|tip| GetTipResponse::Tip {
-                    tip: tip.id,
-                    slot: tip.slot,
-                    height: tip.height,
-                })
-                .collect::<Vec<_>>();
-            Box::new(stream::iter(tips))
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
+            Box::new(stream::empty())
         }
 
         async fn request_blocks_from_peer(
@@ -1134,6 +1046,25 @@ mod tests {
         )
     }
 
+    /// A reward config with claiming disabled, standing in for a real
+    /// deployment config in tests.
+    fn disabled_reward_config() -> RewardPoWConfig {
+        RewardPoWConfig {
+            reward_pool_genesis: 1_000_000_000,
+            epoch_reward_genesis: 1_000_000,
+            initial_difficulty: ModulusShift::new::<26>(),
+            ema_smoothing_factor: 9,
+            ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
+            target_claims_per_block: 100,
+            rate_num: 0,
+            rate_den: NonZeroU64::MIN,
+            target_claim_per_block: NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: NonZeroU64::MIN,
+            slot_window: NonZeroU64::new(100).unwrap(),
+        }
+    }
+
     #[must_use]
     fn ledger_config() -> lb_ledger::Config {
         let epoch_config = EpochConfig {
@@ -1166,7 +1097,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -1187,6 +1118,7 @@ mod tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         }
     }

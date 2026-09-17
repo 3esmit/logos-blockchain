@@ -17,6 +17,18 @@ pub const MAX_ZK_SIGNING_KEYS: usize = 32;
 pub struct PublicKey(#[serde(with = "lb_groth16::serde::serde_fr")] Fr);
 
 pub type PublicKeys = UpperBoundedVec<PublicKey, MAX_ZK_SIGNING_KEYS>;
+// Encoded through `serde_fr`, which routes to
+// `lb_utils::serde::serialize_bytes_array`, so the key documents itself with
+// that encoding's schema rather than restating it at each use site.
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for PublicKey {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        lb_utils::openapi::hex_bytes_schema(size_of::<lb_groth16::FrBytes>())
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for PublicKey {}
 
 impl PublicKey {
     #[must_use]
@@ -41,7 +53,7 @@ impl PublicKey {
 
     #[must_use]
     pub fn verify_multi(pks: &[Self], data: &Fr, signature: &Signature) -> bool {
-        let inputs = match try_from_pks((*data).into(), pks) {
+        let inputs = match inputs_from_pks((*data).into(), pks) {
             Ok(inputs) => inputs,
             Err(e) => {
                 error!(target: LOG_TARGET, "Error building verifier inputs: {e:?}");
@@ -74,7 +86,10 @@ impl From<Fr> for PublicKey {
     }
 }
 
-fn try_from_pks(msg: Groth16Input, pks: &[PublicKey]) -> Result<ZkSignVerifierInputs, ZkSignError> {
+pub fn inputs_from_pks(
+    msg: Groth16Input,
+    pks: &[PublicKey],
+) -> Result<ZkSignVerifierInputs, ZkSignError> {
     if pks.len() > MAX_ZK_SIGNING_KEYS {
         return Err(ZkSignError::TooManyKeys(pks.len()));
     }

@@ -1,11 +1,13 @@
-use std::ffi::c_char;
+use std::ffi::{CString, c_char};
 
+use lb_blend_service::message::NetworkInfo;
 use lb_core::{
     mantle::NoteId,
     sdp::{self, Locator},
 };
 use lb_groth16::fr_from_bytes;
 use lb_node::{RuntimeServiceId, generic_services::blend::BlendService};
+use multiaddr::PeerId;
 
 use crate::{
     LogosBlockchainNode,
@@ -26,12 +28,12 @@ impl From<sdp::DeclarationId> for DeclarationId {
     }
 }
 
-unsafe fn parse_locked_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus> {
+unsafe fn parse_service_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus> {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, KEY_SIZE) };
     fr_from_bytes(bytes).map(NoteId).map_err(|_| {
         OperationStatus::error(
             OperationStatusCode::ValidationError,
-            "Invalid `locked_note_id` bytes.",
+            "Invalid `service_note_id` bytes.",
         )
     })
 }
@@ -62,7 +64,7 @@ unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> 
 ///
 /// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
 /// - `locator`: A non-null pointer to a locator C string.
-/// - `locked_note_id`: A non-null pointer to 32 bytes representing the locked
+/// - `service_note_id`: A non-null pointer to 32 bytes representing the service
 ///   note ID.
 ///
 /// # Returns
@@ -77,14 +79,15 @@ unsafe fn parse_locator(ptr: *const c_char) -> Result<Locator, OperationStatus> 
 pub unsafe extern "C" fn blend_join_as_core_node(
     node: *const LogosBlockchainNode,
     locator: *const c_char,
-    locked_note_id: *const u8,
+    service_note_id: *const u8,
 ) -> FfiStatusResult<DeclarationId> {
     return_error_if_null_pointer!(node);
     return_error_if_null_pointer!(locator);
-    return_error_if_null_pointer!(locked_note_id);
+    return_error_if_null_pointer!(service_note_id);
 
     let locator = unwrap_or_return_error!(unsafe { parse_locator(locator) });
-    let locked_note_id = unwrap_or_return_error!(unsafe { parse_locked_note_id(locked_note_id) });
+    let service_note_id =
+        unwrap_or_return_error!(unsafe { parse_service_note_id(service_note_id) });
 
     let node = unsafe { &*node };
 
@@ -92,7 +95,7 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         lb_api_service::http::blend::blend_join_network::<
             BlendService<RuntimeServiceId>,
             RuntimeServiceId,
-        >(node.get_overwatch_handle(), locator, locked_note_id)
+        >(node.get_overwatch_handle(), locator, service_note_id)
         .await
         .map_err(|error| {
             OperationStatus::error(
@@ -103,4 +106,84 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     });
 
     result.map(DeclarationId::from).into()
+}
+
+/// Gets the current Blend network information.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`blend_info`](lb_api_service::http::blend::blend_info) function.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// A `Result` containing the Blend network information on success, or an
+/// [`OperationStatus`] error on failure. The value is `None` when the node has
+/// not joined the Blend network as a core node.
+pub(crate) fn blend_info_sync(
+    node: &LogosBlockchainNode,
+) -> StatusResult<Option<NetworkInfo<PeerId>>> {
+    let runtime_handle = node.get_runtime_handle();
+    let overwatch_handle = node.get_overwatch_handle();
+
+    runtime_handle
+        .block_on(lb_api_service::http::blend::blend_info::<
+            BlendService<RuntimeServiceId>,
+            RuntimeServiceId,
+        >(overwatch_handle))
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RelayError,
+                format!("Failed to get blend info: {error}"),
+            )
+        })
+}
+
+pub type FfiBlendInfoResult = FfiStatusResult<*mut c_char>;
+
+/// Gets the current Blend network information as a JSON string.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// A [`FfiBlendInfoResult`] containing a pointer to an allocated C string (the
+/// JSON-serialized network information) on success, or an [`OperationStatus`]
+/// error on failure.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output C string. The caller must
+/// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[must_use]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blend_info(node: *const LogosBlockchainNode) -> FfiBlendInfoResult {
+    return_error_if_null_pointer!(node);
+
+    let node = unsafe { &*node };
+    let network_info = unwrap_or_return_error!(blend_info_sync(node));
+
+    let json_network_info =
+        unwrap_or_return_error!(serde_json::to_string(&network_info).map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to serialize blend info: {error}"),
+            )
+        }));
+    let json_network_info_c =
+        unwrap_or_return_error!(CString::new(json_network_info).map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to create CString: {error}"),
+            )
+        }));
+    FfiBlendInfoResult::ok(json_network_info_c.into_raw())
 }

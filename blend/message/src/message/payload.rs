@@ -32,6 +32,16 @@ impl PayloadType {
     }
 }
 
+impl AsRef<str> for PayloadType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Cover => "cover",
+            Self::BlockProposal => "block_proposal",
+            Self::Transaction => "transaction",
+        }
+    }
+}
+
 impl TryFrom<u8> for PayloadType {
     type Error = ();
 
@@ -176,7 +186,6 @@ impl BinaryDecode for PaddedPayloadBody {
 
 #[cfg(test)]
 mod tests {
-    use lb_codec::{BinaryDecode as _, BinaryEncode as _};
     use serde::Serialize;
     use serde_with::serde_as;
 

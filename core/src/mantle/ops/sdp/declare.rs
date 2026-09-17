@@ -1,21 +1,26 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::public_inputs_from_pks;
 
 use super::{SDPDeclareOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Note, Value,
+        Note,
+        batch::DeferredZkpVerification,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
+            VerifiableOperation,
+            verification_mode::{GenesisMode, StandardMode, VerificationMode},
         },
-        ops::{SignedOp, ZkAndEd25519Proof},
-        transactions::{hash::TxHashView, states::VerificationState},
+        ops::{SignedOperation, ZkAndEd25519Proof},
+        transactions::{
+            hash::TxHashView,
+            states::{Preverified, Unverified, Verified},
+        },
     },
-    sdp::{Declaration, MinStake, locked_notes::LockedNotes},
+    sdp::{Declaration, MinStake, service_notes::ServiceNotes},
 };
 
 trait SDPDeclareValidationExt {
@@ -24,7 +29,7 @@ trait SDPDeclareValidationExt {
         note: Note,
         channels: &Channels,
         declarations: &Declarations,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         min_stake: &MinStake,
     ) -> Result<(), SdpError>;
 
@@ -40,7 +45,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         note: Note,
         channels: &Channels,
         declarations: &Declarations,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         min_stake: &MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
@@ -50,22 +55,22 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         validate_service_scoped_uniqueness(self, declarations)?;
 
         // A channel note cannot be used as collateral for a service declaration.
-        if channels.is_channel_note(&self.locked_note_id) {
-            return Err(SdpError::ChannelNote(self.locked_note_id));
+        if channels.is_channel_note(&self.service_note_id) {
+            return Err(SdpError::ChannelNote(self.service_note_id));
         }
 
-        // Ensure value of locked note is sufficient for joining the service.
+        // Ensure value of service note is sufficient for joining the service.
         if note.value < min_stake.threshold {
             return Err(SdpError::NoteInsufficientValue {
-                note_id: self.locked_note_id,
+                note_id: self.service_note_id,
                 value: note.value,
             });
         }
 
-        // Ensure the note has not already been locked for this service.
-        if locked_notes.is_locked_for_service(&self.locked_note_id, &self.service_type) {
+        // Ensure the note has not already been used for this service.
+        if service_notes.is_used_for_service(&self.service_note_id, &self.service_type) {
             return Err(SdpError::NoteAlreadyUsedForService {
-                note_id: self.locked_note_id,
+                note_id: self.service_note_id,
                 service_type: self.service_type,
             });
         }
@@ -83,17 +88,17 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         let utxo = context
             .utxo_tree
             .utxos()
-            .get(&self.locked_note_id)
+            .get(&self.service_note_id)
             .expect("The operation should have been checked")
             .0;
 
-        context.locked_notes = context
-            .locked_notes
+        context.service_notes = context
+            .service_notes
             .lock(
                 &context.min_stake,
                 self.service_type,
                 utxo.note,
-                &self.locked_note_id,
+                &self.service_note_id,
             )
             .map_err(|_| SdpError::UnexpectedError)?;
 
@@ -133,7 +138,7 @@ pub struct SDPDeclarePreverificationContext<'a> {
 pub struct SDPDeclareVerificationContext<'a> {
     pub utxo_tree: &'a Utxos,
     pub channels: &'a Channels,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub tx_hash_view: &'a TxHashView,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
@@ -142,7 +147,7 @@ pub struct SDPDeclareVerificationContext<'a> {
 pub struct SDPDeclareGenesisValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
     pub channels: &'a Channels,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
 }
@@ -151,98 +156,118 @@ pub struct SDPDeclareExecutionContext {
     pub utxo_tree: Utxos,
     pub epoch: Epoch,
     pub declarations: Declarations,
-    pub locked_notes: LockedNotes,
+    pub service_notes: ServiceNotes,
     pub min_stake: MinStake,
 }
 
 impl ProvableOperation for SDPDeclareOp {
     type Proof = ZkAndEd25519Proof;
+    const CODE: u8 = 0x20;
 }
 
 impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
     const GAS_COST: Gas = Gas::new(646);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
+impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {}
+
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<SDPDeclareOp, Unverified, StandardMode>
+{
     type Context<'a> = SDPDeclarePreverificationContext<'a>;
     type Error = SdpError;
 
-    fn preverify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
-        self.preverify(context.tx_hash_view, &proof.ed25519_sig)
+    fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        self.operation()
+            .preverify(context.tx_hash_view, &self.proof().ed25519_sig)
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
+impl VerifiableOperation<StandardMode>
+    for SignedOperation<SDPDeclareOp, Preverified, StandardMode>
+{
     type Context<'a> = SDPDeclareVerificationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
         // Check that the note exist
-        let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
-            return Err(SdpError::InexistingNote(self.locked_note_id));
+        let Some((utxo, _)) = context.utxo_tree.utxos().get(&operation.service_note_id) else {
+            return Err(SdpError::InexistingNote(operation.service_note_id));
         };
 
-        // Ensure locked note exists and ownership over the locked note and `zk_id`
+        // Defer the ZKP verification, so that the caller can batch it.
+        // Ed25519 verification is done by `preverify`.
+        // Ensure service note exists and ownership over the service note and `zk_id`.
         let note = utxo.note;
-        if !ZkPublicKey::verify_multi(
-            &[note.pk, self.zk_id],
-            context.tx_hash_view.as_fr(),
-            &proof.zk_sig,
-        ) {
-            return Err(SdpError::InvalidZkSignature);
-        }
+        let inputs = public_inputs_from_pks(
+            (*context.tx_hash_view.as_fr()).into(),
+            &[note.pk, operation.zk_id],
+        )
+        .map_err(|_| SdpError::InvalidZkSignature)?;
 
         SDPDeclareValidationExt::validate(
-            self,
+            operation,
             note,
             context.channels,
             context.declarations,
-            context.locked_notes,
+            context.service_notes,
             context.min_stake,
-        )
+        )?;
+
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *self.proof().zk_sig.as_proof(),
+            inputs,
+        )))
     }
 }
 
-impl PreverifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
+impl PreverifiableOperation<GenesisMode>
+    for SignedOperation<SDPDeclareOp, Unverified, GenesisMode>
+{
     type Context<'a> = SDPDeclarePreverificationContext<'a>;
     type Error = SdpError;
 
-    fn preverify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
-        self.preverify(context.tx_hash_view, &proof.ed25519_sig)
+    fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        self.operation()
+            .preverify(context.tx_hash_view, &self.proof().ed25519_sig)
     }
 }
 
-impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
+impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverified, GenesisMode> {
     type Context<'a> = SDPDeclareGenesisValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
         // Check that the note exist
-        let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
-            return Err(SdpError::InexistingNote(self.locked_note_id));
+        let Some((utxo, _)) = context.utxo_tree.utxos().get(&operation.service_note_id) else {
+            return Err(SdpError::InexistingNote(operation.service_note_id));
         };
         let note = utxo.note;
 
         SDPDeclareValidationExt::validate(
-            self,
+            operation,
             note,
             context.channels,
             context.declarations,
-            context.locked_notes,
+            context.service_notes,
             context.min_stake,
-        )
+        )?;
+
+        Ok(None)
     }
 }
 
-impl ExecutableOperation for SDPDeclareOp {
+impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<SDPDeclareOp, Verified, Mode> {
     type Context<'a> = SDPDeclareExecutionContext;
     type Error = SdpError;
 
@@ -250,15 +275,7 @@ impl ExecutableOperation for SDPDeclareOp {
         &self,
         context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
-        SDPDeclareValidationExt::execute(self, context)
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<SDPDeclareOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
+        SDPDeclareValidationExt::execute(self.operation(), context)
     }
 }
 
@@ -283,7 +300,7 @@ mod tests {
                 .public_key()
                 .into(),
             zk_id: ZkKey::from(BigUint::from(zk_sk)).to_public_key(),
-            locked_note_id: Fr::ZERO.into(),
+            service_note_id: Fr::ZERO.into(),
         }
     }
 

@@ -9,8 +9,9 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         NoteId, Value,
-        ledger::ExecutableOperation as _,
+        ledger::verification_mode::{GenesisMode, StandardMode},
         ops::{
+            SignedOperation,
             channel::{
                 config::{ChannelConfigExecutionContext, ChannelConfigOp},
                 inscribe::{InscriptionExecutionContext, InscriptionOp},
@@ -20,18 +21,19 @@ use lb_core::{
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
-        traits::GenesisTx,
+        transactions::{GenesisDeclarations, states::Verified},
     },
-    sdp::locked_notes::LockedNotes,
+    sdp::service_notes::ServiceNotes,
 };
 use lb_cryptarchia_engine::Slot;
+use lb_log_targets::ledger;
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
 
 use crate::{Config, EpochState, UtxoTree, mantle::sdp::HeaderEffect};
 
-const LOG_TARGET: &str = "ledger::mantle";
+const LOG_TARGET: &str = ledger::mantle::ROOT;
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -47,6 +49,8 @@ pub enum Error {
     LeaderClaim(#[from] LeaderClaimError),
     #[error(transparent)]
     ClaimPow(#[from] ClaimPowRewardError),
+    #[error(transparent)]
+    PowRewardPool(#[from] pow::PowRewardPoolOverflow),
     #[error("Note not found: {0:?}")]
     NoteNotFound(NoteId),
 }
@@ -71,19 +75,20 @@ impl LedgerState {
             sdp: sdp::SdpLedger::new(epoch_state.epoch())
                 .with_blend_service(&config.sdp_config.service_rewards_params.blend, epoch_state),
             leaders: leader::LeaderState::new(),
-            pow: pow::PowState::new(),
+            pow: pow::PowState::from_reward_config(&config.pow_config.reward),
         }
     }
 
     pub fn from_genesis_tx(
-        tx: impl GenesisTx,
+        signed_operation_inscription: SignedOperation<InscriptionOp, Verified, GenesisMode>,
+        signed_operation_declarations: GenesisDeclarations,
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let mut tx_events = Vec::new();
 
-        let (channels, events) = channel::Channels::from_genesis(tx.genesis_inscription())?;
+        let (channels, events) = channel::Channels::from_genesis(signed_operation_inscription)?;
         tx_events.extend(events);
 
         let (sdp, events) = sdp::SdpLedger::from_genesis(
@@ -91,7 +96,7 @@ impl LedgerState {
             utxo_tree,
             &channels,
             epoch_state,
-            tx.sdp_declarations(),
+            signed_operation_declarations,
         )?;
         tx_events.extend(events);
 
@@ -100,15 +105,15 @@ impl LedgerState {
                 channels,
                 sdp,
                 leaders: leader::LeaderState::new(),
-                pow: pow::PowState::new(),
+                pow: pow::PowState::from_reward_config(&config.pow_config.reward),
             },
             tx_events,
         ))
     }
 
     #[must_use]
-    pub const fn locked_notes(&self) -> &LockedNotes {
-        self.sdp.locked_notes()
+    pub const fn service_notes(&self) -> &ServiceNotes {
+        self.sdp.service_notes()
     }
 
     #[must_use]
@@ -155,7 +160,9 @@ impl LedgerState {
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
-        self.pow = self.pow.try_apply_header(last_epoch_state, epoch_state);
+        self.pow = self
+            .pow
+            .try_apply_header(last_epoch_state, epoch_state, config)?;
         Ok((self, effect))
     }
 
@@ -167,22 +174,25 @@ impl LedgerState {
     /// known — a proposer applying the header of a block it is still
     /// building has no id to record (and that block's transactions cannot
     /// anchor to it anyway).
-    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot) {
+    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot, config: &Config) {
         self.pow.add_seen_block_slots(block_hash, slot);
-        self.pow.prune_seen_block_slots(slot);
-        self.pow.prune_nullifiers_by_slots(slot);
+        self.pow
+            .prune_seen_block_slots(slot, config.pow_config.reward.slot_window);
+        self.pow
+            .prune_nullifiers_by_slots(slot, config.pow_config.reward.slot_window);
     }
 
     pub fn try_apply_channel_inscription(
         mut self,
-        inscription_op: &InscriptionOp,
+        signed_operation: SignedOperation<InscriptionOp, Verified, StandardMode>,
         block_slot: Slot,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (result, events) = inscription_op
+        let (result, events) = signed_operation
             .execute(InscriptionExecutionContext {
                 channels: self.channels,
                 block_slot,
             })
+            .map_err(|(_signed_operation, error)| error)
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
             )?;
@@ -193,7 +203,7 @@ impl LedgerState {
 
     pub fn try_apply_channel_config(
         mut self,
-        config_op: &ChannelConfigOp,
+        config_op: SignedOperation<ChannelConfigOp, Verified, StandardMode>,
         block_slot: Slot,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (result, events) = config_op
@@ -201,6 +211,7 @@ impl LedgerState {
                 channels: self.channels,
                 block_slot,
             })
+            .map_err(|(_signed_operation, error)| error)
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
             )?;
@@ -211,38 +222,38 @@ impl LedgerState {
 
     pub fn try_apply_sdp_declaration(
         mut self,
-        sdp_declare_op: &SDPDeclareOp,
+        sdp_declare_op: SignedOperation<SDPDeclareOp, Verified, StandardMode>,
         utxo_tree: &UtxoTree,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (result, events) = self
+        let (sdp, events) = self
             .sdp
             .try_apply_sdp_declaration(utxo_tree, sdp_declare_op, &config.sdp_config)
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"),
             )?;
-        self.sdp = result;
+        self.sdp = sdp;
         Ok((self, events))
     }
 
     pub fn try_apply_sdp_active(
         mut self,
-        sdp_active_op: &SDPActiveOp,
+        sdp_active_op: SignedOperation<SDPActiveOp, Verified, StandardMode>,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (result, events) = self
+        let (sdp, events) = self
             .sdp
             .apply_active_msg(sdp_active_op, &config.sdp_config)
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP active message"),
             )?;
-        self.sdp = result;
+        self.sdp = sdp;
         Ok((self, events))
     }
 
     pub fn try_apply_sdp_withdraw(
         mut self,
-        sdp_withdraw_op: &SDPWithdrawOp,
+        sdp_withdraw_op: SignedOperation<SDPWithdrawOp, Verified, StandardMode>,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (result, events) = self

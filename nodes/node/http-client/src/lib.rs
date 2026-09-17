@@ -3,16 +3,19 @@ use std::sync::Arc;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag, Slot, State};
-pub use lb_core::events::{Event, Events, TxEventPayload};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     header::{ContentId, HeaderId},
     mantle::{
-        SignedMantleTx, channel::ChannelState, ops::channel::ChannelId,
-        transactions::states::Unverified,
+        SignedOps, channel::ChannelState, ledger::verification_mode::StandardMode,
+        ops::channel::ChannelId, transactions::states::Unverified,
     },
     proofs::leader_proof::Groth16LeaderProof,
     sdp::{DeclarationId, DeclarationMessage},
+};
+pub use lb_core::{
+    events::{Event, Events, TxEventPayload},
+    mantle::transactions::genesis_tx::ChainId,
 };
 use lb_groth16::fr_to_bytes;
 pub use lb_http_api_common::TimeInfo;
@@ -20,8 +23,10 @@ use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     bodies::{
         blend::JoinBlendRequestBody,
+        chain::ChainIdResponseBody,
         mantle::GasPricesResponseBody,
         wallet::{
+            aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
             claimable_vouchers::WalletClaimableVouchersResponseBody,
             fund::{WalletFundRequestBody, WalletFundResponseBody},
@@ -30,9 +35,9 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO,
-        CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS, MANTLE_GAS_PRICES, MEMPOOL_ADD_TX,
-        NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_ID, CHANNEL,
+        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, LEADER_CLAIM_VOUCHERS,
+        MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -40,6 +45,7 @@ use lb_http_api_common::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_log_targets::http_client;
+use lb_version::BuildVersionInfo;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -69,7 +75,7 @@ pub struct ApiBlock {
     pub header: ApiHeader,
     #[serde(default)]
     pub uncle_headers: Vec<ApiSignedHeader>,
-    pub transactions: Vec<SignedMantleTx<Unverified>>,
+    pub transactions: Vec<SignedOps<Unverified, StandardMode>>,
 }
 
 /// Client-side signed header representation matching the server's
@@ -160,6 +166,22 @@ impl CommonHttpClient {
         Res: DeserializeOwned + Send + Sync,
     {
         let mut request = self.client.get(request_url);
+        if let Some(request_body) = request_body {
+            request = request.json(request_body);
+        }
+        self.execute_request::<Res>(request).await
+    }
+
+    pub async fn put<Req, Res>(
+        &self,
+        request_url: Url,
+        request_body: Option<&Req>,
+    ) -> Result<Res, Error>
+    where
+        Req: Serialize + ?Sized + Send + Sync,
+        Res: DeserializeOwned + Send + Sync,
+    {
+        let mut request = self.client.put(request_url);
         if let Some(request_body) = request_body {
             request = request.json(request_body);
         }
@@ -336,12 +358,23 @@ impl CommonHttpClient {
         self.post(request_url, declaration).await
     }
 
-    /// Get the version of the node, e.g. `0.1.2 (abcdefaa)`.
-    pub async fn get_node_version(&self, base_url: Url) -> Result<String, Error> {
+    /// Get the version and build provenance of the node.
+    pub async fn get_node_version(&self, base_url: Url) -> Result<BuildVersionInfo, Error> {
         let request_url = base_url
             .join(NODE_VERSION.trim_start_matches('/'))
             .map_err(Error::Url)?;
-        self.get::<(), String>(request_url, None).await
+        self.get::<(), BuildVersionInfo>(request_url, None).await
+    }
+
+    /// Get the chain ID the node runs on. Fixed by the node's deployment
+    /// settings, so the value never changes for a given node.
+    pub async fn chain_id(&self, base_url: Url) -> Result<ChainId, Error> {
+        let request_url = base_url
+            .join(CHAIN_ID.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), ChainIdResponseBody>(request_url, None)
+            .await
+            .map(|body| body.chain_id)
     }
 
     /// Get consensus info (tip, height, etc.)
@@ -627,6 +660,28 @@ impl CommonHttpClient {
         }
 
         self.get::<(), WalletClaimableVouchersResponseBody>(request_url, None)
+            .await
+    }
+
+    /// Get the wallet notes that are aged enough to take part in the
+    /// leadership lottery at `tip`, or at the current tip when `tip` is
+    /// `None`. An empty `notes` means the node cannot win a slot.
+    pub async fn get_leader_aged_notes(
+        &self,
+        base_url: Url,
+        tip: Option<HeaderId>,
+    ) -> Result<LeaderAgedNotesResponseBody, Error> {
+        let mut request_url = base_url
+            .join(LEADER_AGED_NOTES.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
+        self.get::<(), LeaderAgedNotesResponseBody>(request_url, None)
             .await
     }
 

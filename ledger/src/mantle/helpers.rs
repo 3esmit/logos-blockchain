@@ -1,5 +1,7 @@
+use std::num::NonZeroU64;
+
 use lb_core::{
-    crypto::Hash,
+    crypto::{Hash, ZkHash},
     mantle::{
         channel::Channels,
         ledger::{Declarations, Utxos},
@@ -11,7 +13,7 @@ use lb_core::{
         },
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
@@ -45,8 +47,8 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state.channels()
     }
 
-    fn get_locked_notes(&self) -> &LockedNotes {
-        self.ledger_state.locked_notes()
+    fn get_service_notes(&self) -> &ServiceNotes {
+        self.ledger_state.service_notes()
     }
 
     fn get_utxos(&self) -> &Utxos {
@@ -146,11 +148,19 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state.pow.reward_pool()
     }
 
-    fn get_previous_epoch(&self) -> Epoch {
-        Epoch::from(self.get_epoch().into_inner().saturating_sub(1))
+    fn get_current_epoch_nonce(&self) -> ZkHash {
+        self.cryptarchia_ledger.epoch_state.nonce
+    }
+
+    fn get_previous_epoch_nonce(&self) -> ZkHash {
+        self.cryptarchia_ledger.previous_epoch_nonce
     }
 
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {
         self.ledger_state.pow.block_slots().clone()
+    }
+
+    fn get_pow_slot_window(&self) -> NonZeroU64 {
+        self.config.pow_config.reward.slot_window
     }
 }

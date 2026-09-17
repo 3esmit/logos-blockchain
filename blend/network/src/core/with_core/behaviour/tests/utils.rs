@@ -11,8 +11,8 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, select};
+use lb_blend_membership::{Membership, Node};
 use lb_blend_message::crypto::key_ext::Ed25519SecretKeyExt as _;
-use lb_blend_scheduling::membership::{Membership, Node};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, SwarmEvent};
 use libp2p::{
@@ -230,7 +230,7 @@ pub fn build_memberships<Behaviour: NetworkBehaviour>(
         .map(|swarm| Node {
             id: *swarm.local_peer_id(),
             address: Multiaddr::empty(),
-            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
         })
         .collect::<Vec<_>>();
     nodes

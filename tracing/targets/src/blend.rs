@@ -13,21 +13,29 @@ log_targets! {
         edge::BEHAVIOUR,
         handler::CORE_EDGE,
     },
+    processor::{
+        core_and_leader::{RECEIVE, SEND},
+        leader::SEND,
+    },
+    prover::{
+        CORE,
+        CORE_AND_LEADER,
+        CORE_LEADER_AND_POW,
+        LEADER,
+        LEADER_AND_POW,
+        POW
+    },
     scheduling::{
         COVER,
         DELAY,
-        proofs::CORE,
-        proofs::CORE_AND_LEADER,
-        proofs::CORE_LEADER_AND_POW,
-        proofs::LEADER,
-        proofs::LEADER_AND_POW,
-        proofs::POW,
     },
     service::{
+        BROADCAST,
         CORE,
         EDGE,
         EPOCH,
-        MODES,
+        MEMBERSHIP,
+        ORCHESTRATOR,
         core::KMS_POQ_GENERATOR,
         edge::backend::LIBP2P,
     }

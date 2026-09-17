@@ -1,6 +1,6 @@
 use core::num::NonZeroU64;
 
-use derivative::Derivative;
+use educe::Educe;
 use itertools::Itertools as _;
 use lb_blend_crypto::{ZkHash, cipher::Cipher, pseudo_random_sized_bytes, random_sized_bytes};
 use lb_blend_proofs::{
@@ -11,6 +11,7 @@ use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
+use lb_log_targets::blend;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -33,16 +34,18 @@ use crate::{
     },
 };
 
+const LOG_TARGET: &str = blend::message::ROOT;
+
 pub type MessageIdentifier = ZkHash;
 
 /// An unverified encapsulated message that is received from a peer.
-#[derive(Derivative, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[educe(Debug)]
 pub struct EncapsulatedMessage {
     /// A public header that is not encapsulated.
     public_header: PublicHeader,
     /// Encapsulated parts
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -344,7 +347,7 @@ where
 {
     verify_last_reconstructed_public_header(public_header, private_header, payload)?;
     // Verify the proof of quota in the reconstructed public header
-    tracing::trace!("Verifying proof of quota of intermediate reconstructed public header.");
+    tracing::trace!(target: LOG_TARGET, "Verifying proof of quota of intermediate reconstructed public header.");
     public_header.verify_proof_of_quota(verifier)?;
     Ok(())
 }

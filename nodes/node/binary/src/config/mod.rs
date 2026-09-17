@@ -24,7 +24,7 @@ pub use crate::config::{
     api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
     cryptarchia::serde::Config as CryptarchiaConfig, deployment::DeploymentSettings,
     kms::serde::Config as KmsConfig, network::serde::Config as NetworkConfig,
-    sdp::serde::Config as SdpConfig, state::Config as StateConfig,
+    pow::serde::Config as PoWConfig, sdp::serde::Config as SdpConfig, state::Config as StateConfig,
     storage::serde::Config as StorageConfig, time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig, wallet::serde::Config as WalletConfig,
 };
@@ -43,6 +43,7 @@ pub mod deployment;
 pub mod kms;
 pub mod mempool;
 pub mod network;
+pub mod pow;
 pub mod sdp;
 pub mod state;
 pub mod storage;
@@ -69,6 +70,10 @@ pub struct UserConfig {
     #[serde(default)]
     pub kms: KmsConfig,
     pub wallet: WalletConfig,
+    /// Optional: an omitted section leaves mining on its defaults and
+    /// auto-claim off.
+    #[serde(default)]
+    pub pow: PoWConfig,
     #[serde(default)]
     pub tracing: TracingConfig,
     #[serde(default)]
@@ -92,6 +97,9 @@ impl UserConfig {
             wallet: required_values.wallet,
 
             api: ApiConfig::default(),
+            // Mining defaults, auto-claim off: unattended claiming is opt-in
+            // through `pow.auto_claim.targets`.
+            pow: PoWConfig::default(),
             kms: KmsConfig::default(),
             network: NetworkConfig::default(),
             state: StateConfig::default(),
@@ -252,6 +260,13 @@ pub struct BlendArgs {
 
     #[clap(long = "blend-secret-key-id", env = "BLEND_SECRET_KEY_ID")]
     pub blend_secret_key_id: Option<KeyId>,
+
+    #[clap(
+        long = "blend-abstain-on-failure",
+        env = "BLEND_ABSTAIN_ON_FAILURE",
+        default_value_t = false
+    )]
+    pub abstain_on_failure: bool,
 }
 
 #[derive(Parser, Debug, Default, Clone, Copy)]
@@ -462,7 +477,12 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
         blend_addr,
         blend_signing_key_id,
         blend_secret_key_id,
+        abstain_on_failure,
     } = blend_args;
+
+    if abstain_on_failure {
+        blend.abstain_on_failure();
+    }
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);

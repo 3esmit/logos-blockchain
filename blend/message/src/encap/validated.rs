@@ -1,11 +1,13 @@
-use derivative::Derivative;
+use educe::Educe;
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::inputs::VerifyInputs,
 };
 use lb_codec::BinaryEncode;
-use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
+use lb_key_management_system_keys::keys::{
+    Ed25519PublicKey, UnsecuredEd25519Key, X25519PrivateKey,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -21,12 +23,12 @@ use crate::{
     reward::BlendingToken,
 };
 
-#[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[educe(Debug)]
 /// An encapsulated message whose public header signature has been verified.
 pub struct EncapsulatedMessageWithVerifiedSignature {
     public_header_with_verified_signature: PublicHeaderWithVerifiedSignature,
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -84,6 +86,11 @@ impl EncapsulatedMessageWithVerifiedSignature {
         self.public_header_with_verified_signature.id()
     }
 
+    #[must_use]
+    pub const fn signing_key(&self) -> &Ed25519PublicKey {
+        self.public_header_with_verified_signature.signing_key()
+    }
+
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn public_header_mut(&mut self) -> &mut PublicHeaderWithVerifiedSignature {
         &mut self.public_header_with_verified_signature
@@ -123,11 +130,11 @@ pub struct RequiredProofOfSelectionVerificationInputs {
 }
 
 /// An encapsulated message whose public header has been verified.
-#[derive(Derivative, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-#[derivative(Debug)]
+#[derive(Educe, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[educe(Debug)]
 pub struct EncapsulatedMessageWithVerifiedPublicHeader {
     validated_public_header: VerifiedPublicHeader,
-    #[derivative(Debug = "ignore")] // too long
+    #[educe(Debug(ignore))] // too long
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -165,7 +172,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
                     payload_body,
                     encapsulation_layers,
                 )?,
-                UnsecuredEd25519Key::generate_with_blake_rng(),
+                UnsecuredEd25519Key::generate_with_chacha_rng(),
                 VerifiedProofOfQuota::from_bytes_unchecked(random_sized_bytes()),
             ),
             |(part, signing_key, proof_of_quota), (i, input)| {
@@ -216,6 +223,11 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     #[must_use]
     pub const fn id(&self) -> MessageIdentifier {
         self.validated_public_header.id()
+    }
+
+    #[must_use]
+    pub const fn signing_key(&self) -> &Ed25519PublicKey {
+        self.validated_public_header.signing_key()
     }
 
     /// Decapsulates the message using the provided key.

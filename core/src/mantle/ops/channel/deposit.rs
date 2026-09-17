@@ -1,26 +1,26 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
-        Value,
+        batch::DeferredZkpVerification,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
-            ProvableOperation, Utxos, VerifiableOperation, verification_mode,
-            verification_mode::VerificationMode,
+            ProvableOperation, Utxos, VerifiableOperation,
+            verification_mode::{StandardMode, VerificationMode},
         },
-        ops::{OpId, SignedOp, channel::ChannelId},
+        ops::{OpId, SignedOperation, channel::ChannelId},
         transactions::{
             hash::{TxHash, TxHashView},
-            states::VerificationState,
+            states::{Preverified, Unverified, Verified},
         },
     },
-    sdp::locked_notes::LockedNotes,
+    sdp::service_notes::ServiceNotes,
 };
 
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
@@ -59,7 +59,7 @@ impl OpId for DepositOp {
 
 pub struct DepositValidationContext<'a> {
     pub channels: &'a Channels,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
 }
@@ -72,58 +72,67 @@ pub struct DepositExecutionContext {
 
 impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
+    const CODE: u8 = 0x12;
 }
 
 impl OperationGas<MainnetGasProfile> for DepositOp {
     const GAS_COST: Gas = Gas::new(590);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for DepositOp {
+impl OpGasCalculator<MainnetGasProfile> for DepositOp {}
+
+impl PreverifiableOperation<StandardMode> for SignedOperation<DepositOp, Unverified, StandardMode> {
     type Context<'a> = ();
     type Error = Error;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
-        self.inputs.preverify()?;
+        self.operation().inputs.preverify()?;
 
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
+impl VerifiableOperation<StandardMode> for SignedOperation<DepositOp, Preverified, StandardMode> {
     type Context<'a> = DepositValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
-        // Check that the channel exist
-        if !context.channels.channels.contains_key(&self.channel_id) {
+    fn verify(
+        &self,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
+        // Check that the channel exists
+        if !context
+            .channels
+            .channels
+            .contains_key(&operation.channel_id)
+        {
             return Err(Error::ChannelNotFound {
-                channel_id: self.channel_id,
+                channel_id: operation.channel_id,
             });
         }
 
         // Check that inputs are spendable and not already channel notes
-        self.inputs.validate_not_in_channel(
-            context.locked_notes,
+        operation.inputs.validate_not_in_channel(
+            context.service_notes,
             context.channels,
             context.utxos,
         )?;
 
-        // Check the signature
-        let public_keys = self.inputs.get_pk(context.utxos)?;
-        if !ZkPublicKey::verify_multi(&public_keys, context.tx_hash_view.as_fr(), proof) {
-            return Err(Error::InvalidSignature);
-        }
-
-        Ok(())
+        // Defer the proof verification, so that the caller can batch it.
+        let public_keys = operation.inputs.get_pk(context.utxos)?;
+        let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &public_keys)
+            .map_err(|_| Error::InvalidSignature)?;
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *self.proof().as_proof(),
+            inputs,
+        )))
     }
 }
 
-impl ExecutableOperation for DepositOp {
+impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, Verified, Mode> {
     type Context<'a> = DepositExecutionContext;
     type Error = Error;
 
@@ -131,21 +140,23 @@ impl ExecutableOperation for DepositOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         // Get the amount deposited for the event payload
-        let amount_deposited = self.inputs.amount(&context.utxos)?;
-        let outputs = self.outputs(&context.utxos)?;
+        let amount_deposited = operation.inputs.amount(&context.utxos)?;
+        let outputs = operation.outputs(&context.utxos)?;
 
         // Remove the inputs from the ledger.
-        context.utxos = self.inputs.execute(context.utxos)?;
+        context.utxos = operation.inputs.execute(context.utxos)?;
 
         // Add the re-created notes to the ledger and register them as channel
         // notes.
-        context.utxos = outputs.execute(context.utxos, self);
+        context.utxos = outputs.execute(context.utxos, operation);
         let mut notes = DepositRecreatedNotes::default();
-        for utxo in outputs.utxos(self) {
+        for utxo in outputs.utxos(operation) {
             context.channels = context
                 .channels
-                .register_channel_note(&utxo.id(), &self.channel_id)?;
+                .register_channel_note(&utxo.id(), &operation.channel_id)?;
             notes
                 .try_push(DepositNote {
                     note_id: utxo.id(),
@@ -157,25 +168,17 @@ impl ExecutableOperation for DepositOp {
 
         let events = std::iter::once(TxEvent::new(
             context.tx_hash,
-            self.op_id(),
+            operation.op_id(),
             TxEventPayload::Deposit {
-                channel_id: self.channel_id,
+                channel_id: operation.channel_id,
                 amount: amount_deposited,
-                metadata: self.metadata.clone(),
+                metadata: operation.metadata.clone(),
                 notes,
             },
         ))
         .collect();
 
         Ok((context, events))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<DepositOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }
 
@@ -193,9 +196,10 @@ mod test {
             metadata: Metadata::empty(),
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_operation = SignedOperation::new(deposit, proof);
 
         assert_eq!(
-            deposit.preverify(&proof, &()),
+            signed_operation.preverify(&()),
             Err(Error::Inputs(InputsError::EmptyInputs))
         );
     }

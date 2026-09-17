@@ -1,11 +1,13 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, Value,
+        Note, SignedOps, Value,
         gas::GasCost,
+        ledger::verification_mode::StandardMode,
         ops::leader_claim::{RewardsRoot, VoucherCm},
         transactions::{
-            MantleTxBuilder, MantleTxContext, TxBuilderError, hash::TxHash, states::Preverified,
+            MantleTxBuilder, TxBuilderError, hash::TxHash, states::Preverified,
+            tx_list::ops::OpsContext,
         },
     },
 };
@@ -25,8 +27,8 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    ClaimableVoucherInfo, TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError,
-    WalletServiceSettings,
+    ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, UtxoWithKeyId, WalletMsg,
+    WalletServiceError, WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -159,7 +161,7 @@ where
         reward_amount: Value,
         funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
-    ) -> Result<TipResponse<SignedMantleTx<Preverified>>, WalletApiError> {
+    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -179,7 +181,7 @@ where
     pub async fn get_tx_context(
         &self,
         block_id: Option<HeaderId>,
-    ) -> Result<MantleTxContext, WalletApiError> {
+    ) -> Result<OpsContext, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
             .send(WalletMsg::GetTxContext { block_id, resp_tx })
@@ -194,7 +196,7 @@ where
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
-    ) -> Result<TipResponse<SignedMantleTx<Preverified>>, WalletApiError> {
+    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         let mantle_tx_builder =
             MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
         let funded_tx_builder = self
@@ -207,7 +209,7 @@ where
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-    ) -> Result<TipResponse<SignedMantleTx<Preverified>>, WalletApiError> {
+    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -271,6 +273,25 @@ where
         Ok(rx.await??)
     }
 
+    /// Reports which of the wallet's notes are old enough to take part in the
+    /// leadership lottery at `tip`, or at the current tip when `tip` is
+    /// `None`, along with the total value they stake.
+    ///
+    /// Unlike [`Self::get_leader_aged_notes`], this does not expose the key
+    /// ids, so it is the variant to use for external reporting (HTTP, FFI).
+    pub async fn get_leader_aged_notes_info(
+        &self,
+        tip: Option<HeaderId>,
+    ) -> Result<TipResponse<LeaderAgedNotesInfo>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::GetLeaderAgedNotesInfo { tip, resp_tx })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
     pub async fn generate_new_voucher(&self) -> Result<VoucherCm, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
@@ -282,7 +303,7 @@ where
     pub async fn get_claimable_vouchers(
         &self,
         tip: Option<HeaderId>,
-    ) -> Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletApiError> {
+    ) -> Result<TipResponse<ClaimableVouchersInfo>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
             .send(WalletMsg::GetClaimableVouchers { tip, resp_tx })
@@ -297,7 +318,7 @@ mod tests {
 
     use lb_core::mantle::{
         ops::channel::{ChannelId, ChannelKeyIndex},
-        transactions::{GasPrices, MantleTxGasContext},
+        transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
     use overwatch::services::state::{NoOperator, NoState};
     use tokio::sync::mpsc;
@@ -345,8 +366,8 @@ mod tests {
             while let Some(msg) = msg_receiver.recv().await {
                 if let WalletMsg::GetTxContext { block_id, resp_tx } = msg {
                     assert_eq!(block_id, Some(expected_block_id));
-                    let context = MantleTxContext {
-                        gas_context: MantleTxGasContext::new(
+                    let context = OpsContext {
+                        gas_context: OpsGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
                             std::collections::HashMap::new(),
                             expected_gas_prices,

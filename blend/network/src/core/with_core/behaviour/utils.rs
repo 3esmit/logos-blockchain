@@ -2,11 +2,10 @@ use core::{convert::Infallible, num::NonZeroU64, task::Waker};
 use std::{collections::VecDeque, sync::Arc};
 
 use either::Either;
-use lb_blend_message::encap::{
-    ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader,
-};
-use lb_blend_scheduling::{
-    deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_public_header,
+use lb_blend_message::{
+    deserialize_encapsulated_message,
+    encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+    serialize_encapsulated_message_with_verified_public_header,
 };
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{
@@ -14,6 +13,7 @@ use libp2p::{
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
 };
 
+use super::LOG_TARGET;
 use crate::core::{
     poq_verification::{PendingPoQVerifications, spawn_poq_verification},
     with_core::{
@@ -54,7 +54,7 @@ where
     let serialized_message = serialize_encapsulated_message_with_verified_public_header(message);
 
     peer_connections.for_each(|(peer_id, connection_id)| {
-        tracing::trace!("Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
+        tracing::trace!(target: LOG_TARGET, "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
         events_queue.push_back(ToSwarm::NotifyHandler {
             peer_id: *peer_id,
             handler: NotifyHandler::One(*connection_id),

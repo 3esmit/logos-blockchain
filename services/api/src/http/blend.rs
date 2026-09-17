@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use lb_blend_service::message::{BlendPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
 use lb_core::codec::{DeserializeOp, SerializeOp};
 use lb_network_service::backends::libp2p::PeerId;
 use overwatch::services::{AsServiceId, ServiceData};
@@ -29,7 +29,7 @@ where
 pub async fn blend_join_network<BlendService, RuntimeServiceId>(
     handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
     locator: lb_core::sdp::Locator,
-    locked_note_id: lb_core::mantle::NoteId,
+    service_note_id: lb_core::mantle::NoteId,
 ) -> Result<lb_core::sdp::DeclarationId, overwatch::DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
@@ -41,7 +41,7 @@ where
     relay
         .send(ProxyServiceMessage::JoinAsCore {
             locator,
-            locked_note_id,
+            service_note_id,
             reply: sender,
         })
         .await
@@ -71,7 +71,7 @@ where
 {
     // Encoded the same way the mempool gossips transactions, so that whichever
     // node exits this one decodes what it expects.
-    let payload = BlendPayload::transaction(transaction.to_bytes()?.to_vec())?;
+    let payload = DataPayload::try_from_transaction(&transaction)?;
     let relay = handle.relay::<BlendService>().await?;
 
     relay

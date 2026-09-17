@@ -1,23 +1,26 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     events::TxEvent,
     mantle::{
-        Value,
+        batch::DeferredZkpVerification,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
-            Utxo, Utxos, VerifiableOperation, verification_mode,
-            verification_mode::VerificationMode,
+            Utxo, Utxos, VerifiableOperation,
+            verification_mode::{StandardMode, VerificationMode},
         },
-        ops::{OpId, SignedOp},
-        transactions::{hash::TxHashView, states::VerificationState},
+        ops::{OpId, SignedOperation},
+        transactions::{
+            hash::TxHashView,
+            states::{Preverified, Unverified, Verified},
+        },
     },
-    sdp::locked_notes::LockedNotes,
+    sdp::service_notes::ServiceNotes,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
@@ -79,7 +82,7 @@ pub enum TransferError {
 }
 
 pub struct TransferValidationContext<'a> {
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub channels: &'a Channels,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
@@ -87,54 +90,63 @@ pub struct TransferValidationContext<'a> {
 
 impl ProvableOperation for TransferOp {
     type Proof = ZkSignature;
+    const CODE: u8 = 0x00;
 }
 
 impl OperationGas<MainnetGasProfile> for TransferOp {
     const GAS_COST: Gas = Gas::new(590);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for TransferOp {
+impl OpGasCalculator<MainnetGasProfile> for TransferOp {}
+
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<TransferOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = TransferError;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
         // Ensure the inputs is non-empty
-        self.inputs.preverify()?;
+        operation.inputs.preverify()?;
 
         // Validate Outputs
-        self.outputs.validate()?;
+        operation.outputs.validate()?;
 
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
+impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
         // Validate Inputs
-        self.inputs.validate_not_in_channel(
-            context.locked_notes,
+        operation.inputs.validate_not_in_channel(
+            context.service_notes,
             context.channels,
             context.utxos,
         )?;
 
-        // Check the transfer Proof
-        let pks = self.inputs.get_pk(context.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, context.tx_hash_view.as_fr(), proof) {
-            return Err(TransferError::InvalidProof);
-        }
-
-        Ok(())
+        // Defer the proof verification so that the caller can batch it.
+        let pks = operation.inputs.get_pk(context.utxos)?;
+        let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &pks)
+            .map_err(|_| TransferError::InvalidProof)?;
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *self.proof().as_proof(),
+            inputs,
+        )))
     }
 }
 
-impl ExecutableOperation for TransferOp {
+impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<TransferOp, Verified, Mode> {
     type Context<'a> = Utxos;
     type Error = TransferError;
 
@@ -142,25 +154,21 @@ impl ExecutableOperation for TransferOp {
         &self,
         mut utxos: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
-        // Remove inputs from the ledger
-        utxos = self.inputs.execute(utxos)?;
-        // Add outputs from the ledger
-        utxos = self.outputs.execute(utxos, self);
-        Ok((utxos, Vec::new()))
-    }
-}
+        let operation = self.operation();
 
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<TransferOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
+        // Remove inputs from the ledger
+        utxos = operation.inputs.execute(utxos)?;
+
+        // Add outputs from the ledger
+        utxos = operation.outputs.execute(utxos, self.operation());
+        Ok((utxos, Vec::new()))
     }
 }
 
 #[cfg(test)]
 mod test {
     use lb_groth16::CompressedGroth16Proof;
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_poseidon2::Fr;
     use num_bigint::BigUint;
 
@@ -175,9 +183,10 @@ mod test {
             outputs: Outputs::new([Note::new(100, pk)]),
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_operation = SignedOperation::new(transfer, proof);
 
         assert_eq!(
-            transfer.preverify(&proof, &()),
+            signed_operation.preverify(&()),
             Err(TransferError::Inputs(ledger::InputsError::EmptyInputs))
         );
     }

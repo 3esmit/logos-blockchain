@@ -24,7 +24,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
 use crate::{
     release::ProtocolIdentity,
@@ -66,10 +66,28 @@ const BLEND_POW_MAX_STEP: u64 = 2;
 const BLEND_POW_DAMPING_NUM: u32 = 1;
 const BLEND_POW_DAMPING_DEN_OFFSET: u32 = 1;
 
+// Token-reward PoW parameters. Payout is disabled (`rate_num = 0`).
+const REWARD_POW_POOL_GENESIS: u64 = 1_000_000_000;
+const REWARD_POW_EPOCH_REWARD_GENESIS: u64 = 1_000_000;
+const REWARD_POW_INITIAL_DIFFICULTY_EXPONENT: u32 = 26;
+const REWARD_POW_EMA_SMOOTHING_FACTOR: u64 = 9;
+const REWARD_POW_EMA_SMOOTHING_PRECISION: u64 = 10;
+const REWARD_POW_TARGET_CLAIMS_PER_BLOCK: u64 = 100;
+const REWARD_POW_RATE_NUM: u64 = 0;
+const REWARD_POW_RATE_DEN: u64 = 1;
+const REWARD_POW_TARGET_CLAIM_PER_BLOCK: u64 = 1;
+const REWARD_POW_SHARE: u64 = 10;
+const REWARD_POW_SHARE_DEN: u64 = 100;
+const REWARD_POW_SLOT_WINDOW: u64 = 100;
+
 const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
 const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
 
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Deployment settings assembled in a single place for clarity."
+)]
 pub fn e2e_deployment_settings_with_genesis_block(
     genesis_block: &GenesisBlock,
 ) -> DeploymentSettings {
@@ -97,10 +115,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .expect("Normalization constant cannot be negative."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
-                        message_frequency_per_round: NonNegativeF64::try_from(
+                        message_frequency_per_round: PositiveF64::try_from(
                             COVER_MESSAGE_FREQUENCY_PER_ROUND,
                         )
-                        .expect("Message frequency per round cannot be negative."),
+                        .expect("Message frequency per round must be positive."),
                     },
                     delayer: MessageDelayerSettings {
                         maximum_release_delay_in_rounds: NonZeroU64::try_from(
@@ -148,7 +166,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     timestamp: MIN_STAKE_TIMESTAMP,
                 },
             },
-            genesis_block: GenesisBlock::genesis(genesis_tx),
+            genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
             learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
             faucet_pk: None,
             pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {
@@ -159,6 +177,23 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     max_step: NonZero::new(BLEND_POW_MAX_STEP).unwrap(),
                     damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
                     damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
+                },
+                reward: lb_node::config::cryptarchia::deployment::RewardPoWConfig {
+                    reward_pool_genesis: REWARD_POW_POOL_GENESIS,
+                    epoch_reward_genesis: REWARD_POW_EPOCH_REWARD_GENESIS,
+                    initial_difficulty: ModulusShift::new::<REWARD_POW_INITIAL_DIFFICULTY_EXPONENT>(
+                    ),
+                    ema_smoothing_factor: REWARD_POW_EMA_SMOOTHING_FACTOR,
+                    ema_smoothing_precision: NonZero::new(REWARD_POW_EMA_SMOOTHING_PRECISION)
+                        .unwrap(),
+                    target_claims_per_block: REWARD_POW_TARGET_CLAIMS_PER_BLOCK,
+                    rate_num: REWARD_POW_RATE_NUM,
+                    rate_den: NonZero::new(REWARD_POW_RATE_DEN).unwrap(),
+                    target_claim_per_block: NonZero::new(REWARD_POW_TARGET_CLAIM_PER_BLOCK)
+                        .unwrap(),
+                    pow_share: REWARD_POW_SHARE,
+                    share_den: NonZero::new(REWARD_POW_SHARE_DEN).unwrap(),
+                    slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),
                 },
             },
         },

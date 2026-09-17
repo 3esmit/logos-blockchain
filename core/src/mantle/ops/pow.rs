@@ -1,6 +1,8 @@
+use std::num::NonZeroU64;
+
 use ark_ff::Zero as _;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::HashTrieMapSync;
@@ -12,16 +14,17 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        batch::DeferredZkpVerification,
+        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode,
+            VerifiableOperation, verification_mode::StandardMode,
         },
-        ops::{NoOpProof, OpId},
+        ops::{NoOpProof, OpId, SignedOperation},
+        transactions::states::{Preverified, Unverified, Verified},
     },
 };
 
-pub const SLOT_WINDOW: u64 = 100;
 /// `d_reward`: the difficulty threshold a puzzle ticket must be strictly
 /// below to qualify for a `PoW` reward claim.
 pub type PowTarget = Fr;
@@ -37,6 +40,19 @@ impl PowNullifier {
     #[must_use]
     pub const fn as_fr(&self) -> &Fr {
         &self.0
+    }
+
+    /// The puzzle ticket must be strictly below the current reward
+    /// difficulty (§5.3: `puzzle_ticket < difficulty_reward`).
+    pub fn validate_difficulty_reward(
+        &self,
+        reward_difficulty: &Fr,
+    ) -> Result<(), ClaimPowRewardError> {
+        let ticket_as_fr = self.as_fr();
+        if ticket_as_fr >= reward_difficulty {
+            return Err(ClaimPowRewardError::InvalidPoWRewardTicket);
+        }
+        Ok(())
     }
 }
 
@@ -80,9 +96,9 @@ impl ClaimPowRewardOp {
     #[must_use]
     pub fn get_puzzle_ticket(&self) -> PuzzleTicket {
         PowNullifier(ZkHasher::digest(&[
-            self.epoch_nonce,
-            fr_from_mod_bytes(&self.block_hash),
             *self.public_key.as_fr(),
+            fr_from_mod_bytes(&self.block_hash),
+            self.epoch_nonce,
         ]))
     }
 }
@@ -97,7 +113,8 @@ pub enum ClaimPowRewardError {
     #[error("Mismatch epoch nonce ({claim:?}), accepted {accepted:?}")]
     MismatchEpochNonce {
         claim: ZkHash,
-        accepted: (Epoch, Epoch),
+        /// The (previous, current) epoch nonces a claim may match.
+        accepted: (ZkHash, ZkHash),
     },
     #[error("Invalid PoW reward ticket")]
     InvalidPoWRewardTicket,
@@ -124,13 +141,19 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     pub epoch_pow_reward: PowReward,
     /// `R_PoW`: current balance of the `PoW` reward pool.
     pub epoch_reward_pool: PowReward,
-    /// Nonce of the current epoch.
-    pub current_epoch: Epoch,
-    /// Nonce of the previous epoch, also accepted for claims.
-    pub previous_epoch: Epoch,
+    /// Randomness nonce of the current epoch (the same value
+    /// proof-of-leadership uses), against which a claim's `epoch_nonce` is
+    /// matched.
+    pub current_epoch_nonce: ZkHash,
+    /// Randomness nonce of the previous epoch, also accepted for claims mined
+    /// just before an epoch boundary and claimed just after it.
+    pub previous_epoch_nonce: ZkHash,
     /// Slots of known blocks, used to check the claim's block is within
     /// the acceptance window.
     pub blocks_slot: HashTrieMapSync<Hash, Slot>,
+    /// Acceptance window, in slots: how far back a claim's anchor block may
+    /// be from the current block. Configured per-deployment.
+    pub slot_window: NonZeroU64,
 }
 
 impl ClaimPoWRewardVerificationContext<'_> {
@@ -144,11 +167,9 @@ impl ClaimPoWRewardVerificationContext<'_> {
         Ok(())
     }
 
-    /// On-chain `block_hash` window check, measured in slots.
-    pub fn accept_claim<const WINDOW: u64>(
-        &self,
-        block_id: Hash,
-    ) -> Result<(), ClaimPowRewardError> {
+    /// On-chain `block_hash` window check, measured in slots. The window is
+    /// taken from [`Self::slot_window`], configured per-deployment.
+    pub fn accept_claim(&self, block_id: Hash) -> Result<(), ClaimPowRewardError> {
         let Some(&block_slot) = self.blocks_slot.get(&block_id) else {
             return Err(ClaimPowRewardError::MissingBlock { block_id });
         };
@@ -159,7 +180,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
                 current_slot: self.current_block_slot,
             });
         };
-        if slot_gap > Slot::from(WINDOW) {
+        if slot_gap > Slot::from(self.slot_window.get()) {
             return Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: block_slot,
                 current_slot: self.current_block_slot,
@@ -168,28 +189,20 @@ impl ClaimPoWRewardVerificationContext<'_> {
         Ok(())
     }
 
-    /// Epoch nonce must match the current epoch or the previous epoch nonce
+    /// Epoch nonce must match the current epoch or the previous epoch nonce.
     fn validate_current_epoch_nonce(
         &self,
         claim_epoch_nonce: ZkHash,
     ) -> Result<(), ClaimPowRewardError> {
-        let previous_epoch_nonce = ZkHasher::digest(&[fr_from_mod_bytes(
-            &self.previous_epoch.into_inner().to_le_bytes(),
-        )]);
-        if claim_epoch_nonce == previous_epoch_nonce {
-            return Ok(());
-        }
-
-        let current_epoch_nonce = ZkHasher::digest(&[fr_from_mod_bytes(
-            &self.current_epoch.into_inner().to_le_bytes(),
-        )]);
-        if claim_epoch_nonce == current_epoch_nonce {
+        if claim_epoch_nonce == self.current_epoch_nonce
+            || claim_epoch_nonce == self.previous_epoch_nonce
+        {
             return Ok(());
         }
 
         Err(ClaimPowRewardError::MismatchEpochNonce {
             claim: claim_epoch_nonce,
-            accepted: (self.previous_epoch, self.current_epoch),
+            accepted: (self.previous_epoch_nonce, self.current_epoch_nonce),
         })
     }
 
@@ -199,11 +212,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
         &self,
         puzzle_ticket: PuzzleTicket,
     ) -> Result<(), ClaimPowRewardError> {
-        let ticket_as_fr = *puzzle_ticket.as_fr();
-        if ticket_as_fr >= self.reward_difficulty {
-            return Err(ClaimPowRewardError::InvalidPoWRewardTicket);
-        }
-        Ok(())
+        puzzle_ticket.validate_difficulty_reward(&self.reward_difficulty)
     }
 
     /// The puzzle ticket must not already have been claimed.
@@ -265,41 +274,49 @@ impl ClaimPoWRewardExecutionContext {
 
 impl ProvableOperation for ClaimPowRewardOp {
     type Proof = NoOpProof;
+    const CODE: u8 = 0x40;
 }
 
 impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
     const GAS_COST: Gas = Gas::new(1);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
+impl OpGasCalculator<MainnetGasProfile> for ClaimPowRewardOp {}
+
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<ClaimPowRewardOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = ClaimPowRewardError;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
+impl VerifiableOperation<StandardMode>
+    for SignedOperation<ClaimPowRewardOp, Preverified, StandardMode>
+{
     type Context<'a> = ClaimPoWRewardVerificationContext<'a>;
     type Error = ClaimPowRewardError;
 
-    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
         context.are_pow_reward_enabled()?;
-        context.accept_claim::<{ SLOT_WINDOW }>(self.block_hash)?;
-        context.validate_current_epoch_nonce(self.epoch_nonce)?;
-        let puzzle_ticket = self.get_puzzle_ticket();
+        context.accept_claim(operation.block_hash)?;
+        context.validate_current_epoch_nonce(operation.epoch_nonce)?;
+        let puzzle_ticket = operation.get_puzzle_ticket();
         context.validate_difficulty_reward(puzzle_ticket)?;
         context.validate_double_claiming(puzzle_ticket)?;
-        Ok(())
+        Ok(None)
     }
 }
 
-impl ExecutableOperation for ClaimPowRewardOp {
+impl ExecutableOperation for SignedOperation<ClaimPowRewardOp, Verified, StandardMode> {
     type Context<'a> = ClaimPoWRewardExecutionContext;
     type Error = ClaimPowRewardError;
 
@@ -307,16 +324,18 @@ impl ExecutableOperation for ClaimPowRewardOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         let slot = context
             .block_slots
-            .get(&self.block_hash)
+            .get(&operation.block_hash)
             .expect("Existence should be check in verification");
         // add the nullifier to the set
-        let nullifier = self.get_puzzle_ticket();
+        let nullifier = operation.get_puzzle_ticket();
         context.nullifiers.insert_mut(nullifier, *slot);
         // create output note
-        let note = Note::new(context.epoch_reward, self.public_key);
-        let op_id = self.op_id();
+        let note = Note::new(context.epoch_reward, operation.public_key);
+        let op_id = operation.op_id();
         let utxo = Utxo {
             op_id,
             output_index: 0,
@@ -343,9 +362,13 @@ impl ExecutableOperation for ClaimPowRewardOp {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::*;
+
+    pub const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
     fn validation_context(
         nullifiers: &HashTrieMapSync<PowNullifier, Slot>,
@@ -358,9 +381,10 @@ mod tests {
             pow_nullifiers: nullifiers,
             epoch_pow_reward,
             epoch_reward_pool,
-            current_epoch: 0.into(),
-            previous_epoch: 0.into(),
+            current_epoch_nonce: nonce_for_epoch(0),
+            previous_epoch_nonce: nonce_for_epoch(0),
             blocks_slot: HashTrieMapSync::new_sync(),
+            slot_window: SLOT_WINDOW,
         }
     }
 
@@ -403,7 +427,8 @@ mod tests {
     const PREVIOUS_EPOCH: u32 = 4;
     const CLAIM_BLOCK_HASH: Hash = [1u8; 32];
 
-    /// The epoch nonce `validate_current_epoch_nonce` derives for an epoch.
+    /// A distinct, deterministic stand-in epoch nonce, so tests can build
+    /// claims and contexts for different epochs without a real ledger.
     fn nonce_for_epoch(epoch: u32) -> ZkHash {
         ZkHasher::digest(&[fr_from_mod_bytes(&epoch.to_le_bytes())])
     }
@@ -428,9 +453,11 @@ mod tests {
             pow_nullifiers: nullifiers,
             epoch_pow_reward: 10,
             epoch_reward_pool: 1_000,
-            current_epoch: CURRENT_EPOCH.into(),
-            previous_epoch: PREVIOUS_EPOCH.into(),
+            current_epoch_nonce: nonce_for_epoch(CURRENT_EPOCH),
+            previous_epoch_nonce: nonce_for_epoch(PREVIOUS_EPOCH),
             blocks_slot: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
+            // Tests below exercise a window of 10 slots.
+            slot_window: NonZero::new(10).expect("10 is not 0"),
         }
     }
 
@@ -466,13 +493,13 @@ mod tests {
         // Gap of zero: the claim's block is the current block.
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(50u64));
-        assert_eq!(ctx.accept_claim::<10>(CLAIM_BLOCK_HASH), Ok(()));
+        assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH), Ok(()));
 
         // Gap exactly equal to the window is still inside it (§5.1.1:
         // `0 <= current - anchor <= WINDOW`, measured in slots).
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(40u64));
-        assert_eq!(ctx.accept_claim::<10>(CLAIM_BLOCK_HASH), Ok(()));
+        assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH), Ok(()));
     }
 
     #[test]
@@ -481,7 +508,7 @@ mod tests {
         let ctx = accepting_context(&nullifiers);
         let unknown = [9u8; 32];
         assert_eq!(
-            ctx.accept_claim::<10>(unknown),
+            ctx.accept_claim(unknown),
             Err(ClaimPowRewardError::MissingBlock { block_id: unknown })
         );
     }
@@ -494,7 +521,7 @@ mod tests {
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(39u64));
         assert_eq!(
-            ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
+            ctx.accept_claim(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: Slot::from(39u64),
                 current_slot: Slot::from(50),
@@ -511,7 +538,7 @@ mod tests {
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(51u64));
         assert_eq!(
-            ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
+            ctx.accept_claim(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: Slot::from(51u64),
                 current_slot: Slot::from(50),
@@ -523,7 +550,16 @@ mod tests {
     fn validate_accepts_claim_with_current_epoch_nonce() {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
-        assert_eq!(claim_op(CURRENT_EPOCH).verify(&NoOpProof, &ctx), Ok(()));
+        let op = claim_op(CURRENT_EPOCH);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
+        assert!(
+            signed_operation
+                .verify(&ctx)
+                .expect("stateful verification must succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -532,7 +568,17 @@ mod tests {
         // stays claimable, so the previous epoch's nonce is also accepted.
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
-        assert_eq!(claim_op(PREVIOUS_EPOCH).verify(&NoOpProof, &ctx), Ok(()));
+        let op = claim_op(PREVIOUS_EPOCH);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
+
+        assert!(
+            signed_operation
+                .verify(&ctx)
+                .expect("stateful verification must succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -540,12 +586,18 @@ mod tests {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
         let op = claim_op(PREVIOUS_EPOCH - 1);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert_eq!(
-            op.verify(&NoOpProof, &ctx),
-            Err(ClaimPowRewardError::MismatchEpochNonce {
-                claim: op.epoch_nonce,
-                accepted: (PREVIOUS_EPOCH.into(), CURRENT_EPOCH.into()),
-            })
+            signed_operation.verify(&ctx).err().unwrap(),
+            ClaimPowRewardError::MismatchEpochNonce {
+                claim: signed_operation.operation().epoch_nonce,
+                accepted: (
+                    nonce_for_epoch(PREVIOUS_EPOCH),
+                    nonce_for_epoch(CURRENT_EPOCH)
+                ),
+            }
         );
     }
 
@@ -556,9 +608,13 @@ mod tests {
         // The hardest possible target: only a ticket of exactly zero would
         // pass, and this op's ticket is not zero.
         ctx.reward_difficulty = Fr::ZERO;
+        let op = claim_op(CURRENT_EPOCH);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert_eq!(
-            claim_op(CURRENT_EPOCH).verify(&NoOpProof, &ctx),
-            Err(ClaimPowRewardError::InvalidPoWRewardTicket)
+            signed_operation.verify(&ctx).err().unwrap(),
+            ClaimPowRewardError::InvalidPoWRewardTicket
         );
     }
 
@@ -571,9 +627,12 @@ mod tests {
         let op = claim_op(CURRENT_EPOCH);
         let mut ctx = accepting_context(&nullifiers);
         ctx.reward_difficulty = op.get_puzzle_ticket().into();
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert_eq!(
-            op.verify(&NoOpProof, &ctx),
-            Err(ClaimPowRewardError::InvalidPoWRewardTicket)
+            signed_operation.verify(&ctx).err().unwrap(),
+            ClaimPowRewardError::InvalidPoWRewardTicket
         );
     }
 
@@ -583,19 +642,31 @@ mod tests {
         let nullifiers =
             HashTrieMapSync::new_sync().insert(op.get_puzzle_ticket(), Slot::from(45u64));
         let ctx = accepting_context(&nullifiers);
+        let signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap();
         assert_eq!(
-            op.verify(&NoOpProof, &ctx),
-            Err(ClaimPowRewardError::DoubleClaimed)
+            signed_operation.verify(&ctx).err().unwrap(),
+            ClaimPowRewardError::DoubleClaimed
         );
     }
 
     #[test]
     fn execute_issues_reward_utxo_and_registers_nullifier() {
         let op = claim_op(CURRENT_EPOCH);
+        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap()
+            .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
+            .unwrap();
+        let (signed_operation, _) = verified_signed_operation.into_parts();
+        let puzzle_ticket = signed_operation.operation().get_puzzle_ticket();
+        let operation_op_id = signed_operation.operation().op_id();
+        let operation_public_key = signed_operation.operation().public_key;
         let epoch_reward = 10;
         let tx_hash = TxHash::from([11u8; 32]);
 
-        let (ctx, events) = op
+        let (ctx, events) = signed_operation
             .execute(ClaimPoWRewardExecutionContext {
                 reward_pool: 1_000,
                 epoch_reward,
@@ -608,19 +679,16 @@ mod tests {
 
         // The spent solution is recorded against the anchor block's slot,
         // and the pool pays out sigma_e.
-        assert_eq!(
-            ctx.nullifiers.get(&op.get_puzzle_ticket()),
-            Some(&Slot::from(45u64))
-        );
+        assert_eq!(ctx.nullifiers.get(&puzzle_ticket), Some(&Slot::from(45u64)));
         assert_eq!(ctx.reward_pool, 990);
 
         // The reward note lands in the UTXO set, payable to the op's key
         // (§5.3 execution step 3). Regression: the persistent-tree insert
         // result used to be discarded, so the note never reached the set.
         let expected_utxo = Utxo {
-            op_id: op.op_id(),
+            op_id: operation_op_id,
             output_index: 0,
-            note: Note::new(epoch_reward, op.public_key),
+            note: Note::new(epoch_reward, operation_public_key),
         };
         assert_eq!(ctx.utxos.get(&expected_utxo.id()), Some(expected_utxo));
 
@@ -638,8 +706,8 @@ mod tests {
             panic!("expected PoWRewardClaimed tx event");
         };
         assert_eq!(*event_tx_hash, tx_hash);
-        assert_eq!(*op_id, op.op_id());
-        assert_eq!(*pow_nullifier, op.get_puzzle_ticket());
+        assert_eq!(*op_id, operation_op_id);
+        assert_eq!(*pow_nullifier, puzzle_ticket);
         assert_eq!(*utxo, expected_utxo);
         assert!(events.next().is_none());
     }
@@ -653,7 +721,14 @@ mod tests {
         // and aborts loudly rather than minting a reward note the pool
         // cannot back.
         let op = claim_op(CURRENT_EPOCH);
-        drop(op.execute(ClaimPoWRewardExecutionContext {
+        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
+            .into_preverified(&())
+            .unwrap()
+            .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
+            .unwrap();
+        let (signed_operation, _) = verified_signed_operation.into_parts();
+
+        drop(signed_operation.execute(ClaimPoWRewardExecutionContext {
             reward_pool: 5,
             epoch_reward: 10,
             nullifiers: HashTrieMapSync::new_sync(),

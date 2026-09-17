@@ -282,14 +282,14 @@ pub struct SlotContext {
     reason = "TODO: address this in a dedicated refactor"
 )]
 pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeServiceId>(
-    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: WalletApi<Wallet, RuntimeServiceId>,
     kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     time_relay: OutboundRelay<TimeServiceMessage>,
     ledger_config: lb_ledger::Config,
     epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
 ) where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     Wallet: WalletServiceData,
     RuntimeServiceId: AsServiceId<Wallet>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
@@ -414,13 +414,13 @@ async fn next_epoch_tick(
 /// slot's epoch state, and the wallet's eligible leader UTXOs (with the faucet
 /// UTXO filtered out). Returns `None` if any lookup fails.
 pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
     ledger_config: &lb_ledger::Config,
     slot: Slot,
 ) -> Option<SlotContext>
 where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     Wallet: WalletServiceData,
     RuntimeServiceId: AsServiceId<Wallet> + Debug + Display + Sync,
 {
@@ -800,6 +800,8 @@ mod pol_tests {
             rate_num: 0,
             rate_den: core::num::NonZeroU64::MIN,
             target_claim_per_block: core::num::NonZeroU64::MIN,
+            pow_share: 0,
+            share_den: core::num::NonZeroU64::MIN,
             slot_window: core::num::NonZeroU64::new(100).unwrap(),
         }
     }

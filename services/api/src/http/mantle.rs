@@ -140,8 +140,7 @@ where
         .send(MempoolMsg::Metrics {
             reply_channel: sender,
         })
-        .await
-        .map_err(|e| e)?;
+        .await?;
 
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
@@ -176,8 +175,7 @@ where
             items,
             reply_channel: sender,
         })
-        .await
-        .map_err(|e| e)?;
+        .await?;
 
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
@@ -197,8 +195,7 @@ where
         .send(BlockBroadcastMsg::SubscribeToFinalizedBlocks {
             result_sender: sender,
         })
-        .await
-        .map_err(|e| e)?;
+        .await?;
 
     let broadcast_receiver = receiver.await.map_err(|e| Box::new(e) as super::DynError)?;
     let stream = BroadcastStream::new(broadcast_receiver)
@@ -323,8 +320,7 @@ where
         .send(StorageMsg::Api {
             request: StorageApiRequest::Chain(request),
         })
-        .await
-        .map_err(|error| error)?;
+        .await?;
 
     response_rx
         .await

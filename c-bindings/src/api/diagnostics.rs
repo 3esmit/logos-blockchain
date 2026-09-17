@@ -190,12 +190,18 @@ pub unsafe extern "C" fn get_mantle_metrics(
 
 #[cfg(test)]
 mod tests {
-    use super::serialize_json;
+    use super::{FfiDiagnosticJsonResult, LogosBlockchainNode, get_network_info, serialize_json};
 
     #[test]
     fn diagnostic_json_is_a_c_string() {
         let value = serialize_json(&serde_json::json!({"peers": 2}), "test diagnostic")
             .expect("serializable JSON must be representable as a C string");
         assert_eq!(value.to_bytes_with_nul(), b"{\"peers\":2}\0");
+    }
+
+    #[test]
+    fn network_json_export_is_available() {
+        let _: unsafe extern "C" fn(*const LogosBlockchainNode) -> FfiDiagnosticJsonResult =
+            get_network_info;
     }
 }

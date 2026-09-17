@@ -82,7 +82,7 @@ pub type FfiNetworkInfoResult = FfiStatusResult<NetworkInfo>;
 /// [`LogosBlockchainNode`] instance.
 #[must_use]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn get_network_info(
+pub unsafe extern "C" fn get_network_info_counters(
     node: *const LogosBlockchainNode,
 ) -> FfiNetworkInfoResult {
     return_error_if_null_pointer!(node);
@@ -91,4 +91,15 @@ pub unsafe extern "C" fn get_network_info(
     let info = unwrap_or_return_error!(get_network_info_sync(node));
 
     FfiNetworkInfoResult::ok(NetworkInfo::from(info))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FfiNetworkInfoResult, LogosBlockchainNode, get_network_info_counters};
+
+    #[test]
+    fn typed_network_export_is_available_alongside_json_export() {
+        let _: unsafe extern "C" fn(*const LogosBlockchainNode) -> FfiNetworkInfoResult =
+            get_network_info_counters;
+    }
 }

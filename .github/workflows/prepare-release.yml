@@ -10,6 +10,13 @@ on:
         options:
           - release
           - release-candidate
+      testnet-evidence-url:
+        description: URL for the verified Testnet synchronization evidence
+        required: true
+        type: string
+
+permissions:
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}@${{ github.ref_name }}
@@ -21,20 +28,45 @@ env:
 jobs:
   configure-version:
     name: Configure release version
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ github.repository == '3esmit/logos-blockchain' && github.ref_type == 'tag' }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.define-version.outputs.version }}
       is_prerelease: ${{ steps.define-version.outputs.is_prerelease }}
 
     steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Verify source-owned tag is on fork master
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          TAG_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REPOSITORY" = "3esmit/logos-blockchain"
+          test "$(git rev-list -n 1 "$TAG_NAME")" = "$TAG_COMMIT"
+          git fetch --no-tags origin master
+          git merge-base --is-ancestor "$TAG_COMMIT" FETCH_HEAD
+
       # Take the version of the tag from which the workflow is dispatched, or use `0.0.0` for test runs with the `release-ci-test` tag.
       - name: Define version
         id: define-version
         env:
           TAG_NAME: ${{ github.ref_name }}
           RELEASE_TYPE: ${{ inputs.release-type }}
+          TESTNET_EVIDENCE_URL: ${{ inputs.testnet-evidence-url }}
         run: |
+          set -euo pipefail
+
+          if [[ ! "$TESTNET_EVIDENCE_URL" =~ ^https:// ]]; then
+            echo "Testnet evidence must be an HTTPS URL."
+            exit 1
+          fi
+
           if [[ "$TAG_NAME" == "${{ env.TEST_TAG_NAME }}" ]]; then
             echo "Test workflow run. Setting version to 0.0.0 for testing."
             VERSION=0.0.0
@@ -49,8 +81,12 @@ jobs:
             exit 1
           fi
 
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "is_prerelease=$([[ "$RELEASE_TYPE" == "release-candidate" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          IS_PRERELEASE=false
+          if [[ "$RELEASE_TYPE" == "release-candidate" ]]; then
+            IS_PRERELEASE=true
+          fi
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
 
   build:
     name: "Build and tar binaries for ${{ matrix.platform.os-display }} (${{ matrix.platform.arch }})"
@@ -90,18 +126,67 @@ jobs:
       - name: Tar node binary
         run: tar -czf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
 
+      - name: Smoke-test archive contents
+        env:
+          ARCHIVE: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
+          BINARY: target/${{ matrix.platform.target_triple }}/release/logos-blockchain-node
+        run: |
+          set -euo pipefail
+
+          "$BINARY" --help >/dev/null
+          "$BINARY" --version >/dev/null
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          shasum -a 256 -c "$ARCHIVE.sha256"
+          mkdir archive-check
+          tar -xzf "$ARCHIVE" -C archive-check
+          test -x archive-check/logos-blockchain-node
+          archive-check/logos-blockchain-node --help >/dev/null
+          archive-check/logos-blockchain-node --version >/dev/null
+
       - name: Upload binary tar (${{ matrix.platform.arch }})
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
           name: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
-          path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
+          path: |
+            logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
+            logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz.sha256
           if-no-files-found: error
+
+  verify-artifacts:
+    name: Verify downloaded archives
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download built archives
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # Version 4.2.1
+        with:
+          pattern: logos-blockchain-node-*
+          path: binaries
+          merge-multiple: true
+
+      - name: Verify checksums and archive contents
+        working-directory: binaries
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          checksums=( *.tar.gz.sha256 )
+          test "${#checksums[@]}" -eq 3
+          for checksum in "${checksums[@]}"; do
+            archive="${checksum%.sha256}"
+            sha256sum --check "$checksum"
+            extracted=$(mktemp -d)
+            tar -xzf "$archive" -C "$extracted"
+            test -x "$extracted/logos-blockchain-node"
+          done
 
   create-draft-release:
     name: Create draft release
     needs:
       - configure-version
       - build
+      - verify-artifacts
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.configure-version.outputs.version }}
@@ -114,6 +199,8 @@ jobs:
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
       - name: Prepare release body with the module version, bootstrap peers, and release candidate-specific disclaimers
+        env:
+          TESTNET_EVIDENCE_URL: ${{ inputs.testnet-evidence-url }}
         run: |
           set -euo pipefail
 
@@ -122,8 +209,12 @@ jobs:
           OUTPUT=.github/release/release-content.generated.md
           MODULE_VERSION_PLACEHOLDER='{{BLOCKCHAIN_MODULE_VERSION}}'
           INITIAL_PEERS_PLACEHOLDER='{{INITIAL_PEERS}}'
+          SOURCE_REPOSITORY_PLACEHOLDER='{{SOURCE_REPOSITORY}}'
+          SOURCE_TAG_PLACEHOLDER='{{SOURCE_TAG}}'
+          SOURCE_COMMIT_PLACEHOLDER='{{SOURCE_COMMIT}}'
+          TESTNET_EVIDENCE_PLACEHOLDER='{{TESTNET_VALIDATION_EVIDENCE}}'
 
-          for PLACEHOLDER in "$MODULE_VERSION_PLACEHOLDER" "$INITIAL_PEERS_PLACEHOLDER"; do
+          for PLACEHOLDER in "$MODULE_VERSION_PLACEHOLDER" "$INITIAL_PEERS_PLACEHOLDER" "$SOURCE_REPOSITORY_PLACEHOLDER" "$SOURCE_TAG_PLACEHOLDER" "$SOURCE_COMMIT_PLACEHOLDER" "$TESTNET_EVIDENCE_PLACEHOLDER"; do
             if ! grep -qF "$PLACEHOLDER" "$TEMPLATE"; then
               echo "'$TEMPLATE' does not contain the '$PLACEHOLDER' placeholder. It must be present so the release notes match the release being prepared."
               exit 1
@@ -137,7 +228,7 @@ jobs:
           else
             PEERS_FILE=.github/release/testnet-peers.txt
           fi
-          # `sed`'s `r` command ignores a missing file, which would silently produce an empty peer list.
+          # An empty peer file would silently produce an unusable release note.
           if [[ ! -s "$PEERS_FILE" ]]; then
             echo "'$PEERS_FILE' is missing or empty. It must list the bootstrap peers to inject into the release notes."
             exit 1
@@ -145,10 +236,27 @@ jobs:
 
           echo "Setting '$MODULE_VERSION_PLACEHOLDER' to '$VERSION' and '$INITIAL_PEERS_PLACEHOLDER' to the contents of '$PEERS_FILE'."
 
-          sed -e "s|$MODULE_VERSION_PLACEHOLDER|$VERSION|g" \
-              -e "/$INITIAL_PEERS_PLACEHOLDER/r $PEERS_FILE" \
-              -e "/$INITIAL_PEERS_PLACEHOLDER/d" \
-              "$TEMPLATE" > "$OUTPUT"
+          export TEMPLATE OUTPUT PEERS_FILE VERSION
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          template = Path(os.environ["TEMPLATE"])
+          output = Path(os.environ["OUTPUT"])
+          peers = Path(os.environ["PEERS_FILE"]).read_text(encoding="utf-8").rstrip("\n")
+          replacements = {
+              "{{BLOCKCHAIN_MODULE_VERSION}}": os.environ["VERSION"],
+              "{{INITIAL_PEERS}}": peers,
+              "{{SOURCE_REPOSITORY}}": os.environ["GITHUB_REPOSITORY"],
+              "{{SOURCE_TAG}}": os.environ["GITHUB_REF_NAME"],
+              "{{SOURCE_COMMIT}}": os.environ["GITHUB_SHA"],
+              "{{TESTNET_VALIDATION_EVIDENCE}}": os.environ["TESTNET_EVIDENCE_URL"],
+          }
+          rendered = template.read_text(encoding="utf-8")
+          for placeholder, value in replacements.items():
+              rendered = rendered.replace(placeholder, value)
+          output.write_text(rendered, encoding="utf-8")
+          PY
 
           if grep -n '{{' "$OUTPUT"; then
             echo "'$OUTPUT' still contains unsubstituted placeholders (listed above)."
@@ -166,7 +274,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.VERSION }}
+          tag_name: ${{ github.ref_name }}
           release_name: Logos Blockchain Node ${{ env.VERSION }}
           body_path: .github/release/release-content.generated.md
           draft: true
@@ -210,3 +318,12 @@ jobs:
           asset_name: ${{ env.BINARY_NAME }}.tar.gz
           asset_content_type: application/gzip
 
+      - name: Upload ${{ matrix.platform.os }} (${{ matrix.platform.arch }}) checksum
+        uses: actions/upload-release-asset@ef2adfe8cb8ebfa540930c452c576b3819990faa  # Version 1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ env.UPLOAD_URL }}
+          asset_path: ${{ env.DOWNLOAD_DIRECTORY }}/${{ env.BINARY_NAME }}.tar.gz.sha256
+          asset_name: ${{ env.BINARY_NAME }}.tar.gz.sha256
+          asset_content_type: text/plain

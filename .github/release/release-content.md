@@ -1,5 +1,11 @@
 ## 🚀 Quick Start
 
+This source-owned release was built from
+[`{{SOURCE_REPOSITORY}}`](https://github.com/{{SOURCE_REPOSITORY}}) at tag
+`{{SOURCE_TAG}}` (commit `{{SOURCE_COMMIT}}`).
+
+Testnet synchronization evidence: {{TESTNET_VALIDATION_EVIDENCE}}
+
 ### 📦 Prerequisites
 
 1. Download `logos-core` binaries:

@@ -173,7 +173,10 @@ fn decode_cryptarchia_parameter(
     // while requiring the complete inscription to match the legacy layout.
     match decode_legacy_cryptarchia_parameter(input) {
         Ok((rest, parameter)) if rest.is_empty() => Ok((rest, parameter)),
-        _ => Err(compact_error),
+        _ => match decode_legacy_u32_time_cryptarchia_parameter(input) {
+            Ok((rest, parameter)) if rest.is_empty() => Ok((rest, parameter)),
+            _ => Err(compact_error),
+        },
     }
 }
 
@@ -216,6 +219,41 @@ fn decode_legacy_cryptarchia_parameter(
     let genesis_time = u32::try_from(genesis_time)
         .map(GenesisTime::new)
         .map_err(|_| DecodeError::invalid_value::<GenesisTime>("timestamp exceeds u32"))?;
+    let (nonce_bytes, rest) = take::<Fr>(input, 32)?;
+    let epoch_nonce = fr_from_bytes_unchecked(nonce_bytes);
+    Ok((
+        rest,
+        CryptarchiaParameter {
+            chain_id,
+            genesis_time,
+            epoch_nonce,
+        },
+    ))
+}
+
+/// Decode the earlier legacy layout used by standalone deployment fixtures.
+/// It keeps the historical u64 chain-ID length and reduced nonce bytes, but
+/// stores the genesis timestamp as the current u32 field rather than the
+/// published-profile u64 timestamp.
+fn decode_legacy_u32_time_cryptarchia_parameter(
+    input: &[u8],
+) -> Result<(&[u8], CryptarchiaParameter), DecodeError> {
+    let (input, chain_id_length) = u64::decode(input, &())?;
+    let chain_id_length = usize::try_from(chain_id_length).map_err(|_| {
+        DecodeError::length_out_of_bounds::<ChainId>(usize::MAX, 1, MAX_CHAIN_ID_SIZE)
+    })?;
+    if !(1..=MAX_CHAIN_ID_SIZE).contains(&chain_id_length) {
+        return Err(DecodeError::length_out_of_bounds::<ChainId>(
+            chain_id_length,
+            1,
+            MAX_CHAIN_ID_SIZE,
+        ));
+    }
+
+    let (chain_id_bytes, input) = take::<ChainId>(input, chain_id_length)?;
+    let chain_id = ChainId::try_from(chain_id_bytes.to_vec())
+        .map_err(|_| DecodeError::invalid_value::<ChainId>("invalid chain id bytes"))?;
+    let (input, genesis_time) = GenesisTime::decode(input, &())?;
     let (nonce_bytes, rest) = take::<Fr>(input, 32)?;
     let epoch_nonce = fr_from_bytes_unchecked(nonce_bytes);
     Ok((
@@ -791,6 +829,35 @@ mod tests {
             CryptarchiaParameter::decode(&encoded, &()).unwrap_err(),
             DecodeError::InvalidValue { .. }
         ));
+    }
+
+    #[test]
+    fn standalone_legacy_deployment_encoding_is_accepted() {
+        let encoded = hex::decode(
+            "10000000000000007374616e64616c6f6e652d6c6f63616c9169fe692d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a",
+        )
+        .unwrap();
+
+        let (rest, decoded) = decode_cryptarchia_parameter(&encoded).unwrap();
+
+        assert!(rest.is_empty());
+        assert_eq!(decoded.chain_id.to_string(), "standalone-local");
+        assert_eq!(decoded.genesis_time, GenesisTime::new(1_778_280_849));
+        assert_eq!(
+            decoded.epoch_nonce,
+            fr_from_bytes_unchecked(&encoded[28..60])
+        );
+    }
+
+    #[test]
+    fn legacy_deployment_encoding_rejects_trailing_bytes() {
+        let mut encoded = hex::decode(
+            "10000000000000007374616e64616c6f6e652d6c6f63616c9169fe692d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a",
+        )
+        .unwrap();
+        encoded.push(0);
+
+        assert!(decode_cryptarchia_parameter(&encoded).is_err());
     }
 
     #[test]

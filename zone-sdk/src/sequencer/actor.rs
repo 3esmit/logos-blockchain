@@ -305,6 +305,22 @@ where
             self.buffered_events
                 .push_back(Event::TurnNotification { notification });
         }
+        self.turn_boundary = self.next_turn_wakeup();
+    }
+
+    /// The next slot at which `our_turn_to_write` can change: the round-robin
+    /// boundary, or earlier the slot at which our turn has too little left to
+    /// publish.
+    fn next_turn_wakeup(&self) -> Option<Slot> {
+        let slot_clock = self.slot_clock.as_ref()?;
+        let channel = self.channel_state.as_ref()?;
+        let current = slot_clock.current_slot();
+        let rotation = channel.next_round_robin_boundary(current);
+        let (authorized_idx, turn_start_slot) = channel.round_robin(current);
+        let gate = self
+            .turn_gate_closes_at(channel, turn_start_slot)
+            .filter(|closes_at| self.own_key_index == Some(authorized_idx) && *closes_at > current);
+        rotation.into_iter().chain(gate).min()
     }
 
     fn turn_notification(&self, our_turn_to_write: bool) -> TurnNotification {
@@ -382,15 +398,24 @@ where
         current_slot: Slot,
         turn_start_slot: Slot,
     ) -> bool {
-        let min_remaining = self.config.min_slots_remaining_in_turn;
-        let posting_timeframe = u32::from(channel.posting_timeframe.clone());
-        if min_remaining == 0 || posting_timeframe == 0 {
-            return true;
-        }
+        self.turn_gate_closes_at(channel, turn_start_slot)
+            .is_none_or(|closes_at| current_slot < closes_at)
+    }
 
-        let turn_end_slot =
-            slot_to_u64(turn_start_slot).saturating_add(u64::from(posting_timeframe));
-        turn_end_slot.saturating_sub(slot_to_u64(current_slot)) >= min_remaining
+    /// First slot of the turn starting at `turn_start_slot` with fewer than
+    /// `min_slots_remaining_in_turn` slots left; `None` when the margin is
+    /// off or the turn is unbounded.
+    fn turn_gate_closes_at(&self, channel: &ChannelState, turn_start_slot: Slot) -> Option<Slot> {
+        let min_remaining = self.config.min_slots_remaining_in_turn;
+        let posting_timeframe = u64::from(u32::from(channel.posting_timeframe.clone()));
+        if min_remaining == 0 || posting_timeframe == 0 {
+            return None;
+        }
+        let turn_end_slot = slot_to_u64(turn_start_slot).saturating_add(posting_timeframe);
+        let closes_at = turn_end_slot
+            .checked_sub(min_remaining)
+            .map_or(0, |slot| slot.saturating_add(1));
+        Some(Slot::from(closes_at))
     }
 
     /// Re-post pending txs that aren't safe at the current tip by pushing
@@ -1158,6 +1183,130 @@ mod tests {
             cleared, 1,
             "the cleared turn must be broadcast exactly once"
         );
+    }
+
+    /// The turn is re-evaluated on its own slot boundary: with no block after
+    /// the first one, `next_event` still yields the alternating turn changes.
+    #[tokio::test]
+    async fn turn_notification_fires_on_timeframe_boundary_without_blocks() {
+        assert_turns_alternate_without_blocks(1, 0).await;
+    }
+
+    /// Same for the timeout rotation, anchored at the last landed inscription.
+    #[tokio::test]
+    async fn turn_notification_fires_on_timeout_boundary_without_blocks() {
+        assert_turns_alternate_without_blocks(0, 1).await;
+    }
+
+    async fn assert_turns_alternate_without_blocks(posting_timeframe: u32, posting_timeout: u32) {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let mut channel = single_key_channel_state();
+        channel.accredited_keys = Keys::try_from(vec![
+            sequencer_key.public_key(),
+            Ed25519Key::from_bytes(&[1; 32]).public_key(),
+        ])
+        .unwrap()
+        .into();
+        channel.posting_timeframe = posting_timeframe.into();
+        channel.posting_timeout = posting_timeout.into();
+        let node = MockNode {
+            channel_state: Some(channel),
+            slot_duration_ms: 100,
+            ..MockNode::default()
+        };
+        let config = SequencerConfig {
+            resubmit_interval: std::time::Duration::from_secs(600),
+            ..SequencerConfig::new(funding_config())
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        let started = std::time::Instant::now();
+        let mut turns = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while turns.len() < 4 {
+                if let Event::TurnNotification { notification } = sequencer.next_event().await {
+                    turns.push(notification.our_turn_to_write);
+                }
+            }
+        })
+        .await
+        .expect("turn changes must arrive without blocks");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "turn changes should follow the 100ms slots, took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            turns.windows(2).all(|pair| pair[0] != pair[1]),
+            "a two-key channel rotating every slot alternates: {turns:?}"
+        );
+    }
+
+    /// With a publish margin the turn watch closes before the rotation, at
+    /// the same slot `can_publish_inscription_now` starts refusing.
+    #[tokio::test]
+    async fn turn_notification_closes_with_the_publish_margin() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let mut channel = single_key_channel_state();
+        channel.posting_timeframe = 4u32.into();
+        let node = MockNode {
+            channel_state: Some(channel),
+            slot_duration_ms: 300,
+            ..MockNode::default()
+        };
+        let config = SequencerConfig {
+            min_slots_remaining_in_turn: 3,
+            resubmit_interval: std::time::Duration::from_secs(600),
+            ..SequencerConfig::new(funding_config())
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        // Single key: every turn is ours, open for the first two of its four
+        // slots and closed for the last two. The notification at Ready is an
+        // observation mid-turn; the first close is the first boundary.
+        let mut seen = 0;
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while seen < 4 {
+                let Event::TurnNotification { notification } = sequencer.next_event().await else {
+                    continue;
+                };
+                if seen == 0 && notification.our_turn_to_write {
+                    continue;
+                }
+                assert_eq!(
+                    notification.our_turn_to_write,
+                    sequencer.can_publish_inscription_now(),
+                    "watch and publish gate disagree: {notification:?}"
+                );
+                let current = notification.current_slot.unwrap();
+                let expected = if notification.our_turn_to_write {
+                    notification.starting_slot.unwrap()
+                } else {
+                    notification.ends_at_slot.unwrap() - 3 + 1
+                };
+                assert_eq!(
+                    current, expected,
+                    "flipped at the wrong slot: {notification:?}"
+                );
+                seen += 1;
+            }
+        })
+        .await
+        .expect("turn changes must arrive without blocks");
     }
 
     /// A `submit_signed_tx` bundle chains subsequent publishes off its last
